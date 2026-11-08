@@ -35,6 +35,9 @@ pub mod ramdisk {
     pub const TASK_PROFILES: &str = "system/etc/task_profiles.json";
     /// The init rules that set up file transfer's USB function.
     pub const MTP_RC: &str = "system/etc/init/skyward-mtp.rc";
+    /// The service definitions the phone's own decrypt rules would have
+    /// carried, for the key hardware this recovery starts itself.
+    pub const KEYMASTER_RC: &str = "system/etc/init/skyward-keymaster.rc";
     /// An older recovery's own rules for the port, which bind its legacy MTP
     /// function and have to be read before Skyward offers its own.
     pub const USB_RC: &str = "init.recovery.usb.rc";

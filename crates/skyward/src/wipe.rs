@@ -193,7 +193,7 @@ pub fn factory_reset(reformat: Option<String>) -> Result<Plan, Stop> {
             return Ok(Err(Refusal::Update(hold)));
         }
         let data = entry_for(DATA)?;
-        let formattable = data.extras.iter().any(|e| e == "formattable");
+        let formattable = formattable(DATA)?;
         // Where the system keeps the key to the data partition in
         // /metadata it makes the partition afresh itself as it starts, and
         // the recovery only empties it. Where it keeps no such key -- a
@@ -252,12 +252,12 @@ pub fn format(step: Step) -> Result<Formatting, Stop> {
         Step::System => at_one_of(&["/", "/system"])
             .map_err(failed(step))?
             .ok_or(Stop::Refused(Refusal::NoPartition("system")))?,
-        Step::Vendor => at_one_of(&["/vendor", "/system/vendor"])
+        Step::Vendor => at_one_of(&["/vendor", "/system/vendor", "/cust"])
             .map_err(failed(step))?
             .ok_or(Stop::Refused(Refusal::NoPartition("vendor")))?,
         other => unreachable!("{other:?} is not a partition made afresh on its own"),
     };
-    if step == Step::Data && !entry.extras.iter().any(|e| e == "formattable") {
+    if step == Step::Data && !formattable(DATA).map_err(failed(step))? {
         return Err(Stop::Refused(Refusal::NotRebuilt));
     }
     Ok(Formatting {
@@ -699,7 +699,7 @@ pub fn has(step: Step) -> Result<bool> {
         Step::Cache => at(CACHE)?.is_some(),
         Step::Metadata => at(METADATA)?.is_some(),
         Step::System => at_one_of(&["/", "/system"])?.is_some(),
-        Step::Vendor => at_one_of(&["/vendor", "/system/vendor"])?.is_some(),
+        Step::Vendor => at_one_of(&["/vendor", "/system/vendor", "/cust"])?.is_some(),
         other => unreachable!("{other:?} is not a partition made afresh on its own"),
     })
 }
@@ -707,6 +707,20 @@ pub fn has(step: Step) -> Result<bool> {
 /// The entry the phone's table has for `mount_point`, where it has one.
 fn at(mount_point: &str) -> Result<Option<Entry>> {
     Ok(fstab::read(mount_point)?.into_iter().next())
+}
+
+/// Whether the phone's table lets the partition at `mount_point` be made
+/// afresh. **Any** of its lines may say so: a table marks the filesystem the
+/// system would make the partition as `formattable` and leaves the others
+/// plain, so this phone's ext4 /data -- which is what it holds -- carries
+/// `fileencryption` and no `formattable`, while its f2fs line carries both.
+/// The partition is still made afresh as what is there; the flag only says it
+/// may be, which is why it is asked of every line rather than of the one that
+/// matches.
+fn formattable(mount_point: &str) -> Result<bool> {
+    Ok(fstab::read(mount_point)?
+        .iter()
+        .any(|e| e.extras.iter().any(|x| x == "formattable")))
 }
 
 /// The entry of the phone's table that says how the partition at

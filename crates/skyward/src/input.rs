@@ -286,6 +286,9 @@ pub struct Inputs {
     seen: HashSet<PathBuf>,
     /// What the touchscreen is told each time its panel is taken in.
     touch_writes: Vec<Write>,
+    /// Whether the kernel log has already been told that those were set
+    /// again after the panel's first power cycle.
+    told_panel_again: bool,
     w: f32,
     h: f32,
 }
@@ -314,6 +317,7 @@ impl Inputs {
             buttons: Vec::new(),
             seen: HashSet::new(),
             touch_writes,
+            told_panel_again: false,
             w: w as f32,
             h: h as f32,
         };
@@ -362,6 +366,31 @@ impl Inputs {
                 self.wakeful.add(dev.as_raw_fd())?;
                 self.buttons.push((path, dev));
             }
+        }
+        Ok(())
+    }
+
+    /// Write the touchscreen's own knobs again, and say so the first time.
+    ///
+    /// A panel power cycle — the takeover's `FBIOBLANK` down and up, or the
+    /// display going off and coming back — hands the driver's wake gesture
+    /// back on, and while it is on a controller such as the Mi MIX 2's
+    /// reports a touch as a wake-up rather than as input, so nothing reaches
+    /// the pages. The values the device configuration sets have therefore to
+    /// be set again after every one; the first time is told to the kernel
+    /// log, the rest are not, since a phone left to itself cycles its panel
+    /// many times.
+    pub fn tell_panel_again(&mut self) -> Result<()> {
+        if self.touch_writes.is_empty() {
+            return Ok(());
+        }
+        for w in &self.touch_writes {
+            fs::write(&w.path, &w.value)
+                .with_context(|| format!("write {} to {}", w.value, w.path))?;
+        }
+        if !self.told_panel_again {
+            self.told_panel_again = true;
+            skyward_sys::kmsg("the touchscreen's knobs are set again after the panel's power cycle")?;
         }
         Ok(())
     }

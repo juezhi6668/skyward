@@ -1,0 +1,125 @@
+[device]
+codename = "chiron"
+brand = "Xiaomi"
+model = "Mi MIX 2"
+ab = false
+
+[display]
+# The Mi MIX 2's panel is 1080 by 2160, an 18:9 one where the Mi 6's is
+# 1080 by 1920. The pages are laid out from the framebuffer's own size, so
+# these two are for the preview alone; the density is what scales the pages,
+# and is the one this phone's system runs the panel at.
+width = 1080
+height = 2160
+density = 440
+diagonal = 5.99
+
+# What a backup is chosen by, in the order the page offers it. The Mi MIX 2
+# keeps the same set of partitions as the Mi 6 this port was written for, so
+# this is that phone's list: the boot partitions read whole, the ones the
+# table only ever holds one of read whole too, and the rest go by the name
+# the table reaches them under -- which is why the vendor's files are `cust`
+# here. The four the phone keeps its baseband's identity and calibration in
+# are offered under their own names, since each is a partition of its own
+# and a phone whose radio is dead has use for one of them back.
+[backup]
+partitions = [
+    "boot",
+    "recovery",
+    "system",
+    "cust",
+    "cache",
+    "persist",
+    "modem",
+    "data",
+    "modemst1",
+    "modemst2",
+    "fsg",
+    "fsc",
+]
+efs = ["modemst1", "modemst2", "fsg", "fsc"]
+
+# The vibration motor: the same PMI8998 haptics driver the Mi 6 has, reached
+# through the LED class rather than through force feedback. This is the one
+# entry carried over on the strength of the SoC alone and not measured on a
+# Mi MIX 2 yet -- if the motor does not answer, the kernel log says
+# "the vibration motor is left out: …" and nothing else is lost.
+[haptics]
+timed = "/sys/class/leds/vibrator"
+drive = 40
+strength = { lightest = 0.4, strongest = 1.0 }
+
+# What the wipe page offers to make afresh, in the order it lists it: the
+# data partition, the cache, the metadata, the system and the vendor files.
+[wipe]
+formats = ["data", "cache", "metadata", "system", "vendor"]
+
+# The touch controller comes out of boot thinking the panel is still
+# suspended, and the order of these writes is what matters.
+#
+# The takeover power cycles the panel with FBIOBLANK, and this driver follows
+# the panel's state through `synaptics_dsi_force`: it takes the panel down for
+# the blank and is never told it came back up, so it holds the controller
+# suspended and reports nothing at all — `getevent -l /dev/input/event1`
+# printed not one line with a finger on the panel, and no page ever saw a
+# press. The device itself is fine: it declares BTN_TOUCH, BTN_TOOL_FINGER,
+# ABS_MT_SLOT, ABS_MT_TRACKING_ID and the position axes as the Mi 6's does.
+#
+# `/proc/touchpanel/suspend` takes 0 to resume the controller and 1 to suspend
+# it, and writing 0 is what brings the events back — measured on the phone,
+# where the stream started at once and read exactly like the Mi 6's
+# (ABS_MT_TRACKING_ID, BTN_TOUCH DOWN, positions, SYN_REPORT; -1 on lift).
+# A reset first makes sure the controller is listening; it does not re-create
+# the input device, so the recovery keeps its hold on it (/dev/input stays
+# event0..3). The two knobs go last because a reset leaves them at the
+# driver's own default of 0 anyway, and this phone's init.recovery.qcom.rc
+# turns double tap on at boot — with the controller reporting again that
+# would make a touch a wake-up instead of input. A finger on a dark panel no
+# longer wakes it: the power key does, and the tap after the wake is taken.
+[touch]
+writes = [
+    { path = "/proc/touchpanel/reset", value = "1" },
+    { path = "/proc/touchpanel/suspend", value = "0" },
+    { path = "/proc/touchpanel/double_tap_enable", value = "0" },
+    { path = "/proc/touchpanel/wake_gesture", value = "0" },
+]
+
+# This phone's own table has no metadata line either: its `oops` partition
+# answers for one, and is where the recovery keeps its settings, which every
+# phone puts on /metadata. Read-only as the phone's own metadata is, and
+# writable only while a settings file is moved into it.
+[[fstab]]
+device = "/dev/block/bootdevice/by-name/oops"
+mount_point = "/metadata"
+filesystem = "ext4"
+options = "ro,nosuid,nodev,noatime"
+extras = "defaults"
+
+# The data partition, which this phone's own table names only as ext4.
+#
+# Its `recovery.fstab` has **one** /data line — ext4, with
+# `fileencryption=ice` — and the partition is **f2fs** (measured: `blkid`
+# says f2fs, and it mounts as nothing else). So mounting it the only way the
+# table offers fails with what the kernel says, and the page answered "cannot
+# open the data partition" for a partition that was never encrypted at all.
+# The f2fs line the phone's system uses is in `/vendor/etc/fstab.qcom`, which
+# is not readable until the vendor files are mounted — so it is written here,
+# where it is there from the first frame. Both lines are offered, ext4 first
+# as the phone's table has it, and the f2fs one is what answers.
+#
+# The options are the phone's own except `atgc`, which its **recovery** kernel
+# refuses (`Invalid argument`, measured): the system's f2fs is newer than the
+# one in this kernel. `formattable` is added so the wipe page may make it
+# afresh, which the phone's ext4 line does not say either.
+[[fstab]]
+device = "/dev/block/bootdevice/by-name/userdata"
+mount_point = "/data"
+filesystem = "f2fs"
+options = "nosuid,nodev,noatime,discard,fsync_mode=nobarrier"
+extras = "wait,check,formattable,quota,reservedsize=128M"
+
+# Nothing else. The panel and the keys are built into the recovery kernel
+# rather than modules, the boot loader leaves the panel lit, and the data
+# partition is not encrypted, so there is no [modules], no [firmware] and no
+# decryption asked of the system's own key services. The touch driver is in
+# the kernel too; what it needs is the pair of writes above.

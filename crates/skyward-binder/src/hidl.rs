@@ -167,6 +167,20 @@ impl<'a> Answer<'a> {
         ))
     }
 
+    pub fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
+    }
+
+    /// A string as this layout hands one over: an address to its characters,
+    /// which end with a terminator the length leaves out.
+    pub fn string(&mut self) -> Result<String> {
+        let raw = self.pointed()?;
+        let text = raw.strip_suffix(&[0]).unwrap_or(raw);
+        Ok(String::from_utf8_lossy(text).into_owned())
+    }
+
     /// A truth value: a byte, padded to four as everything is.
     pub fn bool(&mut self) -> Result<bool> {
         Ok(self.take(4)?[0] != 0)

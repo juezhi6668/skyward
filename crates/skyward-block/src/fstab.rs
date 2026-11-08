@@ -9,15 +9,26 @@ use std::path::{Path, PathBuf};
 /// older Qualcomm phone carries the very same table in its own system folder,
 /// where nothing is mounted yet, and that is the only copy a phone whose
 /// partitions are not up can be read from.
+/// **The recovery's own table comes first.** It is the one written for this
+/// program; a phone's `fstab.qcom` is the installed *system's* plan, and on
+/// this phone it is not even readable until the vendor files are mounted —
+/// `/vendor/etc/fstab.qcom` only appears when `cust` is mounted at /vendor.
+/// Letting it win once that happened is what made two things go wrong at
+/// once: its system line mounts at `/system` (over the recovery's own, which
+/// is where this binary and its tools live), and its data line carries no
+/// `formattable`, so a format of /data answered "the partition is not one
+/// this recovery rebuilds" while the recovery's own table says it is. A
+/// phone whose recovery carries no table of its own still gets fstab.qcom,
+/// which is why it is kept rather than dropped.
 pub const FILES: [&str; 4] = [
-    "/vendor/etc/fstab.qcom",
-    "/odm/etc/fstab.qcom",
     "/system/etc/recovery.fstab",
     // Lines this recovery adds for a partition the phone's own table says
     // nothing about, written into the ramdisk from the device
     // configuration: a phone that keeps no metadata partition but has one
     // that answers for it says so there.
     "/system/etc/skyward.fstab",
+    "/vendor/etc/fstab.qcom",
+    "/odm/etc/fstab.qcom",
 ];
 
 /// What a table entry can name that is not a filesystem to put anywhere:
@@ -33,7 +44,23 @@ pub const SYSTEM_ROOT: &str = "/system_root";
 /// Where an entry of the table goes.
 pub fn point(mount_point: &str) -> &str {
     match mount_point {
-        "/" => SYSTEM_ROOT,
+        // The recovery's own /system is the ramdisk's, and everything it
+        // runs from is in it: /system/bin holds this binary, the shell and
+        // the box of tools, /system/lib64 the libraries they load, and
+        // /system/bin/linker64 starts them. Mounting the installed system
+        // there takes all of that away from under the recovery — its own
+        // /system/bin/sh then resolves inside the phone's system partition
+        // and nothing that runs from it starts again. So the installed
+        // system goes to /system_root, whether the table calls it `/`
+        // (system-as-root) or `/system` (the older layout).
+        //
+        // The second name is not academic. `/vendor/etc/fstab.qcom` is read
+        // before the recovery's own table, and it only exists once the
+        // vendor files are mounted: mounting `cust` at /vendor makes the
+        // phone's own fstab.qcom appear, and it names this partition
+        // `/system` — so mounting `system` after `vendor` used to mount it
+        // over the recovery and leave the recovery unable to read anything.
+        "/" | "/system" => SYSTEM_ROOT,
         other => other,
     }
 }
@@ -271,6 +298,22 @@ mod tests {
 /dev/block/bootdevice/by-name/userdata /data f2fs noatime,discard latemount,wait,fileencryption=aes-256-xts:aes-256-cts:v2,keydirectory=/metadata/vold/metadata_encryption,metadata_encryption=aes-256-xts:wrappedkey_v0,quota
 /dev/block/bootdevice/by-name/userdata /data mifs noatime,discard latemount,wait,keydirectory=/metadata/vold/metadata_encryption
 ";
+
+    #[test]
+    fn the_installed_system_never_lands_on_the_recovery_s_own_system() {
+        // Whatever the table calls it, the installed system is mounted at
+        // /system_root: /system is the ramdisk's, and the recovery runs from
+        // it. Both names are real — recovery.fstab says `/` and the phone's
+        // own vendor/etc/fstab.qcom says `/system`, and that second file
+        // only becomes readable once the vendor files are mounted, which is
+        // how mounting system after vendor used to take the recovery's own
+        // /system away from under it.
+        assert_eq!(point("/"), SYSTEM_ROOT);
+        assert_eq!(point("/system"), SYSTEM_ROOT);
+        // Everything else keeps the phone's own word for it.
+        assert_eq!(point("/vendor"), "/vendor");
+        assert_eq!(point("/data"), "/data");
+    }
 
     #[test]
     fn a_mount_point_can_be_named_once_per_filesystem_it_might_hold() {

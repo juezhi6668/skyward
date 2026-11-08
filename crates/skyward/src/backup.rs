@@ -363,8 +363,21 @@ impl Phone {
                     if one.point == DATA || one.name == "userdata" {
                         continue;
                     }
-                    let device = PathBuf::from(fstab::device(&one.ways[0])?);
-                    let size = skyward_block::size_bytes(&device)?;
+                    // A table may name a partition this phone does not have:
+                    // the Mi MIX 2's names a card reader with no card in it
+                    // (/dev/block/mmcblk0p1), and this phone's bootloader
+                    // path need not be a recovery's. What is not there cannot
+                    // be backed up, and one absent partition is not a reason
+                    // for the whole page to say nothing — this runs before
+                    // the first frame, so it used to be a reason for the
+                    // recovery not to start at all.
+                    let Ok(device) = fstab::device(&one.ways[0]) else {
+                        continue;
+                    };
+                    let device = PathBuf::from(device);
+                    let Ok(size) = skyward_block::size_bytes(&device) else {
+                        continue;
+                    };
                     out.push((one.name.clone(), Source::Block(device.clone()), size));
                 }
                 Ok(out)

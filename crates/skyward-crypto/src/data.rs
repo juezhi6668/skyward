@@ -282,52 +282,59 @@ pub struct Opening {
     pub closed: Vec<Closed>,
 }
 
-/// Open the data partition where it is reached without any key at all, and
-/// where the phone's own table says so.
+/// Open the data partition where it is reached without any key at all.
 ///
 /// The recovery's other way round asks the phone's key service to unwrap
 /// the storage key, which is right for a phone whose data is encrypted and
 /// is a wait that never ends on one whose data is not: with nothing to hold
 /// the key, the service the table names is a service the phone never had,
-/// and the binder call for it is answered by nobody. So the table is read
-/// first, and the partition itself is read after, for the markers Android
-/// leaves where it does keep keys.
+/// and the binder call for it is answered by nobody.
+///
+/// **Whether the partition can be opened is asked of the mount itself.** A
+/// table's `fileencryption=` is the system's plan for a partition it has yet
+/// to open, not a fact about the one in hand, and a phone whose data was
+/// made afresh as another filesystem keeps every word of that plan while
+/// holding nothing that needs a key — which is how this recovery came to
+/// answer "the table gives /data as ext4 a fileencryption" for a partition
+/// that mounts as plain ext4. So the line the partition's own superblock
+/// names is tried first, then the rest of the table's lines in order, and
+/// the first that mounts is the one the phone has. A phone that really does
+/// keep keys is caught afterwards, by the markers Android leaves in the
+/// files, and the mount made here is taken back before giving up.
 pub fn open_without_keys() -> Result<Opening> {
     let entries = skyward_block::fstab::read(MOUNT)?;
-    // Whether a key is needed is asked of the partition, not of the table.
-    // The table is the system's plan for opening a partition that is not open
-    // yet, and a data partition that was decrypted keeps every word of that
-    // plan while holding nothing that needs a key: read the plan first and
-    // this phone answers its own backup page with "decrypt the data first"
-    // while its data is mounted and readable. So what is already mounted is
-    // open, and only what still has to be mounted is read for what it would
-    // need — of the way it really is, not of whichever line the table puts
-    // first, since a phone lists its data once per filesystem it might hold.
     let mounted = match mount::is_mount_point(Path::new(MOUNT))? {
         true => None,
         false => {
-            let entry = entries
-                .first()
-                .with_context(|| format!("the phone's own table says nothing about {MOUNT}"))?;
-            let device = skyward_block::fstab::device(entry)?;
-            let holds = skyward_block::probe::filesystem(Path::new(&device))?
-                .with_context(|| format!("{device} holds no filesystem as it lies"))?;
-            let entry = entries
-                .iter()
-                .find(|e| e.filesystem == holds)
-                .unwrap_or(entry);
-            for name in ["metadata_encryption", "fileencryption"] {
-                if entry.extra(name).is_some() {
-                    anyhow::bail!("the phone's table gives {MOUNT} as {holds} a {name}");
+            let device = skyward_block::fstab::device(
+                entries
+                    .first()
+                    .with_context(|| format!("the phone's own table says nothing about {MOUNT}"))?,
+            )?;
+            std::fs::create_dir_all(MOUNT).with_context(|| format!("make {MOUNT}"))?;
+            // The filesystem the partition's own superblock names goes
+            // first, and the sort is stable, so the rest keep the table's
+            // order. A partition whose superblock names nothing known is
+            // simply tried against every line.
+            let holds = skyward_block::probe::filesystem(Path::new(&device))
+                .ok()
+                .flatten();
+            let mut order: Vec<&Entry> = entries.iter().collect();
+            order.sort_by_key(|e| holds.as_ref() != Some(&e.filesystem));
+            let mut why: Vec<String> = Vec::new();
+            let mut open = None;
+            for entry in order {
+                match mount::mount(Path::new(&device), Path::new(MOUNT), &entry.filesystem, &entry.options) {
+                    Ok(()) => {
+                        open = Some(entry);
+                        break;
+                    }
+                    Err(e) => why.push(format!("as {}: {e:#}", entry.filesystem)),
                 }
             }
-            std::fs::create_dir_all(MOUNT).with_context(|| format!("make {MOUNT}"))?;
-            mount::mount(
-                Path::new(&device),
-                Path::new(MOUNT),
-                &entry.filesystem,
-                &entry.options,
-            )?;
+            let Some(entry) = open else {
+                anyhow::bail!("{device} would not mount: {}", why.join("; "));
+            };
             Some(Opened {
                 mapped: PathBuf::from(device),
                 filesystem: entry.filesystem.clone(),
@@ -335,10 +342,16 @@ pub fn open_without_keys() -> Result<Opening> {
             })
         }
     };
-    // Android leaves word of its own keys in these two folders. A phone that
-    // has them is one whose data this is not the way to reach, whatever its
-    // table said; the mount made here is taken back before giving up.
-    for marker in ["/data/unencrypted", "/data/misc/vold"] {
+    // Android leaves word of its own keys in these places: the staging folder
+    // a file-based-encrypted phone keeps, and the per-user keys vold holds.
+    // A phone that has them is one whose data this is not the way to reach,
+    // whatever its table said; the mount made here is taken back before
+    // giving up. `/data/misc/vold` itself is **not** one of them — every
+    // Android data partition has that folder, and on a phone that keeps no
+    // keys it is simply empty, which is what this phone's is: reading the
+    // folder as the marker refused a data partition that mounts and reads
+    // perfectly well, with "the phone does keep keys for it".
+    for marker in ["/data/unencrypted", "/data/misc/vold/user_keys"] {
         if Path::new(marker).exists() {
             if mounted.is_some() {
                 let _ = mount::umount(Path::new(MOUNT));

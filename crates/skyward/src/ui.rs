@@ -946,7 +946,10 @@ fn fs_points(name: &str) -> &'static [&'static str] {
         "metadata" => &["/metadata"],
         "cache" => &["/cache"],
         "system" => &["/system", "/system_root", "/"],
-        "vendor" => &["/vendor"],
+        // Where a phone's table mounts the vendor files: /vendor on the Mi 6,
+        // /cust on the Mi MIX 2, whose recovery.fstab names the partition
+        // after itself.
+        "vendor" => &["/vendor", "/cust"],
         _ => &[],
     }
 }
@@ -1352,6 +1355,17 @@ fn install_options(app: &App) -> Options {
     }
 }
 
+/// When, after the panel is taken over or woken, the touchscreen is told
+/// again. The panel's own power cycle leaves the controller of some phones
+/// — the Mi MIX 2's among them — reporting nothing until it is reset, and a
+/// reset written while it is still settling is lost, so it is asked more
+/// than once over the seconds that follow.
+const TOUCH_AGAIN: [Duration; 3] = [
+    Duration::from_millis(1500),
+    Duration::from_millis(4000),
+    Duration::from_millis(8000),
+];
+
 /// How often the WLAN page scans while it shows.
 const SCAN_EVERY: Duration = Duration::from_secs(10);
 
@@ -1538,6 +1552,13 @@ pub fn run(
     // Whether the panel's frame memory has been blacked out for an off
     // panel; cleared once a real frame is shown again.
     let mut blanked = false;
+    // Whether the touchscreen's own knobs have been set since the panel was
+    // last power cycled. The first frame takes the panel over and every wake
+    // cycles it, and both hand the driver's wake gesture back on.
+    let mut told_touch = false;
+    // When that was, and how many of TOUCH_AGAIN have been done since.
+    let mut touch_since: Option<Instant> = None;
+    let mut touch_again = 0;
     // When the panel gone dark began to rest.
     let mut rested_at: Option<Instant> = None;
     // Started for fastboot, the port goes to the phone's own fastbootd. The
@@ -1907,10 +1928,23 @@ pub fn run(
         let mut shown = false;
         if panel.is_some() {
             // A display turned off comes on again with a frame drawn for it.
-            if app.take_dirty() || !surface.is_on() {
+            let waking = !surface.is_on();
+            if app.take_dirty() || waking {
                 let t0 = Instant::now();
                 app.compose(&mut screen, &fonts, &info, &shown_clock, now);
                 surface.present(&screen)?;
+                // The first frame is the one that takes the panel over, and
+                // every wake after it cycles the panel again. Both hand the
+                // touch controller's wake gesture back on, and while it is on
+                // a controller such as the Mi MIX 2's reports a touch as a
+                // wake-up rather than as input, so what the device
+                // configuration writes to the touchscreen is written again.
+                if waking || !told_touch {
+                    inputs.tell_panel_again()?;
+                    told_touch = true;
+                    touch_since = Some(Instant::now());
+                    touch_again = 0;
+                }
                 eprintln!(
                     "frame {:?} in {} ms",
                     app.screen(),
@@ -1923,6 +1957,16 @@ pub fn run(
                 shown = true;
             }
             blanked = false;
+            // A controller woken by the panel's own power cycle is not
+            // listening for a moment after it, and a write made then is
+            // lost: what the configuration says is said again over the next
+            // seconds, as many times as TOUCH_AGAIN allows.
+            if let Some(since) = touch_since {
+                while touch_again < TOUCH_AGAIN.len() && since.elapsed() >= TOUCH_AGAIN[touch_again] {
+                    inputs.tell_panel_again()?;
+                    touch_again += 1;
+                }
+            }
         } else if !blanked {
             // Black out the panel's frame memory before the backlight goes
             // to 0 and the display off, so an OLED that floors the backlight

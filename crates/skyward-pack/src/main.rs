@@ -198,6 +198,7 @@ fn main() -> Result<()> {
                 rd.add(paths::TASK_PROFILES, 0o644, TASK_PROFILES.to_vec())?;
             }
             rd.add(paths::MTP_RC, 0o644, MTP_RC.to_vec())?;
+            rd.add(paths::KEYMASTER_RC, 0o644, KEYMASTER_RC.to_vec())?;
             // An older recovery binds MTP from the kernel's own legacy
             // function on the very request this one makes for its own, and
             // whichever rule init reads last owns the port: the older rule
@@ -371,6 +372,9 @@ const TASK_PROFILES: &[u8] = include_bytes!("task_profiles.json");
 /// The init rules that give the USB port file transfer beside adb, which a
 /// stock recovery does not offer.
 const MTP_RC: &[u8] = include_bytes!("mtp.rc");
+/// The key hardware services, as init has to know them for the lazy
+/// registration to work at all.
+const KEYMASTER_RC: &[u8] = include_bytes!("keymaster.rc");
 
 /// A property file without the lines that set any of `names`.
 fn without(props: &[u8], names: &[&str]) -> Vec<u8> {

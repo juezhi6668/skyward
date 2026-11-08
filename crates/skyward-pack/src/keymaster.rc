@@ -1,0 +1,61 @@
+# The phone's key hardware services, which nothing else starts for us.
+#
+# The base's own init.recovery.qcom.rc has `#import
+# /init.recovery.qcom_decrypt.rc` commented out, and the file it would have
+# imported — init.recovery.services.qcom_decrypt.rc — is not in this base at
+# all. Without those definitions hwservicemanager asks init to start
+# android.hardware.keymaster@3.0::IKeymasterDevice/default and init answers
+#
+#   Control message: Could not find
+#   'android.hardware.keymaster@3.0::IKeymasterDevice/default'
+#   for ctl.interface_start
+#
+# so a recovery can mount the vendor files and run qseecomd and still never
+# reach the secure world: the service is a lazy one, and the only thing that
+# starts it is init answering that message. These are the definitions the
+# missing file would have carried, with the label the recovery runs under.
+#
+# The programs are the **recovery's own**, in its ramdisk: the base carries
+# the whole chain — android.hardware.keymaster@3.0-service, its
+# @3.0-impl.so, and under vendor/lib64 the Qualcomm module that does the
+# work (hw/keystore.msm8998.so) with libQSEEComAPI, libdiag and libdrmfs
+# beside it. Nothing here needs the vendor partition mounted, and that is
+# how the OrangeFox build this port starts from decrypts.
+#
+# The names carry `skyward-` because init.recovery.qcom_decrypt.rc already
+# defines `keymaster-3-0` and `gatekeeper-1-0` — and that file, being read
+# first, wins: init answers "ignored duplicate definition of service" and
+# goes on using its own. **Its definitions carry no `interface` line**, which
+# is the whole reason the hardware directory's control message finds nothing,
+# and they name the programs in the recovery's own system folder — the
+# software stand-ins, which have none of the phone's keys. So these are
+# separate services under names of their own, pointing at the vendor's own
+# programs, and the interface they declare is what makes init answer.
+
+service skyward-keymaster-3-0 /system/bin/android.hardware.keymaster@3.0-service
+    class hal
+    user root
+    group root system
+    # init's environment holds nothing of its own, and this service loads its
+    # implementation and the Qualcomm module beside it from the recovery's
+    # vendor folder: without this it starts and is gone in the same breath,
+    # with nothing written anywhere to say why.
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib
+    interface android.hardware.keymaster@3.0::IKeymasterDevice default
+    seclabel u:r:recovery:s0
+
+service skyward-gatekeeper-1-0 /system/bin/android.hardware.gatekeeper@1.0-service
+    class hal
+    user root
+    group root system
+    setenv LD_LIBRARY_PATH /vendor/lib64:/vendor/lib:/system/lib64:/system/lib
+    interface android.hardware.gatekeeper@1.0::IGatekeeper default
+    seclabel u:r:recovery:s0
+
+# What starts the service above, and it is a property rather than a program
+# spawned by hand, which is how TWRP starts the same chain: it sets
+# ro.crypto.state/ro.crypto.type and keymaster_ver, and init's own rules do
+# the starting. The base's rules start `keymaster-3-0`, whose definition has
+# no library path and so exits at once; this starts ours, which has one.
+on property:skyward.keymaster=1
+    start skyward-keymaster-3-0

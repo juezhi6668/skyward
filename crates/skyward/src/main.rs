@@ -15,6 +15,9 @@ mod filework;
 mod haptics;
 #[cfg(target_os = "android")]
 mod input;
+
+#[cfg(target_os = "android")]
+mod keyhal;
 #[cfg(target_os = "android")]
 mod merge;
 #[cfg(target_os = "android")]
@@ -77,6 +80,9 @@ enum Cmd {
     Reboot { target: String },
     /// Print the bootloader control block in misc.
     Bcb,
+    /// Start the phone's key hardware service and ask it about itself,
+    /// which is the first thing to try when a key will not unwrap.
+    Keytest,
     /// Print the logical partition metadata in super.
     Lp {
         /// The super partition, or an image of its start.
@@ -242,6 +248,7 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
+        Cmd::Keytest => keytest(),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -984,6 +991,32 @@ fn prepare(cfg: &DeviceConfig, slot: Option<skyward_vab::Slot>) -> Result<()> {
         Err(e) => skyward_sys::kmsg(&format!("partitions not mounted: {e:#}"))?,
     }
     Ok(())
+}
+
+/// Start the phone's key hardware service and ask it about itself. What it
+/// answers proves the whole chain — the vendor files, the secure world's
+/// daemon, the service's own registration, and the way this program writes a
+/// call in the older layout — before anything that needs a key is asked of
+/// it, and it takes nothing and changes nothing.
+#[cfg(target_os = "android")]
+fn keytest() -> Result<()> {
+    let mut started = keyhal::start()?;
+    let hardware = skyward_binder::driver::Binder::hardware()?;
+    let service = skyward_crypto::keymaster::Keymaster::open(&hardware)?;
+    let said = service.hardware()?;
+    println!("version        = {}", said.version);
+    println!("security_level = {}", said.security_level);
+    println!("name           = {}", said.name);
+    println!("author         = {}", said.author);
+    for (what, code) in started.still_up() {
+        println!("gone           = {what} exited with {code:?}");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn keytest() -> Result<()> {
+    anyhow::bail!("the key hardware is only reachable on the phone")
 }
 
 fn info(config: &str) -> Result<()> {

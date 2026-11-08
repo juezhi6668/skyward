@@ -22,12 +22,13 @@ const VBMETA_MAGIC: &[u8] = b"AVB0";
 /// image has no Android header: what it is, is its superblock. erofs and
 /// ext4 both start their superblock a kilobyte in, but erofs puts its magic
 /// at the start of it and ext4 keeps `s_magic` 56 bytes into it, at 1080;
-/// f2fs starts its whole superblock at the first byte of the partition.
+/// f2fs starts its superblock at `F2FS_SUPER_OFFSET`, a kilobyte in as well,
+/// with `s_magic` as the first field.
 const EROFS: usize = 1024;
 const EROFS_MAGIC: &[u8] = &[0xe2, 0xe1, 0xf5, 0xe0];
 const EXT4: usize = 1024 + 56;
 const EXT4_MAGIC: &[u8] = &[0x53, 0xef];
-const F2FS: usize = 0;
+const F2FS: usize = 1024;
 const F2FS_MAGIC: &[u8] = &[0x10, 0x20, 0xf5, 0xf2];
 
 /// How a ramdisk is packed, by its first bytes: LZ4 in the legacy framing
@@ -151,15 +152,15 @@ pub fn detect<R: Read + Seek>(file: &mut R, head: &[u8]) -> Result<Option<ImageK
         return Ok(Some(ImageKind::Vbmeta));
     }
     // What is left is a filesystem, read off its own superblock: erofs's
-    // magic a kilobyte in, ext4's 56 bytes further on, f2fs's at the very
-    // first byte.
+    // magic a kilobyte in, ext4's 56 bytes further on, f2fs's a kilobyte in
+    // as well -- the same place erofs keeps its own, told apart by the word.
     if head.len() > EROFS + EROFS_MAGIC.len() && head[EROFS..].starts_with(EROFS_MAGIC) {
         return Ok(Some(ImageKind::Filesystem(Filesystem::Erofs)));
     }
     if head.len() > EXT4 + EXT4_MAGIC.len() && head[EXT4..].starts_with(EXT4_MAGIC) {
         return Ok(Some(ImageKind::Filesystem(Filesystem::Ext4)));
     }
-    if head[F2FS..].starts_with(F2FS_MAGIC) {
+    if head.len() > F2FS + F2FS_MAGIC.len() && head[F2FS..].starts_with(F2FS_MAGIC) {
         return Ok(Some(ImageKind::Filesystem(Filesystem::F2fs)));
     }
     Ok(None)
@@ -516,12 +517,13 @@ mod tests {
     /// erofs's `h_magic` is the first word of the superblock at 1024
     /// (erofs_fs.h), ext4's `s_magic` is 0x38 into the superblock at 1024,
     /// so 1080 (ext4.h), and f2fs's `s_magic` is the first word of the
-    /// partition (f2fs_fs.h).
+    /// superblock at `F2FS_SUPER_OFFSET`, 1024 (f2fs_fs.h) -- the same
+    /// place as erofs's, told apart by the word.
     fn filesystem_image(kind: Filesystem, size: usize) -> Vec<u8> {
         let (at, magic): (usize, &[u8]) = match kind {
             Filesystem::Erofs => (1024, &[0xe2, 0xe1, 0xf5, 0xe0]),
             Filesystem::Ext4 => (1080, &[0x53, 0xef]),
-            Filesystem::F2fs => (0, &[0x10, 0x20, 0xf5, 0xf2]),
+            Filesystem::F2fs => (1024, &[0x10, 0x20, 0xf5, 0xf2]),
         };
         let mut out = vec![0u8; size];
         out[at..at + magic.len()].copy_from_slice(magic);

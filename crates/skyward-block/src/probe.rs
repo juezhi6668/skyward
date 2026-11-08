@@ -12,12 +12,19 @@ use std::path::Path;
 
 /// Where each filesystem keeps its magic, and what it is: erofs's `h_magic`
 /// is the first word of the superblock a kilobyte in, ext4 keeps `s_magic`
-/// 56 bytes into that same superblock, and f2fs starts its superblock at the
-/// partition's first byte. The same three places an image of a filesystem is
+/// 56 bytes into that same superblock, and f2fs keeps its whole superblock
+/// at `F2FS_SUPER_OFFSET`, a kilobyte in as well, with `s_magic` as its
+/// first field. The same three places an image of a filesystem is
 /// recognised by, so a partition and an image of it answer alike.
+///
+/// f2fs's is **not** at the partition's first byte: an earlier reading of
+/// this had it there, and a data partition that is f2fs then read as holding
+/// nothing at all, which is what stopped the recovery opening /data without
+/// keys. Measured on the Mi 6: the first eight bytes of `by-name/userdata`
+/// are zero and `10 20 f5 f2` is at 1024.
 const EROFS: (usize, &[u8], &str) = (1024, &[0xe2, 0xe1, 0xf5, 0xe0], "erofs");
 const EXT4: (usize, &[u8], &str) = (1080, &[0x53, 0xef], "ext4");
-const F2FS: (usize, &[u8], &str) = (0, &[0x10, 0x20, 0xf5, 0xf2], "f2fs");
+const F2FS: (usize, &[u8], &str) = (1024, &[0x10, 0x20, 0xf5, 0xf2], "f2fs");
 
 /// How much of a partition is read: far enough to reach ext4's magic.
 const HEAD: usize = 1082;
@@ -76,11 +83,22 @@ mod tests {
     }
 
     #[test]
-    fn a_magic_beside_another_filesystem_s_is_not_that_filesystem() {
-        // f2fs's magic is at 0 and ext4's at 1080: a partition holding f2fs
-        // is not made ext4 by four zero bytes where ext4 keeps its own.
+    fn a_magic_at_the_wrong_place_is_not_a_filesystem() {
+        // The mistake this file was fixed for: f2fs's magic read at the
+        // partition's first byte. A partition holding f2fs has zeroes there.
         let dir = holding(0, F2FS.1, 4096);
         let device = dir.path().join("partition");
+        assert_eq!(filesystem(&device).unwrap(), None, "the magic at 0 is not f2fs's");
+        // And where it really is, it is named.
+        let dir = holding(F2FS.0, F2FS.1, 4096);
+        let device = dir.path().join("partition");
         assert_eq!(filesystem(&device).unwrap().as_deref(), Some("f2fs"));
+    }
+
+    #[test]
+    fn erofs_and_f2fs_share_the_kilobyte_and_are_told_apart_by_their_magic() {
+        let dir = holding(EROFS.0, EROFS.1, 4096);
+        let device = dir.path().join("partition");
+        assert_eq!(filesystem(&device).unwrap().as_deref(), Some("erofs"));
     }
 }
