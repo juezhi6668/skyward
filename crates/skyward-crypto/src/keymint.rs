@@ -465,13 +465,18 @@ impl<'a> KeyMint<'a> {
     ) -> Result<Vec<u8>> {
         match self {
             KeyMint::Newer(service) => service.gcm_decrypt(key_blob, app_id, nonce, body, note),
-            // The older kind has no way to be handed a note: a key guarded by
-            // a screen lock is refused there for that reason, which is the
-            // same answer, said differently.
-            KeyMint::Older(_) if note.is_some() => anyhow::bail!(
-                "the phone's key hardware cannot take the note a screen lock writes"
+            // The older kind is handed the note the same way the newer one
+            // is, as a value carried alongside the call: `keymaster_defs.h`
+            // names a tag for it, and the hardware checks the signature the
+            // secure world wrote over it before it will use a key the note
+            // guards.
+            KeyMint::Older(service) => service.gcm_decrypt_with(
+                key_blob,
+                app_id,
+                nonce,
+                body,
+                note.map(|note| note.bytes()).as_deref(),
             ),
-            KeyMint::Older(service) => service.gcm_decrypt(key_blob, app_id, nonce, body),
         }
     }
 

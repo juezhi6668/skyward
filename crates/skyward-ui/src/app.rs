@@ -8382,7 +8382,12 @@ impl App {
             );
             return Vec::new();
         }
-        self.unlock(drawn.iter().map(|i| *i as u8).collect())
+        // **A pattern is kept as the digits it is drawn on**, not as the
+        // number of each dot: Android turns each dot into `'1' + dot` when it
+        // makes the credential, so the pattern that joins 1, 2, 3, 6, 9 is
+        // the four bytes `12369` — measured, and the reason a pattern given
+        // as `[0, 1, 2, 5, 8]` is turned away as a wrong credential.
+        self.unlock(drawn.iter().map(|i| b'1' + *i as u8).collect())
     }
 
     /// A volume key: the first lights the control the keys were last on
@@ -11932,7 +11937,7 @@ mod tests {
             press(&mut app, Key::Power, 0),
             vec![Effect::Unlock {
                 user: 0,
-                code: vec![0, 1, 2, 5, 8, 7, 6]
+                code: b"1236987".to_vec()
             }],
             "the last one joined ends it"
         );
@@ -13535,9 +13540,9 @@ mod tests {
             fx,
             vec![Effect::Unlock {
                 user: 0,
-                code: vec![0, 1, 4, 7]
+                code: b"1258".to_vec()
             }],
-            "the dots themselves, from nought, in the order joined"
+            "the digits the dots are drawn on, in the order joined"
         );
         assert!(
             app.state.pattern.is_empty(),

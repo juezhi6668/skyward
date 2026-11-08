@@ -79,6 +79,10 @@ mod tag {
     pub const ALGORITHM: u32 = 0x1000_0002;
     pub const APPLICATION_ID: u32 = 0x9000_0259;
     pub const NONCE: u32 = 0x9000_03e9;
+    /// The note the secure world writes once a credential has been answered.
+    /// A key made to be used only after one is used by handing this over with
+    /// it, and the hardware refuses the key without it.
+    pub const AUTH_TOKEN: u32 = 0x9000_03ea;
 }
 
 /// How long an AES-GCM tag is here.
@@ -534,6 +538,22 @@ impl Keymaster1 {
         nonce: &[u8],
         body: &[u8],
     ) -> Result<Vec<u8>> {
+        self.gcm_decrypt_with(key, app_id, nonce, body, None)
+    }
+
+    /// The same, with the note the secure world writes for a credential
+    /// that has been answered. A key the key store keeps for a user's own
+    /// files is made to be used only after one, and the hardware turns it
+    /// away without: measured, the key store's own key answers
+    /// "not authenticated" rather than opening.
+    pub fn gcm_decrypt_with(
+        &self,
+        key: &[u8],
+        app_id: &[u8],
+        nonce: &[u8],
+        body: &[u8],
+        auth: Option<&[u8]>,
+    ) -> Result<Vec<u8>> {
         let mut params = vec![
             Param::number(tag::BLOCK_MODE, MODE_GCM),
             Param::number(tag::PADDING, PAD_NONE),
@@ -543,6 +563,9 @@ impl Keymaster1 {
         ];
         if !app_id.is_empty() {
             params.push(Param::bytes(tag::APPLICATION_ID, app_id));
+        }
+        if let Some(auth) = auth {
+            params.push(Param::bytes(tag::AUTH_TOKEN, auth));
         }
         // What is left of the body after the ciphertext is the tag, which
         // the closing call is given rather than fed.

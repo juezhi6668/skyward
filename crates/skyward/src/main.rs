@@ -1184,7 +1184,10 @@ fn pattern_bytes(dots: &str) -> Result<Vec<u8>> {
             at < 9,
             "a pattern joins dots numbered 1 to 9, and {dot} is not one of them"
         );
-        said.push(at);
+        // The credential a pattern makes is the digits it is drawn on, each
+        // dot turned into `'1' + dot` — which is what the phone keeps, and
+        // what it stretches. The dots themselves are a different thing.
+        said.push(b'1' + at);
     }
     Ok(said)
 }

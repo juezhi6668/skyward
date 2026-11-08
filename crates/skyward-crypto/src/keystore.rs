@@ -44,7 +44,7 @@ const NOT_STRETCHED: [&str; 2] = ["nopassword", "none"];
 const BLOB_MAGIC: &[u8] = b"pKMblob\0";
 
 /// The blob without that word, which is what the hardware is given.
-fn bare_blob(raw: Vec<u8>) -> Vec<u8> {
+pub fn bare_blob(raw: Vec<u8>) -> Vec<u8> {
     match raw.starts_with(BLOB_MAGIC) {
         true => raw[BLOB_MAGIC.len()..].to_vec(),
         false => raw,

@@ -66,6 +66,19 @@ impl Token {
             mac: raw[MAC..].to_vec(),
         })
     }
+
+    /// The note as the key service is given it: the same bytes it came in
+    /// as, which is what the hardware checks the signature over.
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut raw = vec![LATEST];
+        raw.extend_from_slice(&self.challenge.to_le_bytes());
+        raw.extend_from_slice(&self.user.to_le_bytes());
+        raw.extend_from_slice(&self.authenticator.to_le_bytes());
+        raw.extend_from_slice(&self.kind.to_be_bytes());
+        raw.extend_from_slice(&self.when.to_be_bytes());
+        raw.extend_from_slice(&self.mac);
+        raw
+    }
 }
 
 #[cfg(test)]

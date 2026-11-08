@@ -34,4 +34,9 @@ pub fn key_blob(database: &Path, alias: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("{} holds no key named {alias}", database.display()))?;
     row.get(0)
         .with_context(|| format!("read the key named {alias}"))
+        // **The store writes a word in front of the blob the hardware made.**
+        // What it keeps is that word and then the blob, which is what a key
+        // directory on the data partition holds too; the hardware wants the
+        // blob alone, and answers "invalid key blob" to the wrapper.
+        .map(crate::keystore::bare_blob)
 }
