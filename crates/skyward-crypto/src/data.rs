@@ -519,21 +519,34 @@ fn mount_plainly(entries: &[Entry]) -> Result<()> {
 }
 
 /// Which users the phone keeps keys for, in order.
+///
+/// A phone keeps a folder for each user under both of the places it may keep
+/// their keys, and **either may be the only one there**: a phone that keeps
+/// keys for a user's files before they sign in has one under `de`, and one
+/// whose user never had such files has none — and a folder whose own name
+/// cannot be read, because the key for it is kept inside it, is as good as
+/// absent. So both are read, neither is required, and the users found in
+/// either are the users there are.
 fn users() -> Result<Vec<u32>> {
-    let dir = Path::new(USER_KEYS).join("de");
-    let mut users = Vec::new();
-    for entry in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
-        let path = entry
-            .with_context(|| format!("read {}", dir.display()))?
-            .path();
-        let Some(user) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.parse::<u32>().ok())
-        else {
+    let mut users: Vec<u32> = Vec::new();
+    for which in ["de", "ce"] {
+        let dir = Path::new(USER_KEYS).join(which);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
-        users.push(user);
+        for entry in entries.flatten() {
+            let Some(user) = entry
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if !users.contains(&user) {
+                users.push(user);
+            }
+        }
     }
     users.sort_unstable();
     Ok(users)

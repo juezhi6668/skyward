@@ -33,6 +33,9 @@ pub fn add_key(mount: &Path, raw: &[u8], wrapped: bool, recorded: Option<&[u8]>)
 /// naming one: sixteen bytes of name and eighty of header.
 const NEW_HEADER_BYTES: usize = 80;
 
+/// How long a key for the storage hardware is, the key and the word after it.
+const WRAPPED_KEY_BYTES: usize = 72;
+
 /// How each way numbers itself, and where it keeps the length of the key.
 const BY_IDENTIFIER: u32 = 2;
 const NEW_KEY_BYTES_AT: usize = 40;
@@ -79,24 +82,63 @@ fn keep_in_keyring(raw: &[u8], recorded: Option<&[u8]>) -> std::io::Result<Vec<u
             &computed[..OLD_NAME_BYTES]
         }
     };
-    let mut description = String::from("ext4:");
-    for byte in name {
-        description.push_str(&format!("{byte:02x}"));
+    // **Eight bytes more than the key.** A phone whose recovery had decrypted
+    // kept its keys in the ring at seventy-two bytes where the hardware had
+    // handed over sixty-four, and with sixty-four the folders stay shut while
+    // with seventy-two they open: the storage hardware's own keys carry a
+    // word of their own after the key, and the filesystem will not take one
+    // without it. What the eight bytes say is not needed to read anything —
+    // nothing on the end works as well as anything else.
+    let mut payload = raw.to_vec();
+    while payload.len() < WRAPPED_KEY_BYTES {
+        payload.push(0);
     }
+    let raw = &payload[..];
+    let mut hex = String::new();
+    for byte in name {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    // **The same key under every name the filesystems look one up by, and in
+    // both places they look.** A kernel of one age asks its own ring for
+    // `ext4:` or `f2fs:`; the one after it keeps a ring named `fscrypt` and
+    // asks that one for `fscrypt:<name>` — a phone whose recovery had
+    // decrypted showed all of them at once, the same word after each, and a
+    // ring of its own called `fscrypt` holding them.
     let kind = std::ffi::CString::new("logon").expect("no NUL");
-    let said = std::ffi::CString::new(description.clone()).expect("no NUL");
-    let kept = unsafe {
+    let keyring = std::ffi::CString::new("keyring").expect("no NUL");
+    let named = std::ffi::CString::new("fscrypt").expect("no NUL");
+    let ring = unsafe {
         libc::syscall(
             libc::SYS_add_key,
-            kind.as_ptr(),
-            said.as_ptr(),
-            raw.as_ptr(),
-            raw.len(),
+            keyring.as_ptr(),
+            named.as_ptr(),
+            std::ptr::null::<u8>(),
+            0 as libc::c_long,
             SESSION_KEYRING,
         )
     };
-    if kept < 0 {
-        return Err(std::io::Error::last_os_error());
+    for (prefix, where_) in [
+        ("ext4:", SESSION_KEYRING),
+        ("f2fs:", SESSION_KEYRING),
+        ("fscrypt:", match ring {
+            serial if serial > 0 => serial,
+            _ => SESSION_KEYRING,
+        }),
+    ] {
+        let said = std::ffi::CString::new(format!("{prefix}{hex}")).expect("no NUL");
+        let kept = unsafe {
+            libc::syscall(
+                libc::SYS_add_key,
+                kind.as_ptr(),
+                said.as_ptr(),
+                raw.as_ptr(),
+                raw.len(),
+                where_,
+            )
+        };
+        if kept < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
     }
     Ok(name.to_vec())
 }

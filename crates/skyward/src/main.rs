@@ -1096,6 +1096,22 @@ fn opendata() -> Result<()> {
             for closed in &opening.closed {
                 println!("  user {} still closed: {:?}", closed.user, closed.why);
             }
+            // What the phone's own files look like from here: a few names of
+            // the two places a user's things are kept, which is the whole
+            // point of opening it.
+            for at in ["/data/data", "/data/media/0", "/data/system"] {
+                match std::fs::read_dir(at) {
+                    Ok(read) => {
+                        let names: Vec<String> = read
+                            .flatten()
+                            .take(3)
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect();
+                        println!("  {at}: {names:?}");
+                    }
+                    Err(e) => println!("  {at}: {e}"),
+                }
+            }
             Ok(())
         }
         Err(e) => {

@@ -54,7 +54,13 @@ pub fn start() -> Result<Started> {
     let _ = skyward_sys::kmsg(&format!("key hardware: firmware at {firmware}"));
     open_qseecom()?;
     let mut children = Vec::new();
-    children.push(spawn("qseecomd", Path::new("/system/bin/qseecomd"))?);
+    // **Only once.** A second daemon cannot take the secure world's
+    // listener — the kernel answers "Service 10 is not unique" and the
+    // daemon that asked gets nothing — so a daemon already running is left
+    // as it is, and one killed leaves its listener behind until a restart.
+    if !running("qseecomd") {
+        children.push(spawn("qseecomd", Path::new("/system/bin/qseecomd"))?);
+    }
     // Nothing starts a *service*: this phone's key hardware is a passthrough
     // module that is loaded into this process by whoever uses it, not a
     // hardware service that registers with the directory. What it needs is
@@ -63,13 +69,53 @@ pub fn start() -> Result<Started> {
     Ok(Started { children })
 }
 
-/// Mount the firmware partition where the phone's table puts it, and say
-/// where that is. A phone that has none is not a failure here: the service
-/// is asked for either way, and what it answers is the answer.
+/// Whether a program of that name is running already.
+fn running(name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let said = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+        if said.trim() == name {
+            return true;
+        }
+    }
+    false
+}
+
+/// Mount the firmware partition where the secure world looks for its trusted
+/// applications, which is **`/firmware`** and not the place the phone's own
+/// table names: the table mounts it at `/vendor/firmware_mnt` for the
+/// system's own use, and the daemon that starts an application reads
+/// `/firmware/image/<name>`. Without it the key hardware answers EPERM —
+/// measured, and the reason this is here at all.
 fn firmware() -> String {
-    for name in ["modem", "firmware"] {
-        if let Ok(at) = skyward_block::fstab::mount(name) {
-            return at.display().to_string();
+    const LOOKS_IN: &str = "/firmware";
+    if Path::new(LOOKS_IN).join("image").is_dir() {
+        return LOOKS_IN.to_string();
+    }
+    // The partition itself, by the two names the phone's links give it: the
+    // table that names where it goes is the installed system's own, and is
+    // not readable until the vendor files are mounted — which is the very
+    // thing that needs this.
+    let at = Path::new(LOOKS_IN);
+    let _ = skyward_block::mount::prepare(at);
+    for device in [
+        "/dev/block/by-name/modem",
+        "/dev/block/bootdevice/by-name/modem",
+    ] {
+        if !Path::new(device).exists() {
+            continue;
+        }
+        if skyward_block::mount::mount(
+            Path::new(device),
+            at,
+            "vfat",
+            &["ro".to_string(), "shortname=lower".to_string()],
+        )
+        .is_ok()
+        {
+            return LOOKS_IN.to_string();
         }
     }
     "not mounted".to_string()
