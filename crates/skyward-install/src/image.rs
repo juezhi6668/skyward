@@ -8,7 +8,7 @@ use abootimg_oxide::{Header, VendorHeader};
 use anyhow::{bail, ensure, Context, Result};
 use sha2::{Digest, Sha256};
 use skyward_vab::Slot;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -400,23 +400,7 @@ pub fn flash<R: Read + Seek>(
     Ok(())
 }
 
-/// Drop the device's cached pages, so reading it back reads the flash.
-#[cfg(target_os = "android")]
-pub(crate) fn drop_cache(f: &File) -> Result<()> {
-    use std::os::fd::AsRawFd;
-    let rc = unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
-    if rc != 0 {
-        return Err(io::Error::from_raw_os_error(rc).into());
-    }
-    Ok(())
-}
-
-/// Hosts run the tests on plain files, whose reads come from the same
-/// cache either way.
-#[cfg(not(target_os = "android"))]
-pub(crate) fn drop_cache(_: &File) -> Result<()> {
-    Ok(())
-}
+pub(crate) use skyward_block::drop_cache;
 
 /// Images made up for the tests here and in the modules that look into
 /// partitions.
