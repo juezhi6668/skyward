@@ -482,17 +482,6 @@ fn note(line: &str) {
     let _ = skyward_sys::kmsg(&format!("mtp: {line}"));
 }
 
-/// Open an endpoint without blocking, so a transfer started as the function
-/// goes fails at once instead of waiting for it to come back.
-fn open_endpoint(path: &str, write: bool) -> Result<File> {
-    OpenOptions::new()
-        .read(!write)
-        .write(write)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)
-        .with_context(|| format!("open {path}"))
-}
-
 /// How waiting for a request ended, short of the request ending.
 enum Interrupted {
     Cancel,
@@ -532,6 +521,16 @@ pub struct Port {
     wake: RawFd,
     /// The computer has configured the function, so its endpoints work.
     enabled: bool,
+    /// The function was **let go of**: the gadget it was bound into was
+    /// unbound, and everything open on it went with the binding. Nothing
+    /// short of taking it again from the top brings it back -- the kernel
+    /// binds a function only once its descriptors are given again -- so the
+    /// thread does that before it waits for the computer.
+    ///
+    /// Measured on the Mi 6: the cable coming out leaves the function
+    /// answering "no such device" to every read, and the cable going back in
+    /// changes nothing, which reads exactly like a port that never came back.
+    let_go: bool,
     /// A packet's size on the bulk endpoints at the speed connected at.
     packet: usize,
     /// The device status reports a cancelled transaction, once.
@@ -561,39 +560,31 @@ impl Port {
         (&ep0)
             .write_all(strings().as_bytes())
             .context("write the MTP strings")?;
+        // Without blocking, a transfer started as the function goes fails
+        // at once instead of waiting for it to come back.
+        let open = |path: &str, write: bool| {
+            OpenOptions::new()
+                .read(!write)
+                .write(write)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+                .open(path)
+                .with_context(|| format!("open {path}"))
+        };
         Ok(Port {
-            bulk_in: open_endpoint(EP_IN, true)?,
-            bulk_out: open_endpoint(EP_OUT, false)?,
-            event_in: open_endpoint(EP_EVENT, true)?,
+            bulk_in: open(EP_IN, true)?,
+            bulk_out: open(EP_OUT, false)?,
+            event_in: open(EP_EVENT, true)?,
             aio: Aio::new().context("set up asynchronous I/O")?,
             ep0,
             wake,
             enabled: false,
+            let_go: false,
             packet: 512,
             cancelled: false,
             reading: None,
             events: VecDeque::new(),
             event: None,
         })
-    }
-
-    /// Open the endpoints again. **A function the computer let go of and
-    /// configured again comes back with the endpoints it had shut**, and one
-    /// held from before answers "no such device" to every read of it. So
-    /// they are opened with each configuration rather than once with the
-    /// function.
-    ///
-    /// Measured on the Mi 6: the cable going back in gave a function that
-    /// was configured and let go of again within the same hundred
-    /// microseconds, because the first read of a command went to an endpoint
-    /// that had been shut when the cable came out. That reads exactly like a
-    /// port that never came back, and file transfer stayed off until the
-    /// recovery was restarted.
-    fn bind_endpoints(&mut self) -> io::Result<()> {
-        self.bulk_in = open_endpoint(EP_IN, true).map_err(io::Error::other)?;
-        self.bulk_out = open_endpoint(EP_OUT, false).map_err(io::Error::other)?;
-        self.event_in = open_endpoint(EP_EVENT, true).map_err(io::Error::other)?;
-        Ok(())
     }
 
     pub fn enabled(&self) -> bool {
@@ -624,7 +615,17 @@ impl Port {
                 return Err(e).context("wait for the computer");
             }
             if fds[0].revents != 0 {
-                self.control().context("answer the control endpoint")?;
+                match self.control() {
+                    Ok(_) => {}
+                    // The function went with the gadget, so waiting for the
+                    // computer to configure it waits for nothing: the thread
+                    // takes it again from the top instead.
+                    Err(e) if e.raw_os_error() == Some(libc::ENODEV) => {
+                        self.unbound();
+                        return Ok(false);
+                    }
+                    Err(e) => return Err(e).context("answer the control endpoint"),
+                }
             }
             if fds[1].revents != 0 {
                 return Ok(false);
@@ -647,15 +648,18 @@ impl Port {
         Ok(match ev.kind {
             ENABLE => {
                 self.enabled = true;
-                // The endpoints come with each configuration: one held from
-                // before the computer let the function go answers "no such
-                // device" to everything asked of it.
-                self.bind_endpoints()?;
                 self.packet = self.packet_size()?;
                 Some(Control::Enabled)
             }
-            DISABLE | UNBIND => {
+            DISABLE => {
                 self.enabled = false;
+                Some(Control::Disabled)
+            }
+            // The gadget was unbound, and the function went with it: what was
+            // open on it is no more, and the descriptors have to be given
+            // again before the kernel will bind it at all.
+            UNBIND => {
+                self.unbound();
                 Some(Control::Disabled)
             }
             SETUP => self.setup(&ev)?,
@@ -752,12 +756,15 @@ impl Port {
             // EAGAIN and ESHUTDOWN are the endpoints saying the computer
             // let the function go; ENODEV is functionfs saying the same of
             // the gadget it was bound into, which has just been unbound.
-            Err(e)
-                if matches!(
-                    e.raw_os_error(),
-                    Some(libc::EAGAIN | libc::ESHUTDOWN | libc::ENODEV)
-                ) =>
-            {
+            // ENODEV is functionfs saying the gadget it was bound into has
+            // gone, which takes the function with it; the two others are the
+            // endpoints saying the computer let the function go, which leaves
+            // it bound and only waiting to be configured again.
+            Err(e) if e.raw_os_error() == Some(libc::ENODEV) => {
+                self.unbound();
+                Err(Halt::Disconnected)
+            }
+            Err(e) if matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ESHUTDOWN)) => {
                 self.unconfigured();
                 Err(Halt::Disconnected)
             }
@@ -770,10 +777,11 @@ impl Port {
     fn moved(&mut self, res: i64) -> Result<usize, Halt> {
         match res {
             r if r >= 0 => Ok(r as usize),
-            r if r == -i64::from(libc::ESHUTDOWN)
-                || r == -i64::from(libc::EAGAIN)
-                || r == -i64::from(libc::ENODEV) =>
-            {
+            r if r == -i64::from(libc::ENODEV) => {
+                self.unbound();
+                Err(Halt::Disconnected)
+            }
+            r if r == -i64::from(libc::ESHUTDOWN) || r == -i64::from(libc::EAGAIN) => {
                 self.unconfigured();
                 Err(Halt::Disconnected)
             }
@@ -786,6 +794,35 @@ impl Port {
     /// the port waits for it to be configured again.
     fn unconfigured(&mut self) {
         self.enabled = false;
+    }
+
+    /// The function itself went: the gadget it was bound into was unbound and
+    /// bound again, and everything open on it went with the binding.
+    fn unbound(&mut self) {
+        self.enabled = false;
+        self.let_go = true;
+    }
+
+    /// Whether the function has to be taken again before the computer can
+    /// configure it.
+    pub fn let_go(&self) -> bool {
+        self.let_go
+    }
+
+    /// Let go of a function that went, and take it again from the top: the
+    /// control endpoint closed, then opened and given the descriptors and
+    /// strings the kernel wants before it binds the function, then the
+    /// endpoints opened on it. The endpoints go before the control endpoint,
+    /// in the order the fields are declared, so the function can be let go of
+    /// before the same function is taken again.
+    ///
+    /// This is what adbd does with its own function, and the port comes back
+    /// for it; nothing else on the phone takes a function again, which is why
+    /// file transfer stayed off while adb came back.
+    pub fn taken_again(self) -> Result<Port> {
+        let wake = self.wake;
+        drop(self);
+        Port::open(wake).context("take the MTP function again")
     }
 
     /// Wait until request `key` ends: its result. Meanwhile the control

@@ -106,8 +106,7 @@ impl Service {
         let thread = thread::Builder::new()
             .name("mtp".into())
             .spawn(move || {
-                let mut port = port;
-                let served = serve(&mut port, responder, mail);
+                let served = serve(port, responder, mail);
                 if let Err(e) = &served {
                     let _ = kmsg(&format!("mtp: file transfer stops: {e:#}"));
                     // The port loses the function with its descriptors, and
@@ -119,7 +118,6 @@ impl Service {
                         }
                     }
                 }
-                drop(port);
                 served
             })
             .context("start the MTP thread")?;
@@ -199,17 +197,29 @@ enum Ended {
 
 /// The thread: wait for the computer, answer it while it stays, and do what
 /// the phone asks in between, until it asks the thread to stop.
-fn serve(port: &mut Port, mut r: Responder, mut mail: Mailbox) -> Result<()> {
+fn serve(mut port: Port, mut r: Responder, mut mail: Mailbox) -> Result<()> {
     loop {
+        // **A function that was let go of is taken again from the top**
+        // before the computer is waited for. The gadget is unbound and bound
+        // again whenever the port is bound, which is what the cable coming
+        // out and going back in comes to here; everything open on the
+        // function goes with that binding, and the kernel binds a function
+        // only once its descriptors have been given again. adbd does this
+        // with its own function, which is why adb came back and file
+        // transfer did not.
+        if port.let_go() {
+            kmsg("mtp: the function was let go of, and is taken again")?;
+            port = port.taken_again()?;
+        }
         if !port.enabled() && !port.wait_enabled()? {
             mail.collect();
-            if attend(port, &mut r, &mut mail, 0)? {
+            if attend(&mut port, &mut r, &mut mail, 0)? {
                 return Ok(());
             }
             continue;
         }
         kmsg("mtp: the computer configured the function")?;
-        let ended = session(port, &mut r, &mut mail);
+        let ended = session(&mut port, &mut r, &mut mail);
         r.disconnected();
         port.disconnected().context("give up what was under way")?;
         match ended? {
