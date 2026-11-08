@@ -122,6 +122,10 @@ fn open_data() -> Result<Opening, String> {
 /// why it failed in words for the page.
 pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T, String> {
     let done = (|| {
+        // Whatever kind of key hardware the phone has, it is reached the same
+        // way from here: the secure world's daemon is started first, and the
+        // service is asked for afterwards.
+        let _chain = crate::keyhal::start();
         let binder = Binder::open()?;
         let service = KeyMint::open(&binder)?;
         work(&service)

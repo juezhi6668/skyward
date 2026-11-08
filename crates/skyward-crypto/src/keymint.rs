@@ -121,17 +121,17 @@ pub struct Hardware {
 }
 
 /// The phone's key service, as this program talks to it.
-pub struct KeyMint<'a> {
+pub struct Newer<'a> {
     device: Handle<'a>,
 }
 
-impl<'a> KeyMint<'a> {
+impl<'a> Newer<'a> {
     /// Reach the running key service, or say that none is.
-    pub fn open(binder: &'a Binder) -> Result<KeyMint<'a>> {
+    pub fn open(binder: &'a Binder) -> Result<Newer<'a>> {
         let device = service::find(binder, SERVICE)?.with_context(|| {
             format!("{SERVICE} is not running; the phone's key service has to be started first")
         })?;
-        Ok(KeyMint { device })
+        Ok(Newer { device })
     }
 
     pub fn hardware(&self) -> Result<Hardware> {
@@ -394,5 +394,91 @@ impl<'a> KeyMint<'a> {
     pub fn usable(&self, key_blob: &[u8], app_id: &[u8]) -> Result<()> {
         let operation = self.begin(key_blob, app_id, &[0; NONCE_BYTES], None)?;
         self.abort(&operation)
+    }
+}
+
+/// The phone's key service, whichever kind it has.
+///
+/// A phone has one of two: the newer kind, registered with the service
+/// directory and spoken over binder, or the older kind, a hardware module
+/// loaded into this process and spoken over its own C interface. Which one
+/// is not a matter of taste — the Mi 6's is a **passthrough** implementation
+/// that never registers at all — so this tries the directory first and falls
+/// back to the module, and everything above it is written once.
+pub enum KeyMint<'a> {
+    Newer(Newer<'a>),
+    Older(crate::keymaster1::Keymaster1),
+}
+
+impl<'a> KeyMint<'a> {
+    /// Reach whichever key service the phone has.
+    pub fn open(binder: &'a Binder) -> Result<KeyMint<'a>> {
+        match service::find(binder, SERVICE) {
+            Ok(Some(_)) => Ok(KeyMint::Newer(Newer::open(binder)?)),
+            _ => Ok(KeyMint::Older(crate::keymaster1::Keymaster1::open()?)),
+        }
+    }
+
+    pub fn hardware(&self) -> Result<Hardware> {
+        match self {
+            KeyMint::Newer(service) => service.hardware(),
+            KeyMint::Older(_) => Ok(Hardware {
+                version: 1,
+                security_level: 1,
+                name: "the phone's own key module".into(),
+                author: "Qualcomm".into(),
+            }),
+        }
+    }
+
+    /// Turn a key only the storage hardware can use into the form it takes
+    /// for this start of the phone. The older kind has no such call: it is
+    /// the newer kind's answer to a key wrapped for the storage hardware,
+    /// which a phone of this age does not keep.
+    pub fn ephemeral_storage_key(&self, key: &[u8]) -> Result<Vec<u8>> {
+        match self {
+            KeyMint::Newer(service) => service.ephemeral_storage_key(key),
+            KeyMint::Older(_) => anyhow::bail!(
+                "the phone's key hardware has no way to make a storage key for this start"
+            ),
+        }
+    }
+
+    pub fn authorizations(&self, key_blob: &[u8], app_id: &[u8]) -> Result<Vec<(i32, i64)>> {
+        match self {
+            KeyMint::Newer(service) => service.authorizations(key_blob, app_id),
+            KeyMint::Older(service) => Ok(service
+                .authorizations(key_blob, app_id)?
+                .into_iter()
+                .map(|(tag, value)| (tag as i32, value as i64))
+                .collect()),
+        }
+    }
+
+    pub fn gcm_decrypt(
+        &self,
+        key_blob: &[u8],
+        app_id: &[u8],
+        nonce: &[u8],
+        body: &[u8],
+        note: Option<&Token>,
+    ) -> Result<Vec<u8>> {
+        match self {
+            KeyMint::Newer(service) => service.gcm_decrypt(key_blob, app_id, nonce, body, note),
+            // The older kind has no way to be handed a note: a key guarded by
+            // a screen lock is refused there for that reason, which is the
+            // same answer, said differently.
+            KeyMint::Older(_) if note.is_some() => anyhow::bail!(
+                "the phone's key hardware cannot take the note a screen lock writes"
+            ),
+            KeyMint::Older(service) => service.gcm_decrypt(key_blob, app_id, nonce, body),
+        }
+    }
+
+    pub fn usable(&self, key_blob: &[u8], app_id: &[u8]) -> Result<()> {
+        match self {
+            KeyMint::Newer(service) => service.usable(key_blob, app_id),
+            KeyMint::Older(service) => service.usable(key_blob, app_id),
+        }
     }
 }

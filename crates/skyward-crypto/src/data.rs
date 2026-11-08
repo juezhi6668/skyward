@@ -372,9 +372,23 @@ pub fn open_without_keys() -> Result<Opening> {
 /// sign in, and open the own files of every user who set no screen lock
 /// and, behind the owner's, of those whose credential the phone made up.
 pub fn open_without_credential(service: &KeyMint) -> Result<Opening> {
-    let mounted = match mount::is_mount_point(Path::new(MOUNT))? {
-        true => None,
-        false => Some(open(service)?),
+    let entries = skyward_block::fstab::read(MOUNT)?;
+    // Whether the partition is encrypted **whole** is what decides how it is
+    // opened. A phone that keeps its key in /metadata has the whole thing
+    // wrapped in one, and it is mapped through the storage hardware; one
+    // that encrypts its files one by one -- this phone, whose table says
+    // `fileencryption=ice` and nothing about metadata -- is mounted as it
+    // is, and the keys for the files are let in below.
+    let whole = entries
+        .iter()
+        .any(|e| e.extra("metadata_encryption").is_some());
+    let mounted = match (mount::is_mount_point(Path::new(MOUNT))?, whole) {
+        (true, _) => None,
+        (false, true) => Some(open(service)?),
+        (false, false) => {
+            mount_plainly(&entries)?;
+            None
+        }
     };
     open_shared(service)?;
     let mut closed = Vec::new();
@@ -478,6 +492,30 @@ fn open_shared(service: &KeyMint) -> Result<[u8; crate::fscrypt::NAME_BYTES]> {
         anyhow::bail!("the key in {SHARED_KEY} is not the one {SHARED_NAME} names");
     }
     Ok(name)
+}
+
+/// Mount the data partition as it is, for a phone whose files are encrypted
+/// one by one rather than the whole partition being wrapped in one key.
+fn mount_plainly(entries: &[Entry]) -> Result<()> {
+    let device = skyward_block::fstab::device(
+        entries
+            .first()
+            .context("the phone's table says nothing about /data")?,
+    )?;
+    // The table may name the partition once per filesystem it might hold,
+    // and only the partition knows which it was last written with.
+    let holds = skyward_block::probe::filesystem(Path::new(&device))?;
+    let entry = entries
+        .iter()
+        .find(|e| holds.as_ref() == Some(&e.filesystem))
+        .unwrap_or(&entries[0]);
+    std::fs::create_dir_all(MOUNT).with_context(|| format!("make {MOUNT}"))?;
+    mount::mount(
+        Path::new(&device),
+        Path::new(MOUNT),
+        &entry.filesystem,
+        &entry.options,
+    )
 }
 
 /// Which users the phone keeps keys for, in order.

@@ -66,6 +66,20 @@ pub const OK: c_int = 0;
 pub const INVALID_KEY_BLOB: c_int = -33;
 pub const KEY_REQUIRES_UPGRADE: c_int = -62;
 
+/// The tags this program writes, as `keymaster_defs.h` numbers them: the
+/// kind of value in the top four bits, the tag itself below.
+mod tag {
+    pub const PURPOSE: u32 = 0x2000_0001;
+    pub const BLOCK_MODE: u32 = 0x2000_0004;
+    pub const PADDING: u32 = 0x2000_0006;
+    pub const MIN_MAC_LENGTH: u32 = 0x3000_0008;
+    pub const APPLICATION_ID: u32 = 0x9000_0259;
+    pub const NONCE: u32 = 0x9000_03e9;
+}
+
+/// How long an AES-GCM tag is here.
+const MAC_BITS: u32 = 128;
+
 /// What a key is used for, as the hardware numbers it.
 pub const PURPOSE_DECRYPT: c_int = 1;
 
@@ -361,6 +375,87 @@ impl Keymaster1 {
             bail!("the key hardware refused to drop the decryption ({answer})");
         }
         Ok(())
+    }
+
+    /// Undo an AES-GCM encryption the hardware did with `key`. It only hands
+    /// back the plaintext when the application id is the one the key was
+    /// made for, so a wrong secret fails here rather than yielding something
+    /// that looks like a key.
+    pub fn gcm_decrypt(
+        &self,
+        key: &[u8],
+        app_id: &[u8],
+        nonce: &[u8],
+        body: &[u8],
+    ) -> Result<Vec<u8>> {
+        let mut params = vec![
+            Param::number(tag::BLOCK_MODE, MODE_GCM),
+            Param::number(tag::PADDING, PAD_NONE),
+            Param::number(tag::MIN_MAC_LENGTH, MAC_BITS),
+            Param::bytes(tag::NONCE, nonce),
+            Param::number(tag::PURPOSE, PURPOSE_DECRYPT as u32),
+        ];
+        if !app_id.is_empty() {
+            params.push(Param::bytes(tag::APPLICATION_ID, app_id));
+        }
+        let handle = self.begin(key, &params)?;
+        let mut out = match self.update(handle, body) {
+            Ok(out) => out,
+            Err(e) => {
+                let _ = self.abort(handle);
+                return Err(e);
+            }
+        };
+        match self.finish(handle) {
+            Ok(tail) => {
+                out.extend_from_slice(&tail);
+                Ok(out)
+            }
+            Err(e) => {
+                let _ = self.abort(handle);
+                Err(e)
+            }
+        }
+    }
+
+    /// Whether the hardware will unwrap the key at all: a decryption is
+    /// opened on it under a nonce of nothing and dropped again, which reads
+    /// nothing and changes nothing.
+    pub fn usable(&self, key: &[u8], app_id: &[u8]) -> Result<()> {
+        let mut params = vec![
+            Param::number(tag::BLOCK_MODE, MODE_GCM),
+            Param::number(tag::PADDING, PAD_NONE),
+            Param::number(tag::MIN_MAC_LENGTH, MAC_BITS),
+            Param::bytes(tag::NONCE, &[0u8; NONCE_BYTES]),
+            Param::number(tag::PURPOSE, PURPOSE_DECRYPT as u32),
+        ];
+        if !app_id.is_empty() {
+            params.push(Param::bytes(tag::APPLICATION_ID, app_id));
+        }
+        let handle = self.begin(key, &params)?;
+        self.abort(handle)
+    }
+}
+
+/// How long the nonce of an AES-GCM key is.
+const NONCE_BYTES: usize = 12;
+
+/// The block mode and padding an AES-GCM decryption is opened with, and the
+/// purpose, as `keymaster_defs.h` numbers them.
+const MODE_GCM: u32 = 32;
+const PAD_NONE: u32 = 1;
+
+impl crate::keystore::Decryptor for Keymaster1 {
+    fn gcm_decrypt(
+        &self,
+        key_blob: &[u8],
+        app_id: &[u8],
+        nonce: &[u8],
+        body: &[u8],
+    ) -> Result<Vec<u8>> {
+        // The keys unwrapped this way belong to the phone rather than to any
+        // user, so none of them is guarded by a screen lock.
+        Keymaster1::gcm_decrypt(self, key_blob, app_id, nonce, body)
     }
 }
 

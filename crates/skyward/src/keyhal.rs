@@ -22,14 +22,9 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
 
 /// The secure world's driver, and the daemon that speaks to it.
 const QSEECOM: &str = "/dev/qseecom";
-
-/// How long the service is given to register itself.
-const WAIT: Duration = Duration::from_secs(6);
-const EVERY: Duration = Duration::from_millis(100);
 
 /// What was started, kept so the programs stay as long as the recovery does.
 pub struct Started {
@@ -54,29 +49,18 @@ impl Started {
 pub fn start() -> Result<Started> {
     // The trusted app the key service runs in the secure world is a file on
     // the firmware partition, which the phone's own table mounts as vfat at
-    // /vendor/firmware_mnt. Without it QSEE has nothing to load and the
-    // service never announces itself.
+    // /vendor/firmware_mnt. Without it QSEE has nothing to load.
     let firmware = firmware();
     let _ = skyward_sys::kmsg(&format!("key hardware: firmware at {firmware}"));
     open_qseecom()?;
     let mut children = Vec::new();
     children.push(spawn("qseecomd", Path::new("/system/bin/qseecomd"))?);
-    // The service itself is **not** started here: it is a lazy hardware
-    // service, and the only thing that starts it is init answering the
-    // hardware directory's ctl.interface_start. Asking the directory for it
-    // is therefore what starts it, which is what the wait below does — and
-    // it only works because the image carries a rule that defines the
-    // service (system/etc/init/skyward-keymaster.rc).
-    // The service is started by init, not spawned here: a property is set
-    // and the image's own rule answers it. Spawning it by hand was tried and
-    // it runs and never announces itself; the difference is the environment
-    // init gives it, which is why TWRP sets properties too.
-    skyward_sys::set_prop("skyward.keymaster", "1")
-        .context("ask init to start the key service")?;
-    let started = Started { children };
-    wait_for_service()?;
-    let _ = skyward_sys::kmsg("key hardware: the key service is up");
-    Ok(started)
+    // Nothing starts a *service*: this phone's key hardware is a passthrough
+    // module that is loaded into this process by whoever uses it, not a
+    // hardware service that registers with the directory. What it needs is
+    // the secure world's daemon, and the library it is in.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    Ok(Started { children })
 }
 
 /// Mount the firmware partition where the phone's table puts it, and say
@@ -124,31 +108,4 @@ fn spawn(what: &str, program: &Path) -> Result<Child> {
         .stderr(Stdio::null())
         .spawn()
         .with_context(|| format!("start {}", program.display()))
-}
-
-/// Wait for the keymaster service to answer the hardware directory, which is
-/// the only proof that the whole chain came up.
-fn wait_for_service() -> Result<()> {
-    use skyward_binder::hidl;
-    use skyward_crypto::keymaster;
-    let began = Instant::now();
-    let mut last = None;
-    while began.elapsed() < WAIT {
-        match skyward_binder::driver::Binder::hardware() {
-            Ok(hardware) => {
-                match hidl::find(&hardware, keymaster::HARDWARE_SERVICE, keymaster::INSTANCE) {
-                    Ok(Some(_)) => return Ok(()),
-                    Ok(None) => last = Some(format!("{} has not registered", keymaster::HARDWARE_SERVICE)),
-                    Err(e) => last = Some(format!("{e:#}")),
-                }
-            }
-            Err(e) => last = Some(format!("{e:#}")),
-        }
-        std::thread::sleep(EVERY);
-    }
-    Err(anyhow::anyhow!(
-        "the key service did not come up within {:?}: {}",
-        WAIT,
-        last.unwrap_or_else(|| "nothing was said".into())
-    ))
 }
