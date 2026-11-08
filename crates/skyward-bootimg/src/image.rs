@@ -53,9 +53,17 @@ fn sizes(header: &Header) -> (u32, u32) {
 impl BootImage {
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let header = match Header::parse(&mut Cursor::new(bytes.as_slice())) {
+        BootImage::parse(&bytes).with_context(|| format!("read {}", path.display()))
+    }
+
+    /// The image `bytes` hold, as a partition holds it: the image, then
+    /// whatever fills the partition after it. Version 0 to 2 headers carry
+    /// the kernel and ramdisk beside each other; version 3 and 4 hold the
+    /// ramdisk alone.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let header = match Header::parse(&mut Cursor::new(bytes)) {
             Ok(h) => h,
-            Err(e) => return Err(anyhow!(e).context(format!("{}: header", path.display()))),
+            Err(e) => return Err(anyhow!(e).context("header")),
         };
         let pg = page(&header);
         let (kernel_at, ramdisk_at) = positions(&header);
@@ -68,12 +76,11 @@ impl BootImage {
         if let Header::V0(_) = &header {
             ensure!(
                 bytes[after.min(bytes.len())..].iter().all(|&b| b == 0),
-                "{} holds a section after its ramdisk, which cannot be moved",
-                path.display()
+                "holds a section after its ramdisk, which cannot be moved"
             );
         }
-        let kernel = section(&bytes, kernel_at, kernel_len, "kernel")?;
-        let ramdisk = section(&bytes, ramdisk_at, ramdisk_len, "ramdisk")?;
+        let kernel = section(bytes, kernel_at, kernel_len, "kernel")?;
+        let ramdisk = section(bytes, ramdisk_at, ramdisk_len, "ramdisk")?;
         Ok(BootImage {
             header,
             kernel,

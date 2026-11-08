@@ -7,11 +7,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 mod avb;
-mod image;
-mod ramdisk;
 
-use image::BootImage;
-use ramdisk::Ramdisk;
+use skyward_bootimg::{BootImage, Format, Ramdisk};
 
 /// Builds Skyward recovery images from a device's own stock images.
 #[derive(Parser)]
@@ -106,7 +103,7 @@ fn main() -> Result<()> {
         }
         Cmd::Repack { image, out } => {
             let mut img = BootImage::read(&image)?;
-            let format = ramdisk::Format::of(&img.ramdisk)?;
+            let format = Format::of(&img.ramdisk)?;
             img.ramdisk = Ramdisk::decode(&img.ramdisk)?.encode(format)?;
             write(&out, &img, &img.to_bytes()?)
         }
@@ -132,7 +129,7 @@ fn main() -> Result<()> {
         } => {
             let size = footer_size(&stock)?;
             let mut img = BootImage::read(&stock)?;
-            let format = ramdisk::Format::of(&img.ramdisk)?;
+            let format = Format::of(&img.ramdisk)?;
             let mut rd = Ramdisk::decode(&img.ramdisk)?;
             for at in &drop {
                 let gone = rd.drop_at(at);
