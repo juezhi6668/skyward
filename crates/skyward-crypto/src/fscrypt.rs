@@ -47,6 +47,7 @@ pub fn add_key_trying(raw: &[u8], recorded: &[u8], mode: u32, size: usize) -> Re
         .context("let a key in that way")
 }
 
+#[cfg(target_os = "android")]
 /// The request's fixed part, before the key itself, for the newer way of
 /// naming one: sixteen bytes of name and eighty of header.
 const NEW_HEADER_BYTES: usize = 80;
@@ -54,8 +55,10 @@ const NEW_HEADER_BYTES: usize = 80;
 /// The largest key the kernel's own structure for one holds.
 const MAX_KEY_BYTES: usize = 64;
 
+#[cfg(any(target_os = "android", test))]
 /// Where that structure keeps the key, and how much of it is the key.
 const KEY_AT: usize = 4;
+#[cfg(any(target_os = "android", test))]
 const KEY_SIZE_AT: usize = 68;
 
 /// How long that structure is: a word of how the key encrypts, the key in a
@@ -63,6 +66,7 @@ const KEY_SIZE_AT: usize = 68;
 /// the key.
 pub const KEYRING_KEY_BYTES: usize = 4 + MAX_KEY_BYTES + 4;
 
+#[cfg(any(target_os = "android", test))]
 /// The key as the kernel takes it into its ring — **not the key by itself.**
 /// A kernel of this age reads the key out of this structure and takes no
 /// other length at all, refusing one handed over as the key alone: the
@@ -94,16 +98,20 @@ pub fn contents_mode(said: &str) -> u32 {
 }
 
 /// How each way numbers itself, and where it keeps the length of the key.
+#[cfg(target_os = "android")]
 const BY_IDENTIFIER: u32 = 2;
+#[cfg(target_os = "android")]
 const NEW_KEY_BYTES_AT: usize = 40;
 /// Where the older way keeps the name it was given.
 const NEW_NAME_BYTES: usize = 16;
 const OLD_NAME_BYTES: usize = 8;
 
 /// The two calls, whose numbers carry the size of the request they take.
+#[cfg(target_os = "android")]
 const ADD_BY_IDENTIFIER: u32 = 0xc050_6617;
 
 /// The key is one only the storage hardware can unwrap.
+#[cfg(target_os = "android")]
 const HARDWARE_WRAPPED: u32 = 1;
 
 /// Hand the kernel a key it names by a hash it works out itself.
