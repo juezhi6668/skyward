@@ -2245,6 +2245,7 @@ dependencies = [
  "evdev",
  "libc",
  "procfs",
+ "sha2 0.10.9",
  "skyward-backup",
  "skyward-binder",
  "skyward-block",

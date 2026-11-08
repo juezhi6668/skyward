@@ -482,12 +482,12 @@ const USER_KEYS: &str = "/data/misc/vold/user_keys";
 
 /// Let in the key for the files that belong to no one user. Until it is
 /// in, most of what the data partition holds reads as scrambled names.
-fn open_shared(service: &KeyMint) -> Result<[u8; crate::fscrypt::NAME_BYTES]> {
+fn open_shared(service: &KeyMint) -> Result<Vec<u8>> {
     let mode = std::fs::read_to_string(FILE_MODE).with_context(|| format!("read {FILE_MODE}"))?;
     let wrapped = crate::fscrypt::hardware_wrapped(mode.trim());
     let raw = hardware_key(service, Path::new(SHARED_KEY), wrapped)?;
-    let name = crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped)?;
     let recorded = crate::fscrypt::recorded_name(Path::new(SHARED_NAME))?;
+    let name = crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped, Some(&recorded))?;
     if name != recorded {
         anyhow::bail!("the key in {SHARED_KEY} is not the one {SHARED_NAME} names");
     }
@@ -548,7 +548,9 @@ fn open_users(service: &KeyMint) -> Result<Vec<u32>> {
     for user in &users {
         let dir = Path::new(USER_KEYS).join("de").join(user.to_string());
         let raw = hardware_key(service, &dir, wrapped)?;
-        crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped)?;
+        // A key's name is the phone's own where it recorded one beside it.
+        let recorded = crate::fscrypt::recorded_name(&dir.join("ref")).ok();
+        crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped, recorded.as_deref())?;
     }
     Ok(users)
 }
@@ -802,7 +804,8 @@ fn open_user_files(
             .with_context(|| format!("make the key in {} usable now", dir.display()))?,
         false => raw,
     };
-    crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped)?;
+    let recorded = crate::fscrypt::recorded_name(&dir.join("ref")).ok();
+    crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped, recorded.as_deref())?;
     if user == OWNER {
         show_owner_storage()?;
     }

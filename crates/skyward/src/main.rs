@@ -80,6 +80,10 @@ enum Cmd {
     Reboot { target: String },
     /// Print the bootloader control block in misc.
     Bcb,
+    /// Open the data partition the way the decrypt page does, and say what
+    /// came of it: the whole chain — the key hardware, the key files, the
+    /// keys for the files — in one command.
+    Opendata,
     /// Start the phone's key hardware service and ask it about itself,
     /// which is the first thing to try when a key will not unwrap. With
     /// `list`, print what the hardware directory holds instead.
@@ -271,6 +275,7 @@ fn main() -> Result<()> {
             skyward_sys::power(p)
         }
         Cmd::Keytest { list, legacy, blob, skip, make } => keytest(list, legacy, blob, skip, make),
+        Cmd::Opendata => opendata(),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -1020,9 +1025,95 @@ fn prepare(cfg: &DeviceConfig, slot: Option<skyward_vab::Slot>) -> Result<()> {
 /// daemon, the service's own registration, and the way this program writes a
 /// call in the older layout — before anything that needs a key is asked of
 /// it, and it takes nothing and changes nothing.
+/// Say where a fault happened, instead of letting the kernel take the
+/// process without a word: a module that dereferences nothing is read from
+/// the program counter it faulted at, which names the function and how far
+/// into it the fault was.
+#[cfg(target_os = "android")]
+fn catch_faults() {
+    unsafe extern "C" fn handler(signal: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+        let addr = match info.is_null() {
+            true => 0,
+            false => unsafe { (*info).si_addr() as usize },
+        };
+        let pc = match ctx.is_null() {
+            true => 0,
+            false => unsafe { (*(ctx as *const libc::ucontext_t)).uc_mcontext.pc as usize },
+        };
+        let said = format!("FAULT {signal} at {addr:#x}, pc {pc:#x}\n");
+        unsafe {
+            libc::write(2, said.as_ptr().cast(), said.len());
+        }
+        // Which library the program counter is in, and how far into it: the
+        // module's own symbols are at known offsets from its base.
+        if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+            for line in maps.lines() {
+                let mut parts = line.split_whitespace();
+                let (Some(range), Some(path)) = (parts.next(), parts.last()) else {
+                    continue;
+                };
+                let Some((low, high)) = range.split_once('-') else {
+                    continue;
+                };
+                let (Ok(low), Ok(high)) = (
+                    usize::from_str_radix(low, 16),
+                    usize::from_str_radix(high, 16),
+                ) else {
+                    continue;
+                };
+                if pc >= low && pc < high {
+                    let said = format!("  in {path} base {low:#x} offset {:#x}\n", pc - low);
+                    unsafe {
+                        libc::write(2, said.as_ptr().cast(), said.len());
+                    }
+                }
+            }
+        }
+        unsafe { libc::_exit(70) };
+    }
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = handler as *const () as usize;
+    action.sa_flags = libc::SA_SIGINFO;
+    unsafe {
+        libc::sigaction(libc::SIGSEGV, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGBUS, &action, std::ptr::null_mut());
+    }
+}
+
+/// Open the data partition as the decrypt page does, and say how far it got.
+#[cfg(target_os = "android")]
+fn opendata() -> Result<()> {
+    catch_faults();
+    let _chain = keyhal::start();
+    let binder = skyward_binder::driver::Binder::open()?;
+    let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
+    match skyward_crypto::data::open_without_credential(&service) {
+        Ok(opening) => {
+            println!("the data partition is open");
+            if let Some(mounted) = &opening.mounted {
+                println!("  mounted {} as {}", mounted.mapped.display(), mounted.filesystem);
+            }
+            for closed in &opening.closed {
+                println!("  user {} still closed: {:?}", closed.user, closed.why);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            println!("the data partition stays closed: {e:#}");
+            Ok(())
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn opendata() -> Result<()> {
+    anyhow::bail!("the data partition is only reachable on the phone")
+}
+
 #[cfg(target_os = "android")]
 fn keytest(list: bool, legacy: bool, blob: Option<String>, skip: usize, make: bool) -> Result<()> {
     if legacy {
+        catch_faults();
         // A blob of nothing is not a key: what the hardware answers to it
         // proves the whole call path — the module, the device, the offset
         // the function sits at, and the way its arguments are written —

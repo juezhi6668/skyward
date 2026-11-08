@@ -29,6 +29,19 @@ const FN_STRETCHING: &str = "stretching";
 /// with.
 const NO_STRETCHING: &str = "nopassword";
 
+/// What Android's key storage writes in front of the blob the hardware made:
+/// the module's own blob is the rest of the file, measured by having it make
+/// one of its own — four hundred and twenty-seven bytes beginning `DKMK`.
+const BLOB_MAGIC: &[u8] = b"pKMblob\0";
+
+/// The blob without that word, which is what the hardware is given.
+fn bare_blob(raw: Vec<u8>) -> Vec<u8> {
+    match raw.starts_with(BLOB_MAGIC) {
+        true => raw[BLOB_MAGIC.len()..].to_vec(),
+        false => raw,
+    }
+}
+
 /// SHA-512 of `data` behind a fixed prefix.
 pub fn hash_with_prefix(prefix: &[u8], data: &[u8]) -> Vec<u8> {
     let mut padded = prefix.to_vec();
@@ -107,7 +120,7 @@ impl StoredKey {
             false => Vec::new(),
         };
         let key_blob = match dir.join(FN_KEY_BLOB).exists() {
-            true => Some(read(FN_KEY_BLOB)?),
+            true => Some(bare_blob(read(FN_KEY_BLOB)?)),
             false => None,
         };
         Ok(StoredKey {
@@ -151,7 +164,17 @@ impl StoredKey {
                     .key_blob
                     .as_ref()
                     .context("this key is wrapped by a secret, and none was given")?;
-                service.gcm_decrypt(blob, &self.app_id(&[]), nonce, body)
+                // A key the phone keeps for a directory may be bound to that
+                // directory's hash or to nothing at all, and nothing in the
+                // files says which. The hardware refuses the wrong binding at
+                // the last step, where nothing has been yielded, so it is
+                // asked the other way — and the key's own answer, in what it
+                // is for, is what says which it was.
+                let bound = self.app_id(&[]);
+                match service.gcm_decrypt(blob, &bound, nonce, body) {
+                    Err(_) if !bound.is_empty() => service.gcm_decrypt(blob, &[], nonce, body),
+                    other => other,
+                }
             }
             Unwrap::Secret(secret) => decrypt_with_secret(&self.app_id(secret), nonce, body),
         }

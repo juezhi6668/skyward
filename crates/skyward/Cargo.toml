@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+sha2 = "0.10.9"
 clap = { version = "4.5.51", features = ["derive"] }
 skyward-config = { path = "../skyward-config" }
 skyward-block = { path = "../skyward-block" }

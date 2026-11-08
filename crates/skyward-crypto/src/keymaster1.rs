@@ -74,6 +74,7 @@ mod tag {
     pub const BLOCK_MODE: u32 = 0x2000_0004;
     pub const PADDING: u32 = 0x2000_0006;
     pub const MIN_MAC_LENGTH: u32 = 0x3000_0008;
+    pub const MAC_LENGTH: u32 = 0x3000_03eb;
     pub const KEY_SIZE: u32 = 0x3000_0003;
     pub const ALGORITHM: u32 = 0x1000_0002;
     pub const APPLICATION_ID: u32 = 0x9000_0259;
@@ -183,11 +184,13 @@ impl ParamSet {
 }
 
 /// What a key may be used for, as the hardware answers: one set for what the
-/// hardware enforces and one for what software enforces.
+/// hardware enforces and one for what software enforces, **inline** rather
+/// than pointed at — which the module itself says, in the thirty-two bytes
+/// it makes room for.
 #[repr(C)]
 pub struct Characteristics {
-    pub hardware: *mut ParamSet,
-    pub software: *mut ParamSet,
+    pub hardware: ParamSet,
+    pub software: ParamSet,
 }
 
 /// The device this program talks to, kept alive as long as it is used: the
@@ -326,11 +329,8 @@ impl Keymaster1 {
             bail!("the key hardware said nothing about the key");
         }
         let mut out = Vec::new();
-        for set in unsafe { [(*said).hardware, (*said).software] } {
-            let Some(set) = (unsafe { set.as_ref() }) else {
-                continue;
-            };
-            if set.params.is_null() {
+        for set in unsafe { [&(*said).hardware, &(*said).software] } {
+            if set.params.is_null() || set.length == 0 {
                 continue;
             }
             for param in unsafe { std::slice::from_raw_parts(set.params, set.length) } {
@@ -364,13 +364,21 @@ impl Keymaster1 {
         let mut output = Blob::empty();
         let answer =
             unsafe { update(self.device, handle, &asked, &blob, &mut consumed, &mut out, &mut output) };
+        eprintln!(
+            "  update: fed {} bytes, consumed {consumed}, answered {answer}, gave back {}",
+            input.len(),
+            unsafe { output.take() }.len()
+        );
         if answer != OK {
             bail!("the key hardware refused to feed the decryption ({answer})");
         }
         Ok(unsafe { output.take() })
     }
 
-    pub fn finish(&self, handle: u64) -> Result<Vec<u8>> {
+    /// Close a decryption, giving the tag the encryption ended with: an
+    /// AES-GCM decryption is told what to check the result against here, not
+    /// as another run of bytes to feed.
+    pub fn finish(&self, handle: u64, tag: &[u8]) -> Result<Vec<u8>> {
         let finish: Finish = unsafe { self.function(at::FINISH) }?;
         let asked = ParamSet::empty();
         let mut out = ParamSet::empty();
@@ -381,7 +389,7 @@ impl Keymaster1 {
                 handle,
                 &asked,
                 &Blob::empty(),
-                &Blob::empty(),
+                &Blob::of(tag),
                 &mut out,
                 &mut output,
             )
@@ -441,13 +449,18 @@ impl Keymaster1 {
         let mut params = vec![
             Param::number(tag::BLOCK_MODE, MODE_GCM),
             Param::number(tag::PADDING, PAD_NONE),
-            Param::number(tag::MIN_MAC_LENGTH, MAC_BITS),
+            Param::number(tag::MAC_LENGTH, MAC_BITS),
             Param::bytes(tag::NONCE, nonce),
             Param::number(tag::PURPOSE, PURPOSE_DECRYPT as u32),
         ];
         if !app_id.is_empty() {
             params.push(Param::bytes(tag::APPLICATION_ID, app_id));
         }
+        // What is left of the body after the ciphertext is the tag, which
+        // the closing call is given rather than fed.
+        // The tag is the end of what is fed, not a separate word: the
+        // hardware holds the last sixteen bytes back as it decrypts and
+        // checks them when the operation is closed.
         let handle = self.begin(key, &params)?;
         let mut out = match self.update(handle, body) {
             Ok(out) => out,
@@ -456,7 +469,7 @@ impl Keymaster1 {
                 return Err(e);
             }
         };
-        match self.finish(handle) {
+        match self.finish(handle, &[]) {
             Ok(tail) => {
                 out.extend_from_slice(&tail);
                 Ok(out)
@@ -475,7 +488,6 @@ impl Keymaster1 {
         let mut params = vec![
             Param::number(tag::BLOCK_MODE, MODE_GCM),
             Param::number(tag::PADDING, PAD_NONE),
-            Param::number(tag::MIN_MAC_LENGTH, MAC_BITS),
             Param::bytes(tag::NONCE, &[0u8; NONCE_BYTES]),
             Param::number(tag::PURPOSE, PURPOSE_DECRYPT as u32),
         ];
@@ -514,16 +526,18 @@ impl crate::keystore::Decryptor for Keymaster1 {
 /// The name of a tag, for the few this program reads.
 pub fn tag_name(tag: u32) -> &'static str {
     match tag {
-        0x2000_0100 => "algorithm",
-        0x6000_0100 => "purpose",
-        0x2000_0200 => "block mode",
-        0x2000_0300 => "padding",
-        0x6000_0200 => "digest",
-        0x3000_0100 => "key size",
-        0x5000_0100 => "application id",
-        0x5000_0200 => "nonce",
-        0x6000_0400 => "origin",
-        0x9000_0100 => "creation time",
+        0x1000_0002 => "algorithm",
+        0x2000_0001 => "purpose",
+        0x2000_0004 => "block mode",
+        0x2000_0006 => "padding",
+        0x2000_0005 => "digest",
+        0x3000_0003 => "key size",
+        0x3000_0008 => "minimum tag length",
+        0x9000_0259 => "application id",
+        0x9000_03e9 => "nonce",
+        0x7000_01f7 => "caller nonce",
+        0x1000_012d => "origin",
+        0x6000_02bd => "created",
         _ => "another tag",
     }
 }

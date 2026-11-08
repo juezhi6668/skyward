@@ -12,32 +12,93 @@ pub const NAME_BYTES: usize = 16;
 /// kernel knows it by. Every file whose directory names that key can be
 /// read from then on.
 #[cfg(target_os = "android")]
-pub fn add_key(mount: &Path, raw: &[u8], wrapped: bool) -> Result<[u8; NAME_BYTES]> {
+pub fn add_key(mount: &Path, raw: &[u8], wrapped: bool, recorded: Option<&[u8]>) -> Result<Vec<u8>> {
     use std::os::fd::AsRawFd;
-    /// The request's fixed part, before the key itself.
-    const HEADER_BYTES: usize = 80;
-    /// The key is named by what the kernel makes of it rather than by
-    /// anything this side chooses.
-    const BY_IDENTIFIER: u32 = 2;
-    /// The key is one only the storage hardware can unwrap.
-    const HARDWARE_WRAPPED: u32 = 1;
-    const ADD_KEY: u32 = 0xc050_6617;
+    let dir = std::fs::File::open(mount).with_context(|| format!("open {}", mount.display()))?;
+    let name = match name_by_identifier(dir.as_raw_fd(), raw, wrapped) {
+        Ok(name) => Ok(name),
+        // A kernel too old for that call is one that knows none of the calls
+        // that name a key: on it the key is kept in the kernel's own ring of
+        // them, under a name the filesystem looks up, which is the first
+        // eight bytes of the key's own hash. That is the way Android 9 did
+        // it, and the phone says so itself: the name it recorded beside the
+        // key is eight bytes, where the newer way records sixteen.
+        Err(e) if e.raw_os_error() == Some(libc::ENOTTY) => keep_in_keyring(raw, recorded),
+        Err(e) => Err(e),
+    };
+    name.with_context(|| format!("let a key into {}", mount.display()))
+}
 
-    let mut arg = vec![0u8; HEADER_BYTES + raw.len()];
+/// The request's fixed part, before the key itself, for the newer way of
+/// naming one: sixteen bytes of name and eighty of header.
+const NEW_HEADER_BYTES: usize = 80;
+
+/// How each way numbers itself, and where it keeps the length of the key.
+const BY_IDENTIFIER: u32 = 2;
+const NEW_KEY_BYTES_AT: usize = 40;
+/// Where the older way keeps the name it was given.
+const NEW_NAME_BYTES: usize = 16;
+const OLD_NAME_BYTES: usize = 8;
+
+/// The two calls, whose numbers carry the size of the request they take.
+const ADD_BY_IDENTIFIER: u32 = 0xc050_6617;
+
+/// The key is one only the storage hardware can unwrap.
+const HARDWARE_WRAPPED: u32 = 1;
+
+/// Hand the kernel a key it names by a hash it works out itself.
+fn name_by_identifier(fd: std::os::fd::RawFd, raw: &[u8], wrapped: bool) -> std::io::Result<Vec<u8>> {
+    let mut arg = vec![0u8; NEW_HEADER_BYTES + raw.len()];
     arg[0..4].copy_from_slice(&BY_IDENTIFIER.to_ne_bytes());
-    arg[40..44].copy_from_slice(&(raw.len() as u32).to_ne_bytes());
+    arg[NEW_KEY_BYTES_AT..NEW_KEY_BYTES_AT + 4].copy_from_slice(&(raw.len() as u32).to_ne_bytes());
     if wrapped {
         arg[76..80].copy_from_slice(&HARDWARE_WRAPPED.to_ne_bytes());
     }
-    arg[HEADER_BYTES..].copy_from_slice(raw);
-    let dir = std::fs::File::open(mount).with_context(|| format!("open {}", mount.display()))?;
-    if unsafe { libc::ioctl(dir.as_raw_fd(), ADD_KEY as libc::Ioctl, arg.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("let a key into {}", mount.display()));
+    arg[NEW_HEADER_BYTES..].copy_from_slice(raw);
+    if unsafe { libc::ioctl(fd, ADD_BY_IDENTIFIER as libc::Ioctl, arg.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let mut name = [0u8; NAME_BYTES];
-    name.copy_from_slice(&arg[8..8 + NAME_BYTES]);
-    Ok(name)
+    Ok(arg[8..8 + NEW_NAME_BYTES].to_vec())
+}
+
+/// Keep the key in the kernel's own ring of them, under the name the
+/// filesystem looks a key up by: `ext4:` and the first eight bytes of the
+/// key's own hash, written out in hex.
+fn keep_in_keyring(raw: &[u8], recorded: Option<&[u8]>) -> std::io::Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    /// The ring a recovery's own lookups are answered from.
+    const SESSION_KEYRING: libc::c_long = -3;
+    // The name is the phone's own, where it recorded one: on this way of
+    // naming a key it is a word the phone chose when it made the key, not
+    // one worked out from the key, and nothing can work it out again.
+    let computed;
+    let name = match recorded.filter(|name| name.len() == OLD_NAME_BYTES) {
+        Some(name) => name,
+        None => {
+            computed = Sha256::digest(raw);
+            &computed[..OLD_NAME_BYTES]
+        }
+    };
+    let mut description = String::from("ext4:");
+    for byte in name {
+        description.push_str(&format!("{byte:02x}"));
+    }
+    let kind = std::ffi::CString::new("logon").expect("no NUL");
+    let said = std::ffi::CString::new(description.clone()).expect("no NUL");
+    let kept = unsafe {
+        libc::syscall(
+            libc::SYS_add_key,
+            kind.as_ptr(),
+            said.as_ptr(),
+            raw.as_ptr(),
+            raw.len(),
+            SESSION_KEYRING,
+        )
+    };
+    if kept < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(name.to_vec())
 }
 
 /// Whether the names and contents under `dir` read as they are: it is not
@@ -110,12 +171,12 @@ pub fn hardware_wrapped(mode: &str) -> bool {
 
 /// Read the name the phone recorded for a key it let in, to check against
 /// the name the kernel works out now.
-pub fn recorded_name(path: &Path) -> Result<[u8; NAME_BYTES]> {
+pub fn recorded_name(path: &Path) -> Result<Vec<u8>> {
     let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    match <[u8; NAME_BYTES]>::try_from(&raw[..]) {
-        Ok(name) => Ok(name),
-        Err(_) => bail!(
-            "{} holds {} bytes, and a key's name is {NAME_BYTES}",
+    match raw.len() == OLD_NAME_BYTES || raw.len() == NEW_NAME_BYTES {
+        true => Ok(raw),
+        false => bail!(
+            "{} holds {} bytes, and a key's name is {OLD_NAME_BYTES} or {NEW_NAME_BYTES}",
             path.display(),
             raw.len()
         ),
