@@ -143,6 +143,29 @@ fn keep_in_keyring(raw: &[u8], recorded: Option<&[u8]>) -> std::io::Result<Vec<u
     Ok(name.to_vec())
 }
 
+/// The name of the key a folder is kept by, read off the folder itself.
+///
+/// A folder's policy carries the name of the key that opens it, and that
+/// name is a word the phone chose when it made the key — not one worked out
+/// from it, so it can be read here and nowhere else. The policy has two
+/// shapes and this phone keeps the first: a version, two ways of encrypting,
+/// flags, and eight bytes of name.
+pub fn policy_name(dir: &Path) -> Result<Vec<u8>> {
+    use std::os::fd::AsRawFd;
+    const POLICY_V1_BYTES: usize = 12;
+    const NAME_AT: usize = 4;
+    const GET_POLICY: u32 = 0x400c_6615;
+    let folder = std::fs::File::open(dir).with_context(|| format!("open {}", dir.display()))?;
+    let mut policy = [0u8; POLICY_V1_BYTES];
+    if unsafe { libc::ioctl(folder.as_raw_fd(), GET_POLICY as libc::Ioctl, policy.as_mut_ptr()) }
+        != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("ask what key {} is kept by", dir.display()));
+    }
+    Ok(policy[NAME_AT..NAME_AT + OLD_NAME_BYTES].to_vec())
+}
+
 /// Whether the names and contents under `dir` read as they are: it is not
 /// encrypted, or the key it is encrypted with is in the kernel. A user's
 /// own files read only once that user's key is let in.

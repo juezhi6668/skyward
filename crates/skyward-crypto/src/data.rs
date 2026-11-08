@@ -529,6 +529,25 @@ fn mount_plainly(entries: &[Entry]) -> Result<()> {
 /// either are the users there are.
 fn users() -> Result<Vec<u32>> {
     let mut users: Vec<u32> = Vec::new();
+    // The phone writes down which users it has where it keeps them, in a
+    // folder of its own that the key for the whole partition opens: the
+    // folders of their keys are kept by those very keys, so reading them to
+    // find the users would need the users found first.
+    if let Ok(entries) = std::fs::read_dir("/data/system/users") {
+        for entry in entries.flatten() {
+            let Some(user) = entry
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if !users.contains(&user) {
+                users.push(user);
+            }
+        }
+    }
     for which in ["de", "ce"] {
         let dir = Path::new(USER_KEYS).join(which);
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -817,7 +836,14 @@ fn open_user_files(
             .with_context(|| format!("make the key in {} usable now", dir.display()))?,
         false => raw,
     };
-    let recorded = crate::fscrypt::recorded_name(&dir.join("ref")).ok();
+    // The name this key goes in under is the one the user's own folders are
+    // kept by, which they say themselves: a key kept beside them is not
+    // named after itself, and nothing else knows the word.
+    let recorded = crate::fscrypt::recorded_name(&dir.join("ref"))
+        .ok()
+        .or_else(|| crate::fscrypt::policy_name(&Path::new("/data/user").join(user.to_string())).ok())
+        .or_else(|| crate::fscrypt::policy_name(Path::new("/data/data")).ok());
+    eprintln!("user {user}: a key of {} bytes goes in under {:02x?}", raw.len(), recorded);
     crate::fscrypt::add_key(Path::new(MOUNT), &raw, wrapped, recorded.as_deref())?;
     if user == OWNER {
         show_owner_storage()?;
