@@ -83,7 +83,12 @@ enum Cmd {
     /// Open the data partition the way the decrypt page does, and say what
     /// came of it: the whole chain — the key hardware, the key files, the
     /// keys for the files — in one command.
-    Opendata,
+    Opendata {
+        /// Do the work on a thread of its own, the way the decrypt page
+        /// does, rather than on the thread that started the program.
+        #[arg(long)]
+        in_thread: bool,
+    },
     /// Say how a folder says it is encrypted and whether the key it is kept
     /// by is in, which is what tells a folder whose key was not let in from
     /// one whose key was let in wrongly. With no folder named, the places
@@ -305,7 +310,14 @@ fn main() -> Result<()> {
             skyward_sys::power(p)
         }
         Cmd::Keytest { list, legacy, blob, skip, make } => keytest(list, legacy, blob, skip, make),
-        Cmd::Opendata => opendata(),
+        Cmd::Opendata { in_thread } => match in_thread {
+            true => std::thread::Builder::new()
+                .name("decrypt".into())
+                .spawn(opendata)?
+                .join()
+                .expect("the decrypting thread does not panic"),
+            false => opendata(),
+        },
         #[cfg(target_os = "android")]
         Cmd::Pol { dirs } => pol(dirs),
         #[cfg(target_os = "android")]

@@ -260,9 +260,94 @@ type Finish = unsafe extern "C" fn(
 ) -> c_int;
 type Abort = unsafe extern "C" fn(*mut c_void, u64) -> c_int;
 
+/// Where the vendor keeps the library the module reaches the secure world
+/// through, in the two shapes a phone of this age has.
+const QSEECOM_PLACES: [&str; 4] = [
+    "/vendor/lib64/libQSEEComAPI.so",
+    "/system/lib64/libQSEEComAPI.so",
+    "/vendor/lib/libQSEEComAPI.so",
+    "/system/lib/libQSEEComAPI.so",
+];
+
+/// Put the library the module loads by name among the loaded libraries, under
+/// the name it asks for.
+///
+/// **The module loads it as a bare name, and a name is found only along the
+/// paths the loader was given at start.** A recovery starts with
+/// `LD_LIBRARY_PATH=/system/lib64:/vendor/lib64/hw` — the vendor's `hw`
+/// folder but not the vendor folder itself — so the bare name finds nothing,
+/// and the module answers -1 without ever asking the secure world anything.
+/// That answer is the same one a phone with no key hardware gives, which is
+/// why it read as "the key hardware will not open a device" for so long:
+/// measured, `dlopen failed: library "libQSEEComAPI.so" not found`.
+///
+/// Loading it here by its own path, and keeping it for everyone, puts it
+/// among the loaded libraries under its own name — which the module's own
+/// load of the bare name then finds before it looks anywhere.
+fn preload_qseecom() {
+    for at in QSEECOM_PLACES {
+        if !std::path::Path::new(at).exists() {
+            continue;
+        }
+        let Ok(name) = CString::new(at) else {
+            continue;
+        };
+        let loaded = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+        if !loaded.is_null() {
+            return;
+        }
+    }
+}
+
+/// What the hardware needs that a process may be without: the two devices it
+/// reaches the secure world through, and the folder its trusted application
+/// is read from. Said only when it will not open, because the same call
+/// answers in one process and not in another and nothing else says why.
+fn what_it_needs() -> String {
+    let mut said = Vec::new();
+    for at in ["/dev/qseecom", "/dev/ion"] {
+        said.push(
+            match std::fs::OpenOptions::new().read(true).write(true).open(at) {
+                Ok(_) => format!("{at} opens"),
+                Err(e) => format!("{at} will not open: {e}"),
+            },
+        );
+    }
+    // The module reaches the secure world through a library of its own, found
+    // by name: one it cannot load is a module that answers -1 without ever
+    // asking anything, which reads the same as a phone with no key hardware.
+    for library in ["libQSEEComAPI.so", "libhardware.so"] {
+        let name = std::ffi::CString::new(library).expect("no NUL");
+        let loaded = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW) };
+        said.push(match loaded.is_null() {
+            true => format!("{library} will not load: {}", dlerror_text()),
+            false => format!("{library} loads"),
+        });
+    }
+    said.push(match std::fs::read_to_string("/proc/self/attr/current") {
+        Ok(label) => format!("this process is {}", label.trim()),
+        Err(e) => format!("this process's label cannot be read: {e}"),
+    });
+    said.join("; ")
+}
+
+/// What the dynamic loader last complained about.
+fn dlerror_text() -> String {
+    let said = unsafe { libc::dlerror() };
+    match said.is_null() {
+        true => "nothing said".to_string(),
+        false => unsafe { std::ffi::CStr::from_ptr(said) }
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
 impl Keymaster1 {
     /// Load the phone's key hardware into this process.
     pub fn open() -> Result<Keymaster1> {
+        // Before the module, the library the module loads by name: without
+        // it the module answers -1 and says nothing about why.
+        preload_qseecom();
         let library = CString::new(HARDWARE).expect("no NUL");
         let get_module = CString::new(GET_MODULE).expect("no NUL");
         let loaded = unsafe { libc::dlopen(library.as_ptr(), libc::RTLD_NOW) };
@@ -294,7 +379,10 @@ impl Keymaster1 {
         let mut device: *mut c_void = std::ptr::null_mut();
         let opened = unsafe { open(module, id.as_ptr(), &mut device) };
         if opened != 0 || device.is_null() {
-            bail!("the key hardware will not open a device ({opened})");
+            bail!(
+                "the key hardware will not open a device ({opened}); {}",
+                what_it_needs()
+            );
         }
         Ok(Keymaster1 { device })
     }

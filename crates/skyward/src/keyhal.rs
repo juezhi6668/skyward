@@ -89,8 +89,25 @@ fn running(name: &str) -> bool {
 /// system's own use, and the daemon that starts an application reads
 /// `/firmware/image/<name>`. Without it the key hardware answers EPERM —
 /// measured, and the reason this is here at all.
+///
+/// **And mounted the way the phone's own table mounts it.** A vfat with no
+/// masks named gives its files to root alone, and the daemon that reads the
+/// applications out of it is `system`: the key hardware then answers the
+/// same EPERM as if the folder were not there at all, which is what a
+/// recovery that mounts it by hand gets for its trouble. The owner, group
+/// and masks below are the ones the table names, so the daemon reads what
+/// the phone's own system would have let it read.
 fn firmware() -> String {
     const LOOKS_IN: &str = "/firmware";
+    /// The phone's own words for the same mount.
+    const AS_THE_PHONE_MOUNTS_IT: [&str; 6] = [
+        "ro",
+        "shortname=lower",
+        "uid=1000",
+        "gid=1000",
+        "dmask=0227",
+        "fmask=0337",
+    ];
     if Path::new(LOOKS_IN).join("image").is_dir() {
         return LOOKS_IN.to_string();
     }
@@ -100,6 +117,10 @@ fn firmware() -> String {
     // thing that needs this.
     let at = Path::new(LOOKS_IN);
     let _ = skyward_block::mount::prepare(at);
+    let options: Vec<String> = AS_THE_PHONE_MOUNTS_IT
+        .iter()
+        .map(|said| said.to_string())
+        .collect();
     for device in [
         "/dev/block/by-name/modem",
         "/dev/block/bootdevice/by-name/modem",
@@ -107,14 +128,7 @@ fn firmware() -> String {
         if !Path::new(device).exists() {
             continue;
         }
-        if skyward_block::mount::mount(
-            Path::new(device),
-            at,
-            "vfat",
-            &["ro".to_string(), "shortname=lower".to_string()],
-        )
-        .is_ok()
-        {
+        if skyward_block::mount::mount(Path::new(device), at, "vfat", &options).is_ok() {
             return LOOKS_IN.to_string();
         }
     }

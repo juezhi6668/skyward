@@ -124,11 +124,43 @@ pub fn with_key_service<T>(work: impl FnOnce(&KeyMint) -> Result<T>) -> Result<T
     let done = (|| {
         // Whatever kind of key hardware the phone has, it is reached the same
         // way from here: the secure world's daemon is started first, and the
-        // service is asked for afterwards.
-        let _chain = crate::keyhal::start();
+        // service is asked for afterwards. What bringing it up came to goes
+        // into the kernel log, because a step that fails here is what the
+        // next error is really about.
+        let _chain = match crate::keyhal::start() {
+            Ok(chain) => chain,
+            Err(e) => {
+                let _ = skyward_sys::kmsg(&format!("key hardware did not come up: {e:#}"));
+                return Err(e);
+            }
+        };
         let binder = Binder::open()?;
-        let service = KeyMint::open(&binder)?;
+        let service = open_when_ready(&binder)?;
         work(&service)
     })();
     done.map_err(|e| format!("{e:#}"))
+}
+
+/// Ask for the phone's key service until it answers. The daemon that speaks
+/// to the secure world is started a moment before this, and a phone asked
+/// before it is ready answers as though it had no key hardware at all — so
+/// that answer is not believed until it has been given a few times.
+fn open_when_ready(binder: &Binder) -> Result<KeyMint<'_>> {
+    /// How long to keep asking: three seconds, which is longer than the
+    /// daemon has ever taken and shorter than a page that waits feels.
+    const TRIES: usize = 4;
+    const BETWEEN_MS: u64 = 750;
+    let mut last = None;
+    for attempt in 0..TRIES {
+        match KeyMint::open(binder) {
+            Ok(service) => return Ok(service),
+            Err(e) => {
+                last = Some(e);
+                if attempt + 1 < TRIES {
+                    std::thread::sleep(std::time::Duration::from_millis(BETWEEN_MS));
+                }
+            }
+        }
+    }
+    Err(last.expect("the service was asked at least once"))
 }
