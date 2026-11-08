@@ -11,6 +11,7 @@ use crate::relabel;
 use crate::secure;
 use crate::services;
 use crate::settings;
+use crate::systems;
 use crate::updates;
 use crate::wipe::{self, Eraser, Step};
 use crate::wlan;
@@ -32,6 +33,7 @@ use skyward_sys::control::{Control, Request};
 use skyward_sys::sleep::{Sleeper, Slept};
 use skyward_sys::uevent;
 use skyward_sys::Power;
+use skyward_systems::Who;
 use skyward_ui::app::{
     App, Asked, BackupAt, BackupEnd, BackupEntry, BackupRefusal, ClashChoice, Data, DownloadEnd,
     Effect, EraseStop, FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have, Held, ItemEnd,
@@ -985,9 +987,7 @@ fn read_filesystems(a_b: bool) -> Result<Vec<FsRow>> {
         match filesystem_row(name) {
             Ok(Some(row)) => rows.push(row),
             Ok(None) => {}
-            Err(e) => {
-                skyward_sys::kmsg(&format!("the filesystem page leaves {name} out: {e:#}"))?
-            }
+            Err(e) => skyward_sys::kmsg(&format!("the filesystem page leaves {name} out: {e:#}"))?,
         }
     }
     Ok(rows)
@@ -1496,7 +1496,8 @@ pub fn run(
         | Work::WipeAb { .. }
         | Work::Sideload { .. }
         | Work::Rescue
-        | Work::UnshareBlocks => start,
+        | Work::UnshareBlocks
+        | Work::SwitchSystem { .. } => start,
     };
     let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
     app.set_screen_corners(cfg.display.corner_radius as f32);
@@ -1664,10 +1665,28 @@ pub fn run(
     };
     app.state.phone_logs = cfg.wipe.logs.len();
     // Skyward lives in a recovery partition of each slot where the phone
-    // has them, and the install page then offers to keep it there.
+    // has them, and the install page then offers to keep it there. Such a
+    // phone holds a second system where it also has boot and init_boot
+    // partitions in both slots, which a switch writes.
     let by_name = Path::new(skyward_block::BY_NAME);
-    app.state.recovery_partitions =
-        by_name.join("recovery_a").try_exists()? && by_name.join("recovery_b").try_exists()?;
+    let both = |base: &str| -> Result<bool> {
+        Ok(by_name.join(format!("{base}_a")).try_exists()?
+            && by_name.join(format!("{base}_b")).try_exists()?)
+    };
+    app.state.recovery_partitions = both("recovery")?;
+    app.state.dual_boot = app.state.recovery_partitions && both("boot")? && both("init_boot")?;
+    // The second system's work; the systems are read at once, for the home
+    // page to name the one that starts, once a switch cut off before is
+    // finished.
+    let mut systems_worker = match app.state.dual_boot {
+        true => Some(systems::Worker::start(cfg.device.os_version_prop.clone())?),
+        false => None,
+    };
+    // A switch the system asked for, under way; then the phone starts the
+    // system switched to.
+    let mut switch_asked = false;
+    // A switch went through and the phone is restarting into the system.
+    let mut switched = false;
     let mut eraser: Option<Eraser> = None;
     // Erasing the system asked for leaves on its own once it is done, as
     // does erasing an update asked for, sideloaded with a restart after it;
@@ -1766,7 +1785,34 @@ pub fn run(
             app.part_work_started(PartKind::Unshare, true);
             part_worker = Some(partwork::Worker::start(partwork::Task::Unshare { slot })?);
         }
+        // The installed system is asked for by a word, and the second by
+        // its id.
+        Work::SwitchSystem { to } => match systems_worker.as_mut() {
+            Some(worker) => {
+                app.switch_asked(if to == "installed" {
+                    Who::Installed
+                } else {
+                    Who::Other
+                });
+                worker.send(systems::Task::SwitchNamed(to.clone()));
+                switch_asked = true;
+            }
+            // A phone that cannot hold a second system has none to switch
+            // to, and the request is done with.
+            None => {
+                skyward_sys::kmsg(&format!(
+                    "asked to switch to the system {to:?}, which this phone cannot hold"
+                ))?;
+                bcb::clear(&misc)?;
+                kept = false;
+            }
+        },
         Work::Menu | Work::Exit | Work::Fastboot | Work::PromptWipeData | Work::Unsupported(_) => {}
+    }
+    // A switch asked for finishes one cut off before itself; fastboot leaves
+    // /metadata to fastbootd until the recovery's pages come up.
+    if let (Some(worker), false, false) = (systems_worker.as_mut(), switch_asked, fastboot) {
+        worker.send(systems::Task::Resume);
     }
     // The port came up with adb alone; at rest it offers file transfer
     // beside it.
@@ -1968,7 +2014,8 @@ pub fn run(
             // lost: what the configuration says is said again over the next
             // seconds, as many times as TOUCH_AGAIN allows.
             if let Some(since) = touch_since {
-                while touch_again < TOUCH_AGAIN.len() && since.elapsed() >= TOUCH_AGAIN[touch_again] {
+                while touch_again < TOUCH_AGAIN.len() && since.elapsed() >= TOUCH_AGAIN[touch_again]
+                {
                     inputs.tell_panel_again()?;
                     touch_again += 1;
                 }
@@ -2029,6 +2076,7 @@ pub fn run(
         // a command running in the terminal, a network being joined, the
         // battery read after a uevent, or a computer on the USB port, whose
         // adb and file transfer stay up.
+        let systems_busy = systems_worker.as_ref().is_some_and(systems::Worker::busy);
         let busy = installer.is_some()
             || eraser.is_some()
             || worker.is_some()
@@ -2040,7 +2088,8 @@ pub fn run(
             || checker.is_some()
             || downloader.is_some()
             || skyward_checker.is_some()
-            || skyward_updater.is_some();
+            || skyward_updater.is_some()
+            || systems_busy;
         let joining = app
             .state
             .wlan
@@ -2112,6 +2161,9 @@ pub fn run(
         if let Some(u) = &skyward_updater {
             fds.push(u.fd());
         }
+        if let Some(s) = &systems_worker {
+            fds.push(s.fd());
+        }
         fds.push(readings.fd());
         wait(&fds, timeout)?;
         let now = monotonic_ms();
@@ -2155,6 +2207,17 @@ pub fn run(
                         ..
                     })
                 );
+                // A second system installed is read for the pages to show.
+                if matches!(
+                    ev,
+                    Told::Done(Outcome::SystemInstalled { .. })
+                        | Told::Finished(Outcome::SystemInstalled { .. })
+                ) {
+                    systems_worker
+                        .as_mut()
+                        .context("a second system went in on a phone that cannot hold one")?
+                        .send(systems::Task::Read);
+                }
                 eprintln!("install {ev:?}");
                 match &ev {
                     // Rescue's own erasing tells rescue how it went once it
@@ -2459,6 +2522,49 @@ pub fn run(
                 app.refresh();
             }
         }
+        if let Some(w) = &mut systems_worker {
+            for ev in w.events() {
+                let lang = app.state.lang;
+                match ev {
+                    systems::Event::Resumed(to) => {
+                        skyward_sys::kmsg(&format!("a switch cut off before is finished, and the {to:?} system starts next"))?;
+                        app.report(skyward_ui::fmt::switch_resumed(lang), now);
+                    }
+                    systems::Event::NotResumed(why) => {
+                        skyward_sys::kmsg(&format!(
+                            "a switch cut off before is not finished: {why}"
+                        ))?;
+                        app.report(&skyward_ui::fmt::switch_unfinished(lang, &why), now);
+                    }
+                    systems::Event::Switched(to) => {
+                        skyward_sys::kmsg(&format!("the {to:?} system starts next"))?;
+                        // A switch the system asked for is done with.
+                        if switch_asked && kept {
+                            bcb::clear(&misc)?;
+                            kept = false;
+                        }
+                        switch_asked = false;
+                        switched = true;
+                        power(Target::System)?;
+                    }
+                    systems::Event::Failed(why) => {
+                        skyward_sys::kmsg(&format!("work on the systems failed: {why}"))?;
+                        if switch_asked && kept {
+                            bcb::clear(&misc)?;
+                            kept = false;
+                        }
+                        switch_asked = false;
+                        app.systems_work_failed(&why, now);
+                    }
+                    // The page stays as it is while the phone restarts.
+                    systems::Event::Read(read) => {
+                        if !switched {
+                            app.set_systems(read);
+                        }
+                    }
+                }
+            }
+        }
         if let Some((told, traffic)) = wlan.as_ref().map(wlan::Worker::told) {
             if let Some(w) = told {
                 app.set_wlan(w);
@@ -2487,7 +2593,8 @@ pub fn run(
             || merger.is_some()
             || eraser.is_some()
             || backuper.is_some()
-            || part_worker.is_some();
+            || part_worker.is_some()
+            || systems_worker.as_ref().is_some_and(systems::Worker::busy);
         if !metadata_busy {
             if let Some(due) = keeper.due(app.settings(), now) {
                 match settings::write(&due) {
@@ -2770,10 +2877,7 @@ pub fn run(
                     }
                     Effect::Format(parts) => {
                         ensure!(eraser.is_none(), "erasing is under way already");
-                        ensure!(
-                            !parts.is_empty(),
-                            "no partition was chosen to make afresh"
-                        );
+                        ensure!(!parts.is_empty(), "no partition was chosen to make afresh");
                         if decryptor.is_some() {
                             app.report(app.state.lang.pick(DATA_OPENING), now);
                             continue;
@@ -2927,6 +3031,40 @@ pub fn run(
                     Effect::ReadMounts => app.set_mounts(mounts()),
                     Effect::ReadSlots => app.set_boot_slots(read_slots()),
                     Effect::SetSlot(slot) => app.slot_switched(set_slot(slot), now),
+                    Effect::ReadSystems => systems_worker
+                        .as_mut()
+                        .context("this phone holds no second system")?
+                        .send(systems::Task::Read),
+                    // An install still under way may yet write the boot
+                    // partitions; a switch waits for it.
+                    Effect::SwitchSystem(to) => {
+                        if installer.is_some() {
+                            app.systems_work_failed(app.state.lang.pick(INSTALL_UNFINISHED), now);
+                            continue;
+                        }
+                        skyward_sys::kmsg(&format!(
+                            "switching to the {to:?} system, as the systems page asked"
+                        ))?;
+                        systems_worker
+                            .as_mut()
+                            .context("this phone holds no second system")?
+                            .send(systems::Task::Switch(to));
+                    }
+                    Effect::RemoveSystem => {
+                        if installer.is_some() {
+                            app.systems_work_failed(app.state.lang.pick(INSTALL_UNFINISHED), now);
+                            continue;
+                        }
+                        skyward_sys::kmsg("removing the second system, as the systems page asked")?;
+                        systems_worker
+                            .as_mut()
+                            .context("this phone holds no second system")?
+                            .send(systems::Task::Remove);
+                    }
+                    Effect::InstallSystem { size } => installer
+                        .as_ref()
+                        .context("no installer holds a system")?
+                        .install_system(size),
                     // The decrypt page shows meanwhile that the work is
                     // under way, and takes nothing more until it is done.
                     Effect::OpenData => {
@@ -3472,6 +3610,9 @@ pub fn run(
                         info = skyward_info::collect(cfg)?;
                         fastboot = false;
                         app.enter_recovery();
+                        if let Some(w) = systems_worker.as_mut() {
+                            w.send(systems::Task::Resume);
+                        }
                     }
                     // A port that something else has takes file transfer
                     // on, or leaves it, when it comes back to rest.

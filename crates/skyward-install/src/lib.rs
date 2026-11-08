@@ -116,6 +116,14 @@ pub enum Event {
     /// until [`Command::Install`]: a script may write over any partition,
     /// so it always waits.
     Script,
+    /// A system to install beside the installed one, held until
+    /// [`Command::InstallSystem`] says how much room its root takes: its
+    /// name, its version, and the sizes there is room for, the least first.
+    System {
+        name: String,
+        version: String,
+        sizes: Vec<u64>,
+    },
     /// The install script has started.
     Running,
     /// A line the install script shows.
@@ -171,6 +179,13 @@ pub enum Stage {
     /// This recovery is written back into the recovery partitions the
     /// install wrote over, and read back: bytes so far, of all.
     Reflashing { done: u64, total: u64 },
+    /// Room for a system is set aside in the data partition: bytes so far,
+    /// of all.
+    Allocating { done: u64, total: u64 },
+    /// The system's root is written and read back: bytes so far, of all.
+    Root { done: u64, total: u64 },
+    /// The system's boot set is put in the store.
+    Storing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +207,10 @@ pub enum Outcome {
     /// the cache partition to be erased after.
     Ran {
         wipe_cache: bool,
+    },
+    /// The system of this name is installed beside the installed one.
+    SystemInstalled {
+        name: String,
     },
     /// Stopped before anything was written.
     Cancelled,
@@ -249,6 +268,18 @@ pub enum Refusal {
     /// the phone's update keys, or not of the zip as it is, where the
     /// screen asked for one made with them.
     Unverified,
+    /// A system to install beside the installed one, which only someone
+    /// at the screen installs, not the system.
+    SystemAsked,
+    /// A system to install while the data partition, where its root goes,
+    /// is not open.
+    DataClosed,
+    /// A system to install while the one of this name is installed beside
+    /// the installed system already.
+    SystemInstalled(String),
+    /// A system whose root takes `least` bytes, where the data partition
+    /// has room for `room`.
+    NoRoom { least: u64, room: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,6 +314,9 @@ pub enum Command {
     /// Install the update held in [`Event::Ready`], or run the script held
     /// in [`Event::Script`].
     Install,
+    /// Install the system held in [`Event::System`] with a root of `size`
+    /// bytes, one of those it offered.
+    InstallSystem { size: u64 },
     /// The user data the computer asked to be erased in [`Event::Wipe`]
     /// was erased, or was not.
     Wiped(bool),

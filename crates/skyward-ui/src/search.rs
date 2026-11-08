@@ -53,6 +53,22 @@ pub const ENTRIES: &[Entry] = &[
         ],
     ),
     entry(
+        ["双系统", "雙系統", "Dual boot"],
+        HOME,
+        Screen::Systems,
+        &[
+            "shuangxitong",
+            "sxt",
+            "qiehuanxitong",
+            "qhxt",
+            "duoxitong",
+            "dxt",
+            "dualboot",
+            "multiboot",
+            "linux",
+        ],
+    ),
+    entry(
         INSTALL,
         HOME,
         Screen::Install,
@@ -435,6 +451,20 @@ mod tests {
         );
         assert!(find_on("wlan", Lang::Hans, |s| s != Screen::Wlan).is_empty());
         assert_eq!(titles("xiazai"), ["系统更新", "Skyward 更新"]);
+    }
+
+    #[test]
+    fn the_second_system_is_found_where_the_phone_can_hold_one() {
+        assert_eq!(titles("sxt"), ["双系统"]);
+        assert_eq!(titles("qiehuan"), ["双系统"]);
+        assert_eq!(
+            find("dual", Lang::En)
+                .iter()
+                .map(|e| e.title[2])
+                .collect::<Vec<_>>(),
+            ["Dual boot"]
+        );
+        assert!(find_on("shuangxitong", Lang::Hans, |s| s != Screen::Systems).is_empty());
     }
 
     #[test]

@@ -8,12 +8,14 @@ use skyward_net::reach::Reach;
 use skyward_net::release::{Release, Unanswered};
 use skyward_net::supplicant::Security;
 use skyward_net::wlan::{Bands, Joined, Link, Network, Power, Stage as Joining, Traffic, Wlan};
+use skyward_systems::{Named, Other, Overview, Who};
 use skyward_ui::app::{
     Action, Adding, App, Asked, BackupAt, BackupChoice, BackupEnd, BackupEntry, BackupJob,
     BackupRefusal, Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field,
     FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have, Held, Install, ItemEnd, JobEnd,
     Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, Screen, SkywardEnd,
-    SkywardJob, SkywardStage, Source, TermEnd, Touch, UsbDrive, UsbLink, SCREEN_OFF,
+    SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
+    SCREEN_OFF,
 };
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
 use skyward_ui::{editor, fmt, pages, Canvas, Ctx, Fonts, Lang, Theme};
@@ -108,6 +110,25 @@ fn phone_filesystems(open: bool) -> Vec<FsRow> {
             others: Vec::new(),
         },
     ]
+}
+
+/// The systems of a 17 Ultra with a second system installed, HyperOS
+/// starting.
+fn two_systems() -> Overview {
+    Overview {
+        installed: Named {
+            name: "HyperOS 3".into(),
+            version: Some("OS3.0.308.0.WMACNXM".into()),
+        },
+        other: Some(Other {
+            id: "ubuntu-touch".into(),
+            name: "Ubuntu Touch".into(),
+            version: "24.04-1.x".into(),
+            size: 32_000_000_000,
+        }),
+        other_starts: false,
+        changed: false,
+    }
 }
 
 /// File name, page, dark theme, readings, where the data partition stands,
@@ -299,7 +320,7 @@ fn main() -> Result<()> {
         kernel: false,
         ramdisk: Ramdisk::Recovery,
     };
-    let installing: [(&str, bool, Install); 14] = [
+    let installing: [(&str, bool, Install); 17] = [
         ("30-sideload-waiting", false, Install::Waiting),
         (
             "31-sideload-checking",
@@ -435,6 +456,39 @@ fn main() -> Result<()> {
                     "set USB up for sideload: open ep0: Device or resource busy (os error 16)"
                         .into(),
                 )),
+                damage: None,
+            },
+        ),
+        (
+            "199-sideload-system-choosing",
+            false,
+            Install::SystemChoosing(SystemChoice {
+                name: "Ubuntu Touch".into(),
+                version: "24.04-1.x".into(),
+                sizes: [5, 8, 16, 32, 64]
+                    .map(|gb: u64| gb * 1_000_000_000)
+                    .to_vec(),
+                size: 3,
+            }),
+        ),
+        (
+            "200-sideload-system-writing-dark",
+            true,
+            Install::Systeming {
+                name: "Ubuntu Touch".into(),
+                stage: Some(Stage::Root {
+                    done: 1_610_612_736,
+                    total: 9_663_676_416,
+                }),
+            },
+        ),
+        (
+            "201-sideload-system-installed",
+            false,
+            Install::Finished {
+                outcome: Outcome::SystemInstalled {
+                    name: "Ubuntu Touch".into(),
+                },
                 damage: None,
             },
         ),
@@ -646,7 +700,7 @@ fn main() -> Result<()> {
             choosing,
         });
     };
-    let pages: [PageShot; 170] = [
+    let pages: [PageShot; 177] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked {
                 user: 0,
@@ -1900,6 +1954,51 @@ fn main() -> Result<()> {
         }),
         ("60-slot-light-unread", Screen::Slot, false, &|app| {
             app.set_boot_slots(Err("android.hardware.boot.IBootControl/default is not running; the phone's boot control has to be started first".into()))
+        }),
+        ("202-systems-light", Screen::Systems, false, &|app| {
+            app.set_systems(Ok(two_systems()))
+        }),
+        ("202-systems-light-picked", Screen::Systems, false, &|app| {
+            app.set_systems(Ok(two_systems()));
+            app.state.system_pick = Some(Who::Other);
+        }),
+        ("202-systems-dark", Screen::Systems, true, &|app| {
+            app.set_systems(Ok(two_systems()))
+        }),
+        (
+            "202-systems-dark-second-starts",
+            Screen::Systems,
+            true,
+            &|app| {
+                app.set_systems(Ok(Overview {
+                    other_starts: true,
+                    changed: true,
+                    ..two_systems()
+                }));
+                app.state.asking_delete = true;
+            },
+        ),
+        ("202-systems-light-empty", Screen::Systems, false, &|app| {
+            app.set_systems(Ok(Overview {
+                other: None,
+                ..two_systems()
+            }))
+        }),
+        (
+            "202-systems-dark-switching",
+            Screen::Systems,
+            true,
+            &|app| {
+                app.set_systems(Ok(two_systems()));
+                app.state.systems_work = Some(SystemsWork::Switching(Who::Other));
+            },
+        ),
+        ("203-home-light-systems", Screen::Home, false, &|app| {
+            app.state.dual_boot = true;
+            app.set_systems(Ok(Overview {
+                other_starts: true,
+                ..two_systems()
+            }));
         }),
         ("70-erase-light", Screen::Erase, false, &|app| {
             app.set_asked(reset_asked());

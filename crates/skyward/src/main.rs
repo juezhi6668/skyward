@@ -35,6 +35,8 @@ mod services;
 #[cfg(target_os = "android")]
 mod settings;
 #[cfg(target_os = "android")]
+mod systems;
+#[cfg(target_os = "android")]
 mod ui;
 #[cfg(target_os = "android")]
 mod updates;
@@ -325,7 +327,13 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
-        Cmd::Keytest { list, legacy, blob, skip, make } => keytest(list, legacy, blob, skip, make),
+        Cmd::Keytest {
+            list,
+            legacy,
+            blob,
+            skip,
+            make,
+        } => keytest(list, legacy, blob, skip, make),
         Cmd::Opendata { in_thread } => match in_thread {
             true => std::thread::Builder::new()
                 .name("decrypt".into())
@@ -1122,7 +1130,11 @@ fn prepare(cfg: &DeviceConfig, slot: Option<skyward_vab::Slot>) -> Result<()> {
 /// into it the fault was.
 #[cfg(target_os = "android")]
 fn catch_faults() {
-    unsafe extern "C" fn handler(signal: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+    unsafe extern "C" fn handler(
+        signal: libc::c_int,
+        info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
         let addr = match info.is_null() {
             true => 0,
             false => unsafe { (*info).si_addr() as usize },
@@ -1202,7 +1214,11 @@ fn opendata() -> Result<()> {
         Ok(opening) => {
             println!("the data partition is open");
             if let Some(mounted) = &opening.mounted {
-                println!("  mounted {} as {}", mounted.mapped.display(), mounted.filesystem);
+                println!(
+                    "  mounted {} as {}",
+                    mounted.mapped.display(),
+                    mounted.filesystem
+                );
             }
             for closed in &opening.closed {
                 println!("  user {} still closed: {:?}", closed.user, closed.why);
@@ -1241,13 +1257,7 @@ fn opendata() -> Result<()> {
 /// names of a folder: names that read as words are a folder whose key the
 /// kernel found, and names that do not are one whose key it did not.
 #[cfg(target_os = "android")]
-fn trykey(
-    key: PathBuf,
-    name: Option<String>,
-    mode: u32,
-    size: usize,
-    dir: PathBuf,
-) -> Result<()> {
+fn trykey(key: PathBuf, name: Option<String>, mode: u32, size: usize, dir: PathBuf) -> Result<()> {
     catch_faults();
     let _chain = keyhal::start();
     let binder = skyward_binder::driver::Binder::open()?;
@@ -1375,7 +1385,11 @@ fn keytest(list: bool, legacy: bool, blob: Option<String>, skip: usize, make: bo
             match hardware.authorizations(key, &[]) {
                 Ok(tags) => {
                     for (tag, value) in tags {
-                        println!("  {:#010x} {:<16} {value}", tag, skyward_crypto::keymaster1::tag_name(tag));
+                        println!(
+                            "  {:#010x} {:<16} {value}",
+                            tag,
+                            skyward_crypto::keymaster1::tag_name(tag)
+                        );
                     }
                 }
                 Err(e) => println!("  refused: {e:#}"),
@@ -1386,7 +1400,11 @@ fn keytest(list: bool, legacy: bool, blob: Option<String>, skip: usize, make: bo
             Ok(tags) => {
                 println!("it took a blob of zeros as a key, which it should not have:");
                 for (tag, value) in tags {
-                    println!("  {:#010x} {:<16} {value}", tag, skyward_crypto::keymaster1::tag_name(tag));
+                    println!(
+                        "  {:#010x} {:<16} {value}",
+                        tag,
+                        skyward_crypto::keymaster1::tag_name(tag)
+                    );
                 }
             }
             Err(e) => println!("a blob of zeros is refused: {e:#}"),
@@ -1415,7 +1433,13 @@ fn keytest(list: bool, legacy: bool, blob: Option<String>, skip: usize, make: bo
 }
 
 #[cfg(not(target_os = "android"))]
-fn keytest(_list: bool, _legacy: bool, _blob: Option<String>, _skip: usize, _make: bool) -> Result<()> {
+fn keytest(
+    _list: bool,
+    _legacy: bool,
+    _blob: Option<String>,
+    _skip: usize,
+    _make: bool,
+) -> Result<()> {
     anyhow::bail!("the key hardware is only reachable on the phone")
 }
 
@@ -1495,6 +1519,20 @@ fn identify(path: &Path) -> Result<()> {
         }
         Package::Image(kind) => println!("{kind:?}, for {}", kind.partitions().join(" or ")),
         Package::Script => println!("a zip that installs itself with a script"),
+        Package::System(c) => {
+            println!(
+                "the system {} {} ({}), to install beside the installed one",
+                c.manifest.name, c.manifest.version, c.manifest.id
+            );
+            println!(
+                "a boot image of {} bytes, a root image of {} bytes ({}), starting {}",
+                c.boot, c.root, c.manifest.filesystem, c.manifest.init
+            );
+            println!("its root takes at least {} bytes", c.least());
+            if c.init_boot {
+                println!("it brings its own init_boot image");
+            }
+        }
         Package::Unknown(why) => println!("nothing this recovery installs, {why}"),
     }
     Ok(())
