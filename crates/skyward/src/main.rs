@@ -84,6 +84,36 @@ enum Cmd {
     /// came of it: the whole chain — the key hardware, the key files, the
     /// keys for the files — in one command.
     Opendata,
+    /// Say how a folder says it is encrypted and whether the key it is kept
+    /// by is in, which is what tells a folder whose key was not let in from
+    /// one whose key was let in wrongly. With no folder named, the places
+    /// the data partition keeps its files.
+    #[cfg(target_os = "android")]
+    Pol { dirs: Vec<PathBuf> },
+    /// Let one of the phone's keys in by hand — the word in front of it and
+    /// the size after it of the caller's choosing — and say whether a
+    /// folder's names then read as words. The kernel takes a key only as
+    /// that whole structure and refuses anything else as though there were
+    /// no key at all, which reads exactly like a key never let in.
+    #[cfg(target_os = "android")]
+    Trykey {
+        /// The folder of key files to unwrap, as the phone keeps them.
+        #[arg(long, default_value = "/data/unencrypted/key")]
+        key: PathBuf,
+        /// The name to let it in under, in hex, where that is not the first
+        /// eight bytes of the key's own hash.
+        #[arg(long)]
+        name: Option<String>,
+        /// The word in front of the key: how the contents are encrypted, as
+        /// the kernel numbers it.
+        #[arg(long, default_value_t = 2)]
+        mode: u32,
+        /// How much of the key the word after it says is the key.
+        #[arg(long, default_value_t = 64)]
+        size: usize,
+        /// The folder to read afterwards.
+        dir: PathBuf,
+    },
     /// Start the phone's key hardware service and ask it about itself,
     /// which is the first thing to try when a key will not unwrap. With
     /// `list`, print what the hardware directory holds instead.
@@ -276,6 +306,16 @@ fn main() -> Result<()> {
         }
         Cmd::Keytest { list, legacy, blob, skip, make } => keytest(list, legacy, blob, skip, make),
         Cmd::Opendata => opendata(),
+        #[cfg(target_os = "android")]
+        Cmd::Pol { dirs } => pol(dirs),
+        #[cfg(target_os = "android")]
+        Cmd::Trykey {
+            key,
+            name,
+            mode,
+            size,
+            dir,
+        } => trykey(key, name, mode, size, dir),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -1124,6 +1164,108 @@ fn opendata() -> Result<()> {
 #[cfg(not(target_os = "android"))]
 fn opendata() -> Result<()> {
     anyhow::bail!("the data partition is only reachable on the phone")
+}
+
+/// Let the shared key in at a length of the caller's choosing and show a few
+/// names of a folder: names that read as words are a folder whose key the
+/// kernel found, and names that do not are one whose key it did not.
+#[cfg(target_os = "android")]
+fn trykey(
+    key: PathBuf,
+    name: Option<String>,
+    mode: u32,
+    size: usize,
+    dir: PathBuf,
+) -> Result<()> {
+    catch_faults();
+    let _chain = keyhal::start();
+    let binder = skyward_binder::driver::Binder::open()?;
+    let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
+    let (raw, _) = skyward_crypto::data::key_in(&service, &key)?;
+    let own = skyward_crypto::fscrypt::own_name(&raw);
+    let recorded = match &name {
+        Some(said) => {
+            let said: Vec<char> = said.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+            said.chunks(2)
+                .map(|pair| u8::from_str_radix(&pair.iter().collect::<String>(), 16))
+                .collect::<std::result::Result<Vec<u8>, _>>()?
+        }
+        None => own.clone(),
+    };
+    println!(
+        "the key in {} is {} bytes, and its own hash names it {}",
+        key.display(),
+        raw.len(),
+        skyward_crypto::fscrypt::hex(&own)
+    );
+    println!(
+        "  let in as {} as mode {mode}, {size} of it",
+        skyward_crypto::fscrypt::hex(&recorded)
+    );
+    skyward_crypto::fscrypt::add_key_trying(&raw, &recorded, mode, size)?;
+    match std::fs::read_dir(&dir) {
+        Ok(read) => {
+            let names: Vec<String> = read
+                .flatten()
+                .take(4)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            println!("{}: {names:?}", dir.display());
+        }
+        Err(e) => println!("{}: {e}", dir.display()),
+    }
+    Ok(())
+}
+
+/// Report how each folder is encrypted, and show a few of its names: names
+/// that read as words are a folder whose key is in, and names that do not
+/// are one whose key the kernel could not find.
+#[cfg(target_os = "android")]
+fn pol(dirs: Vec<PathBuf>) -> Result<()> {
+    let dirs: Vec<PathBuf> = match dirs.is_empty() {
+        true => [
+            "/data",
+            "/data/misc",
+            "/data/app",
+            "/data/system",
+            "/data/user/0",
+            "/data/media",
+            "/data/media/0",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect(),
+        false => dirs,
+    };
+    for said in ["/data/unencrypted/ref", "/data/unencrypted/mode"] {
+        match std::fs::read(said) {
+            Ok(raw) => println!(
+                "{:<20} {}",
+                said,
+                skyward_crypto::fscrypt::hex(&raw).replace(" ", "")
+            ),
+            Err(e) => println!("{said:<20} {e}"),
+        }
+    }
+    for dir in &dirs {
+        println!(
+            "{:<20} {}",
+            dir.display(),
+            skyward_crypto::fscrypt::describe(dir)
+        );
+        match std::fs::read_dir(dir) {
+            Ok(read) => {
+                let names: Vec<String> = read
+                    .flatten()
+                    .take(3)
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                println!("{:<20}   {names:?}", "");
+            }
+            Err(e) => println!("{:<20}   {e}", ""),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
