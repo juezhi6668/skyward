@@ -482,6 +482,17 @@ fn note(line: &str) {
     let _ = skyward_sys::kmsg(&format!("mtp: {line}"));
 }
 
+/// Open an endpoint without blocking, so a transfer started as the function
+/// goes fails at once instead of waiting for it to come back.
+fn open_endpoint(path: &str, write: bool) -> Result<File> {
+    OpenOptions::new()
+        .read(!write)
+        .write(write)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .with_context(|| format!("open {path}"))
+}
+
 /// How waiting for a request ended, short of the request ending.
 enum Interrupted {
     Cancel,
@@ -550,20 +561,10 @@ impl Port {
         (&ep0)
             .write_all(strings().as_bytes())
             .context("write the MTP strings")?;
-        // Without blocking, a transfer started as the function goes fails
-        // at once instead of waiting for it to come back.
-        let open = |path: &str, write: bool| {
-            OpenOptions::new()
-                .read(!write)
-                .write(write)
-                .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
-                .open(path)
-                .with_context(|| format!("open {path}"))
-        };
         Ok(Port {
-            bulk_in: open(EP_IN, true)?,
-            bulk_out: open(EP_OUT, false)?,
-            event_in: open(EP_EVENT, true)?,
+            bulk_in: open_endpoint(EP_IN, true)?,
+            bulk_out: open_endpoint(EP_OUT, false)?,
+            event_in: open_endpoint(EP_EVENT, true)?,
             aio: Aio::new().context("set up asynchronous I/O")?,
             ep0,
             wake,
@@ -574,6 +575,25 @@ impl Port {
             events: VecDeque::new(),
             event: None,
         })
+    }
+
+    /// Open the endpoints again. **A function the computer let go of and
+    /// configured again comes back with the endpoints it had shut**, and one
+    /// held from before answers "no such device" to every read of it. So
+    /// they are opened with each configuration rather than once with the
+    /// function.
+    ///
+    /// Measured on the Mi 6: the cable going back in gave a function that
+    /// was configured and let go of again within the same hundred
+    /// microseconds, because the first read of a command went to an endpoint
+    /// that had been shut when the cable came out. That reads exactly like a
+    /// port that never came back, and file transfer stayed off until the
+    /// recovery was restarted.
+    fn bind_endpoints(&mut self) -> io::Result<()> {
+        self.bulk_in = open_endpoint(EP_IN, true).map_err(io::Error::other)?;
+        self.bulk_out = open_endpoint(EP_OUT, false).map_err(io::Error::other)?;
+        self.event_in = open_endpoint(EP_EVENT, true).map_err(io::Error::other)?;
+        Ok(())
     }
 
     pub fn enabled(&self) -> bool {
@@ -627,6 +647,10 @@ impl Port {
         Ok(match ev.kind {
             ENABLE => {
                 self.enabled = true;
+                // The endpoints come with each configuration: one held from
+                // before the computer let the function go answers "no such
+                // device" to everything asked of it.
+                self.bind_endpoints()?;
                 self.packet = self.packet_size()?;
                 Some(Control::Enabled)
             }
