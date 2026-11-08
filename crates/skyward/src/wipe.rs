@@ -225,11 +225,9 @@ pub fn factory_reset(reformat: Option<String>) -> Result<Plan, Stop> {
     }
 }
 
-/// One partition, made afresh on its own, as the wipe page is asked to.
+/// The partitions the wipe page has chosen, made afresh one after another.
 pub struct Formatting {
-    step: Step,
-    entry: Entry,
-    filesystem: String,
+    parts: Vec<(Step, Entry, String)>,
 }
 
 /// Find the partition `step` names and what to make it as: the filesystem
@@ -237,7 +235,7 @@ pub struct Formatting {
 /// A phone whose table has no line for the cache or the metadata partition
 /// is refused by name, and the data partition is refused where the system
 /// would not start from a filesystem made here either.
-pub fn format(step: Step) -> Result<Formatting, Stop> {
+fn one(step: Step) -> Result<(Entry, String), Stop> {
     let entry = match step {
         Step::Data => entry_for(DATA).map_err(failed(step))?,
         Step::Cache => at(CACHE)
@@ -260,51 +258,67 @@ pub fn format(step: Step) -> Result<Formatting, Stop> {
     if step == Step::Data && !formattable(DATA).map_err(failed(step))? {
         return Err(Stop::Refused(Refusal::NotRebuilt));
     }
-    Ok(Formatting {
-        step,
-        filesystem: entry.filesystem.clone(),
-        entry,
-    })
+    let filesystem = entry.filesystem.clone();
+    Ok((entry, filesystem))
+}
+
+/// Several partitions, made afresh one after another, as the wipe page is
+/// asked to when more than one of its rows is chosen.
+///
+/// **Every one is looked up first**, and the whole choice is refused if any
+/// of them cannot be made afresh: a phone with no cache partition, or a data
+/// partition its system would not start from a filesystem made here, is
+/// turned down before anything has been written, so a choice that cannot be
+/// carried out leaves every partition as it was rather than half of them
+/// empty.
+pub fn format_all(steps: &[Step]) -> Result<Formatting, Stop> {
+    let mut parts = Vec::new();
+    for &step in steps {
+        let (entry, filesystem) = one(step)?;
+        parts.push((step, entry, filesystem));
+    }
+    Ok(Formatting { parts })
 }
 
 impl Formatting {
-    /// Let go of what is mounted from it, empty it, and make the filesystem
-    /// afresh on the partition itself.
+    /// Let go of what is mounted from each, empty it, and make the
+    /// filesystem afresh on the partition itself.
     pub fn carry_out(self, tell: &mut dyn FnMut(Event)) -> Result<(), Stop> {
-        let step = self.step;
-        tell(Event::At(step));
-        let made = match step {
-            Step::Data => {
-                release_data().map_err(failed(step))?;
-                let device = fstab::device(&self.entry).map_err(failed(step))?;
-                erase::make(
-                    Path::new(&device),
-                    &self.filesystem,
-                    &self.entry.extras,
-                    casefolds(&self.entry),
-                )
-                .map_err(failed(step))
-            }
-            // The cache partition keeps what the recovery's own logs are,
-            // as a factory reset keeps them.
-            Step::Cache => remake_cache(&self.entry, &self.filesystem).map_err(failed(step)),
-            // A partition the table mounts at more than one place -- the
-            // system's files under the recovery's own root, the vendor
-            // files under a name of their own -- comes off every one of
-            // them before it is made afresh, since what is read from a
-            // partition while it holds a filesystem is not what is written
-            // over it.
-            Step::System | Step::Vendor => {
-                let name = Path::new(&self.entry.device)
-                    .file_name()
-                    .with_context(|| format!("{} names no partition", self.entry.device))
+        for (step, entry, filesystem) in self.parts {
+            tell(Event::At(step));
+            match step {
+                Step::Data => {
+                    release_data().map_err(failed(step))?;
+                    let device = fstab::device(&entry).map_err(failed(step))?;
+                    erase::make(
+                        Path::new(&device),
+                        &filesystem,
+                        &entry.extras,
+                        casefolds(&entry),
+                    )
                     .map_err(failed(step))?;
-                fstab::unmount(name.to_string_lossy().as_ref()).map_err(failed(step))?;
-                remake(&self.entry, &self.filesystem).map_err(failed(step))
+                }
+                // The cache partition keeps what the recovery's own logs
+                // are, as a factory reset keeps them.
+                Step::Cache => remake_cache(&entry, &filesystem).map_err(failed(step))?,
+                // A partition the table mounts at more than one place -- the
+                // system's files under the recovery's own root, the vendor
+                // files under a name of their own -- comes off every one of
+                // them before it is made afresh, since what is read from a
+                // partition while it holds a filesystem is not what is
+                // written over it.
+                Step::System | Step::Vendor => {
+                    let name = Path::new(&entry.device)
+                        .file_name()
+                        .with_context(|| format!("{} names no partition", entry.device))
+                        .map_err(failed(step))?;
+                    fstab::unmount(name.to_string_lossy().as_ref()).map_err(failed(step))?;
+                    remake(&entry, &filesystem).map_err(failed(step))?;
+                }
+                _ => remake(&entry, &filesystem).map_err(failed(step))?,
             }
-            _ => remake(&self.entry, &self.filesystem).map_err(failed(step)),
-        };
-        made
+        }
+        Ok(())
     }
 }
 

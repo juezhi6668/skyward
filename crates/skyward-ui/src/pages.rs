@@ -2652,7 +2652,8 @@ const WIPE_GROUPS: [(Text, &[Wipe]); 2] = [
     ),
 ];
 
-/// Making a partition afresh, one at a time, each its own ask.
+/// Making partitions afresh, any number of them at once: each row is a tick,
+/// and one swipe makes every ticked one afresh in turn.
 const FORMAT_PARTS: Text = ["格式化分区", "格式化分割區", "Format partitions"];
 
 /// What a factory reset erases, as the wipe page and an update that asks
@@ -2813,7 +2814,8 @@ pub fn wipe(cx: &Ctx) -> Frame {
     }
     // The partitions that can be made afresh on their own, as the phone
     // has them: what a factory reset does to three of them at once is not
-    // the same ask as what one row says.
+    // the same ask as what one row says. **Any number of them may be
+    // ticked**, and one swipe then makes each of them afresh in turn.
     let below = widgets::section(&mut c, t, f, y, l.pick(FORMAT_PARTS));
     // Each part's own words carry the word for partition, as they did in
     // the three titles these rows used to pick.
@@ -2827,7 +2829,8 @@ pub fn wipe(cx: &Ctx) -> Frame {
         .collect();
     let rows: Vec<Row> = titles
         .iter()
-        .map(|title| Row::new(title).trail(Trail::None))
+        .zip(&s.formats)
+        .map(|(title, part)| Row::new(title).trail(Trail::Check(s.format.contains(part))))
         .collect();
     let list = widgets::list(&mut c, t, f, below, &rows);
     out.extend(list.rows.iter().zip(&s.formats).map(|(&rect, part)| Hit {
@@ -2840,12 +2843,12 @@ pub fn wipe(cx: &Ctx) -> Frame {
         "Wiping app data or app caches needs the data partition decrypted first. What is wiped can't be brought back.",
     ]);
     let y = widgets::footnote(&mut c, t, f, list.bottom, note);
-    // The swipe stands for the format whose row was last tapped, and for
-    // what the page has chosen to wipe until then.
-    let confirm = if s.format.is_some() {
-        Confirm::Format
-    } else {
+    // The swipe stands for the partitions the page has ticked, and for what
+    // it has chosen to wipe until any of them is ticked.
+    let confirm = if s.format.is_empty() {
         Confirm::Wipe
+    } else {
+        Confirm::Format
     };
     let (label, danger) = confirm_label(confirm, cx.state);
     let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);

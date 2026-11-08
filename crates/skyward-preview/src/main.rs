@@ -646,7 +646,7 @@ fn main() -> Result<()> {
             choosing,
         });
     };
-    let pages: [PageShot; 169] = [
+    let pages: [PageShot; 170] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked {
                 user: 0,
@@ -2032,6 +2032,10 @@ fn main() -> Result<()> {
             app.state.formats = ALL_FORMATS.to_vec();
             app.state.phone_logs = 7;
             app.state.wipe = [false, false, true, true, true, false, true, false, true];
+        }),
+        ("92b-wipe-light-format-parts", Screen::Wipe, false, &|app| {
+            app.state.formats = ALL_FORMATS.to_vec();
+            app.state.format = vec![Part::Cache, Part::System, Part::Vendor];
         }),
         ("93-erase-light-media", Screen::Erase, false, &|app| {
             app.erase_started(

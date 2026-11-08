@@ -786,24 +786,30 @@ fn erase_stop(stop: wipe::Stop) -> EraseStop {
     }
 }
 
-/// Make one partition afresh, its page following it with that one part.
-fn format_one(app: &mut App, part: Part) -> Result<Eraser> {
-    let step = match part {
+/// The partition a row of the wipe page names, as the wipe itself takes it.
+fn step_of(part: Part) -> Result<Step> {
+    Ok(match part {
         Part::Data => Step::Data,
         Part::Cache => Step::Cache,
         Part::Metadata => Step::Metadata,
         Part::System => Step::System,
         Part::Vendor => Step::Vendor,
         other => anyhow::bail!("{other:?} is a part of the data partition, not a partition"),
-    };
-    let formatting = match wipe::format(step) {
+    })
+}
+
+/// Make the partitions the page has chosen afresh, one after another, its
+/// page following all of them.
+fn format_parts(app: &mut App, parts: &[Part]) -> Result<Eraser> {
+    let steps: Vec<Step> = parts.iter().copied().map(step_of).collect::<Result<_>>()?;
+    let formatting = match wipe::format_all(&steps) {
         Ok(formatting) => formatting,
         Err(stop) => {
             app.erase_started(false, false, Vec::new());
             return Eraser::stopped(stop);
         }
     };
-    app.erase_started(false, false, vec![part]);
+    app.erase_started(false, false, parts.to_vec());
     Eraser::start(move |tell| formatting.carry_out(tell))
 }
 
@@ -2762,8 +2768,12 @@ pub fn run(
                                 Some(parts_wipe(&mut app, steps, &cfg.wipe.logs, false, None)?);
                         }
                     }
-                    Effect::Format(part) => {
+                    Effect::Format(parts) => {
                         ensure!(eraser.is_none(), "erasing is under way already");
+                        ensure!(
+                            !parts.is_empty(),
+                            "no partition was chosen to make afresh"
+                        );
                         if decryptor.is_some() {
                             app.report(app.state.lang.pick(DATA_OPENING), now);
                             continue;
@@ -2772,7 +2782,7 @@ pub fn run(
                             continue;
                         }
                         erase_leaves = false;
-                        eraser = Some(format_one(&mut app, part)?);
+                        eraser = Some(format_parts(&mut app, &parts)?);
                     }
                     Effect::Install => installer
                         .as_ref()

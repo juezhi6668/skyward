@@ -1353,7 +1353,8 @@ pub enum Action {
     RebootTarget(usize),
     /// Choose or leave out what the wipe page erases.
     WipeItem(Wipe),
-    /// Ask the wipe page to make one partition afresh.
+    /// Tick or untick one of the wipe page's partitions, to be made afresh
+    /// when its swipe is drawn.
     Format(Part),
     /// A slider's track: touching or dragging it sets the slider's level.
     Slider(Slider),
@@ -1803,9 +1804,11 @@ pub struct State {
     /// The partitions the wipe page offers to make afresh, in the order the
     /// phone's configuration asks and only where the phone has them.
     pub formats: Vec<Part>,
-    /// The partition whose row the page has its swipe ready for; none while
-    /// the swipe stands for what the page has chosen to wipe.
-    pub format: Option<Part>,
+    /// The partitions whose rows the page has chosen to make afresh, in
+    /// the order it lists them; empty while the swipe stands for what the
+    /// page has chosen to wipe. **More than one may be chosen**, and the
+    /// swipe then makes each of them afresh in turn.
+    pub format: Vec<Part>,
     /// How many folders of its own the phone keeps logs in on the data
     /// partition, which erasing the logs takes in.
     pub phone_logs: usize,
@@ -1967,7 +1970,7 @@ impl Default for State {
             cache_partition: false,
             metadata_partition: false,
             formats: Vec::new(),
-            format: None,
+            format: Vec::new(),
             phone_logs: 0,
             pattern: Vec::new(),
             confirm: 0.0,
@@ -2224,8 +2227,10 @@ pub enum Effect {
     /// Erase all user data, as a factory reset does, telling how it goes
     /// with [`App::erase_at`] and [`App::erase_ended`].
     FactoryReset,
-    /// Make one partition afresh, as its row on the wipe page asked.
-    Format(Part),
+    /// Make the partitions the wipe page has ticked afresh, in the order it
+    /// lists them, telling how it goes with [`App::erase_at`],
+    /// [`App::erase_progress`] and [`App::erase_ended`].
+    Format(Vec<Part>),
     /// Erase what the wipe page has chosen, [`Wipe::All`] as a factory
     /// reset does, telling how it goes with [`App::erase_at`],
     /// [`App::erase_progress`] and [`App::erase_ended`].
@@ -6346,15 +6351,29 @@ impl App {
                 self.state.reboot = i;
                 self.refresh();
             }
-            // Everything takes in every part, so choosing it leaves the
-            // parts out, and choosing a part on its own leaves it out.
+            // A partition's row is a tick rather than a choice of one:
+            // choosing it adds it to what the swipe will make afresh, and
+            // choosing it again takes it back out. Choosing anything to wipe
+            // leaves the partitions out, since the swipe stands for one ask
+            // at a time.
             Action::Format(part) => {
-                self.state.format = Some(part);
+                match self.state.format.iter().position(|&chosen| chosen == part) {
+                    Some(at) => {
+                        self.state.format.remove(at);
+                    }
+                    None => {
+                        // Ticking a partition leaves out what the page had
+                        // chosen to wipe, since the swipe stands for one ask
+                        // at a time -- and the other way round below.
+                        self.state.wipe = [false; WIPES.len()];
+                        self.state.format.push(part);
+                    }
+                }
                 self.refresh();
             }
             Action::WipeItem(item) => {
                 // Choosing what a wipe takes in leaves the format ask.
-                self.state.format = None;
+                self.state.format.clear();
                 let k = WIPES
                     .iter()
                     .position(|&w| w == item)
@@ -8113,11 +8132,17 @@ impl App {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
             Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
-            Confirm::Format => {
-                if let Some(part) = self.state.format {
-                    fx.push(Effect::Format(part));
-                }
-            }
+            Confirm::Format => match self.state.format.is_empty() {
+                true => self.say(
+                    l.pick([
+                        "请选择要格式化的分区",
+                        "請選擇要格式化的分割區",
+                        "Choose what to format",
+                    ]),
+                    now,
+                ),
+                false => fx.push(Effect::Format(self.state.format.clone())),
+            },
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES
                     .iter()
@@ -12300,6 +12325,63 @@ mod tests {
         assert_eq!(
             swipe(&mut app, &f, &i, Confirm::Wipe),
             vec![Effect::Wipe(vec![Wipe::All])]
+        );
+    }
+
+    #[test]
+    fn the_wipe_page_makes_any_number_of_partitions_afresh_at_once() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Wipe, &f, &i);
+        app.state.formats = vec![
+            Part::Data,
+            Part::Cache,
+            Part::Metadata,
+            Part::System,
+            Part::Vendor,
+        ];
+        app.refresh();
+        let ticked = |app: &App| app.state.format.clone();
+        assert!(
+            swipe(&mut app, &f, &i, Confirm::Wipe).is_empty(),
+            "nothing is ticked at first"
+        );
+        tap(&mut app, &f, &i, Action::Format(Part::Cache));
+        assert_eq!(ticked(&app), [Part::Cache], "a row ticked on its own");
+        tap(&mut app, &f, &i, Action::Format(Part::System));
+        tap(&mut app, &f, &i, Action::Format(Part::Vendor));
+        assert_eq!(
+            ticked(&app),
+            [Part::Cache, Part::System, Part::Vendor],
+            "any number of rows may be ticked, and one swipe takes them all"
+        );
+        assert_eq!(
+            swipe(&mut app, &f, &i, Confirm::Format),
+            vec![Effect::Format(vec![
+                Part::Cache,
+                Part::System,
+                Part::Vendor
+            ])],
+            "each of them is made afresh, in the order the page lists them"
+        );
+        tap(&mut app, &f, &i, Action::Format(Part::System));
+        assert_eq!(
+            ticked(&app),
+            [Part::Cache, Part::Vendor],
+            "tapped again, a row is left out"
+        );
+        tap(&mut app, &f, &i, Action::WipeItem(Wipe::Media));
+        assert!(
+            ticked(&app).is_empty(),
+            "choosing what to wipe leaves the partitions out"
+        );
+        tap(&mut app, &f, &i, Action::Format(Part::Data));
+        assert!(
+            app.state.wipe.iter().all(|on| !on),
+            "and ticking a partition leaves what was to be wiped out"
+        );
+        assert_eq!(
+            swipe(&mut app, &f, &i, Confirm::Format),
+            vec![Effect::Format(vec![Part::Data])]
         );
     }
 
