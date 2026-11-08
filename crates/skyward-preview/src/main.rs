@@ -700,7 +700,7 @@ fn main() -> Result<()> {
             choosing,
         });
     };
-    let pages: [PageShot; 177] = [
+    let pages: [PageShot; 178] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked {
                 user: 0,
@@ -708,6 +708,7 @@ fn main() -> Result<()> {
                 checking: false,
             };
         }),
+        ("11-install-light-dual-boot", Screen::Install, false, &|app| app.state.dual_boot = true),
         ("11-install-dark-usb", Screen::Install, true, &|app| {
             app.set_usb_drive(Some(UsbDrive::Shown));
         }),

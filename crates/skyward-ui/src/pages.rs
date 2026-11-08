@@ -345,7 +345,12 @@ pub fn home(cx: &Ctx) -> Frame {
     }
     if cx.state.system_notice.is_some() {
         let why = l.pick(["点按查看原因", "點按查看原因", "Tap to see why"]);
-        rows.push(Row::new(l.pick(SECOND_FAILED)).icon(RED, Icon::Systems).subtitle(why).trail(Trail::Arrow));
+        rows.push(
+            Row::new(l.pick(SECOND_FAILED))
+                .icon(RED, Icon::Systems)
+                .subtitle(why)
+                .trail(Trail::Arrow),
+        );
         opens.push(Some(Action::Open(Screen::Systems)));
     }
     let card = widgets::device_card(&mut c, t, f, y, &i.model, &sub, &rows);
@@ -1538,11 +1543,19 @@ pub fn install(cx: &Ctx) -> Frame {
         &methods.rows[methods.rows.len() - 3..],
         &[from_storage, from_usb, Action::Sideload],
     );
-    let what = l.pick([
-        "支持安装 A/B 完整更新包和带安装脚本的刷机包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分区镜像。系统更新将安装到另一个槽位，重启后从该槽位启动。选择文件时仅列出文件夹以及 .zip、.img 文件。",
-        "支援安裝 A/B 完整更新檔和帶有安裝指令碼的刷機包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分割區映像檔。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
-        "Installs A/B full OTA packages and flashable zips with an install script, and flashes boot, init_boot, vendor_boot, recovery, dtbo and vbmeta partition images. A system update installs to the other slot, which starts after a reboot. Choosing a file lists only folders and .zip and .img files.",
-    ]);
+    // A phone that can hold a second system installs one from here too.
+    let what = l.pick(match cx.state.dual_boot {
+        true => [
+            "支持安装 A/B 完整更新包、带安装脚本的刷机包和第二系统的安装包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分区镜像。系统更新将安装到另一个槽位，重启后从该槽位启动；第二系统安装在 data 分区中，可在「双系统」中切换。选择文件时仅列出文件夹以及 .zip、.img 文件。",
+            "支援安裝 A/B 完整更新檔、帶有安裝指令碼的刷機包和第二系統的安裝檔，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分割區映像檔。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動；第二系統安裝在 data 分割區中，可在「雙系統」中切換。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
+            "Installs A/B full OTA packages, flashable zips with an install script and second systems' packages, and flashes boot, init_boot, vendor_boot, recovery, dtbo and vbmeta partition images. A system update installs to the other slot, which starts after a reboot; a second system installs into the data partition, and Dual boot switches to it. Choosing a file lists only folders and .zip and .img files.",
+        ],
+        false => [
+            "支持安装 A/B 完整更新包和带安装脚本的刷机包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分区镜像。系统更新将安装到另一个槽位，重启后从该槽位启动。选择文件时仅列出文件夹以及 .zip、.img 文件。",
+            "支援安裝 A/B 完整更新檔和帶有安裝指令碼的刷機包，以及刷入 boot、init_boot、vendor_boot、recovery、dtbo、vbmeta 分割區映像檔。系統更新將安裝到另一個槽位，重新啟動後從該槽位啟動。選擇檔案時僅列出資料夾以及 .zip、.img 檔案。",
+            "Installs A/B full OTA packages and flashable zips with an install script, and flashes boot, init_boot, vendor_boot, recovery, dtbo and vbmeta partition images. A system update installs to the other slot, which starts after a reboot. Choosing a file lists only folders and .zip and .img files.",
+        ],
+    });
     let y = widgets::footnote(&mut c, t, f, methods.bottom, what);
     let y = widgets::section(&mut c, t, f, y, l.pick(["选项", "選項", "Options"]));
     let check = Row::new(l.pick(["验证刷机包签名", "驗證刷機包簽章", "Verify zip signatures"]))
@@ -6497,7 +6510,11 @@ const SECOND_SYSTEM: Text = ["第二系统", "第二系統", "Second system"];
 
 /// What the home page and the systems page say once the second system's
 /// start stopped.
-const SECOND_FAILED: Text = ["第二系统未能启动", "第二系統未能啟動", "The second system couldn't start"];
+const SECOND_FAILED: Text = [
+    "第二系统未能启动",
+    "第二系統未能啟動",
+    "The second system couldn't start",
+];
 
 /// The two systems as big cards one over the other, laid out as the boot
 /// slot page lays out its slots: the main system, in the phone's own
