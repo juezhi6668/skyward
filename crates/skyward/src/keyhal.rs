@@ -137,6 +137,17 @@ fn open_qseecom() -> Result<()> {
         // daemon, which may not, can.
         libc::chown(at.as_ptr(), 1000, 1016);
     }
+    // The memory the secure world's buffers are shared through, which the
+    // phone's own decrypt rules open up beside the driver: without it the
+    // key hardware answers EPERM.
+    if let Ok(ion) = std::ffi::CString::new("/dev/ion") {
+        if Path::new("/dev/ion").exists() {
+            unsafe {
+                libc::chmod(ion.as_ptr(), 0o664);
+                libc::chown(ion.as_ptr(), 1000, 1000);
+            }
+        }
+    }
     Ok(())
 }
 
