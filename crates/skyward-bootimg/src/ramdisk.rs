@@ -114,6 +114,19 @@ impl Ramdisk {
     /// process, or LZ4 in the legacy framing the kernel's initramfs unpacker
     /// reads, which the reference `lz4` tool writes.
     pub fn encode(&self, format: Format) -> Result<Vec<u8>> {
+        let cpio = self.archive()?;
+        match format {
+            Format::Gzip => {
+                let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(9));
+                gz.write_all(&cpio).context("gzip encode")?;
+                gz.finish().context("gzip encode")
+            }
+            Format::Lz4 => lz4_tool(&cpio),
+        }
+    }
+
+    /// Pack as a newc archive, uncompressed.
+    pub fn archive(&self) -> Result<Vec<u8>> {
         let mut cpio = Vec::new();
         for (ino, e) in self.entries.iter().enumerate() {
             let size =
@@ -134,14 +147,7 @@ impl Ramdisk {
             w.finish()?;
         }
         cpio::newc::trailer(&mut cpio)?;
-        match format {
-            Format::Gzip => {
-                let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(9));
-                gz.write_all(&cpio).context("gzip encode")?;
-                gz.finish().context("gzip encode")
-            }
-            Format::Lz4 => lz4_legacy(&cpio),
-        }
+        Ok(cpio)
     }
 
     /// Take out `at`, whether one file or a whole folder with everything
@@ -231,7 +237,30 @@ fn root_entry(name: &str, mode: u32, data: Vec<u8>) -> Entry {
     }
 }
 
-fn lz4_legacy(input: &[u8]) -> Result<Vec<u8>> {
+/// The legacy LZ4 framing's magic number.
+const LZ4_LEGACY_MAGIC: u32 = 0x184C_2102;
+/// The most a block of the legacy framing unpacks to; the kernel unpacks no
+/// more of one.
+const LZ4_LEGACY_BLOCK: usize = 8 << 20;
+
+/// `input` compressed in LZ4's legacy framing, the one the kernel's initramfs
+/// unpacker reads: the magic number, then each 8 MiB of `input` as one LZ4
+/// block with its compressed length before it. The kernel reads the ramdisks
+/// the bootloader joins as one such stream, going on from one into the next
+/// only where that one starts with the magic number. Compressed in process,
+/// with no `lz4` tool, as the recovery does on the phone.
+pub fn lz4_legacy(input: &[u8]) -> Vec<u8> {
+    let mut out = LZ4_LEGACY_MAGIC.to_le_bytes().to_vec();
+    for chunk in input.chunks(LZ4_LEGACY_BLOCK) {
+        let block = lz4_flex::block::compress(chunk);
+        let len = u32::try_from(block.len()).expect("8 MiB compresses to less than 4 GiB");
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&block);
+    }
+    out
+}
+
+fn lz4_tool(input: &[u8]) -> Result<Vec<u8>> {
     let mut child = Command::new("lz4")
         .args(["-l", "-12", "--favor-decSpeed", "-c"])
         .stdin(Stdio::piped())
@@ -287,6 +316,68 @@ mod tests {
         );
         assert_eq!(back.find("dev/console").unwrap().rdev, (5, 1));
         assert!(rd.add("system/bin/recovery", 0o644, Vec::new()).is_err());
+    }
+
+    /// What the reference `lz4` tool unpacks `packed` to.
+    fn unpacked_by_the_tool(packed: &[u8]) -> Vec<u8> {
+        let mut child = Command::new("lz4")
+            .args(["-d", "-c"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let input = packed.to_vec();
+        let writer = std::thread::spawn(move || stdin.write_all(&input));
+        let out = child.wait_with_output().unwrap();
+        writer.join().unwrap().unwrap();
+        assert!(out.status.success(), "lz4 -d exited with {}", out.status);
+        out.stdout
+    }
+
+    #[test]
+    fn a_legacy_stream_starts_with_its_magic_and_unpacks_whole() {
+        // Past one block of 8 MiB, compressible in places.
+        let input: Vec<u8> = (0..20u32 << 20)
+            .map(|i| if i % 3 == 0 { (i / 7) as u8 } else { 0x5a })
+            .collect();
+        let packed = lz4_legacy(&input);
+        assert_eq!(packed[..4], [0x02, 0x21, 0x4c, 0x18]);
+        assert!(packed.len() < input.len());
+        assert_eq!(
+            unpacked_by_the_tool(&packed),
+            input,
+            "the reference tool reads it"
+        );
+        let mut back = Vec::new();
+        lz4_flex::frame::FrameDecoder::new(packed.as_slice())
+            .read_to_end(&mut back)
+            .unwrap();
+        assert_eq!(back, input);
+    }
+
+    #[test]
+    fn a_stream_after_the_vendor_ramdisk_is_read_on_into() {
+        let mut vendor = Ramdisk {
+            entries: Vec::new(),
+        };
+        vendor
+            .add("lib/modules/ufs_qcom.ko", 0o644, b"module".to_vec())
+            .unwrap();
+        let mut ours = Ramdisk {
+            entries: Vec::new(),
+        };
+        ours.add("init", 0o750, b"program".to_vec()).unwrap();
+        let joined = [
+            vendor.encode().unwrap(),
+            lz4_legacy(&ours.archive().unwrap()),
+        ]
+        .concat();
+        assert_eq!(
+            unpacked_by_the_tool(&joined),
+            [vendor.archive().unwrap(), ours.archive().unwrap()].concat(),
+            "both archives, one after the other"
+        );
     }
 
     #[test]
