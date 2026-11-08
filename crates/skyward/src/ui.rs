@@ -2931,10 +2931,23 @@ pub fn run(
                             decryptor.is_none(),
                             "the data partition is being opened already"
                         );
+                        // **What the page handed over, in the kernel log while
+                        // this is being worked out.** A pattern is the dots
+                        // themselves, each numbered from nought, and whether
+                        // the page hands those over or the numbers drawn on
+                        // them is the whole of what a phone that will not open
+                        // leaves to go on. Only a short run of dots is written
+                        // down: anything that could be a password is not.
+                        if !code.is_empty() && code.len() <= 9 && code.iter().all(|b| *b < 9) {
+                            skyward_sys::kmsg(&format!(
+                                "user {user}'s pattern is {} dots: {code:02x?}",
+                                code.len()
+                            ))?;
+                        }
                         let job = decrypt::Job::Unlock {
                             closed: closed.clone(),
                             user,
-                            credential: code.into_bytes(),
+                            credential: code,
                         };
                         decryptor = Some(Decryptor::start(job)?);
                     }

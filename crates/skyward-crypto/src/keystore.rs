@@ -25,9 +25,18 @@ const FN_KEY_BLOB: &str = "keymaster_key_blob";
 const FN_SECDISCARDABLE: &str = "secdiscardable";
 const FN_STRETCHING: &str = "stretching";
 
-/// What Android 9 wrote in `stretching` for a key no credential was wrapped
-/// with.
-const NO_STRETCHING: &str = "nopassword";
+/// What Android writes in `stretching` for a key that is not stretched with
+/// a credential of its own.
+///
+/// `nopassword` is a key the hardware alone holds, which is what a phone
+/// with no screen lock keeps: there is no credential anywhere. `none` is a
+/// key whose credential is kept **behind** it rather than stretched into it
+/// — the key's own secret comes from the blob the secure world holds, and
+/// that blob is what the credential opens. It is what the phone writes for a
+/// user's own key the moment a screen lock is set: measured on the Mi 6,
+/// `stretching` went from `nopassword` to `none` when a PIN was set, and the
+/// key stopped coming apart on the word alone.
+const NOT_STRETCHED: [&str; 2] = ["nopassword", "none"];
 
 /// What Android's key storage writes in front of the blob the hardware made:
 /// the module's own blob is the rest of the file, measured by having it make
@@ -100,18 +109,19 @@ impl StoredKey {
             );
         }
         // A key wrapped with a credential is **stretched** first, and the
-        // token that says how is kept beside it. Android 9 wrote the word
-        // `nopassword` where no credential was involved at all — which is
-        // this phone's, its data being wrapped by the hardware alone — and
-        // that is the only stretching this program can undo: the others need
-        // the credential's own stretching, which is not on the phone.
+        // token that says how is kept beside it. Android wrote the word
+        // `nopassword` where no credential was involved at all and `none`
+        // where the credential is kept behind the key instead of stretched
+        // into it, and those are the two this program can undo: the others
+        // need the credential's own stretching, which is not on the phone.
         if dir.join(FN_STRETCHING).exists() {
             let said = fs::read_to_string(dir.join(FN_STRETCHING))
                 .with_context(|| format!("read {}", dir.join(FN_STRETCHING).display()))?;
-            if said.trim() != NO_STRETCHING {
+            if !NOT_STRETCHED.contains(&said.trim()) {
                 bail!(
-                    "{} was wrapped with a credential's stretching, which this program cannot undo",
-                    dir.display()
+                    "{} was wrapped with a credential's stretching ({:?}), which this program cannot undo",
+                    dir.display(),
+                    said.trim()
                 );
             }
         }
@@ -302,6 +312,22 @@ mod tests {
     fn a_wrapped_key_too_short_to_hold_anything_is_refused() {
         let s = stored(b"x", vec![0; 20]);
         assert!(s.unwrap(Unwrap::<NoService>::Secret(b"s")).is_err());
+    }
+
+    #[test]
+    fn a_key_whose_credential_is_kept_behind_it_is_read() {
+        // A phone with a screen lock writes `none` beside the user's own key:
+        // the credential is not stretched into the key, it is what opens the
+        // blob the key's secret comes from. Reading the key must not stop on
+        // that word — measured on the Mi 6, whose key went from `nopassword`
+        // to `none` the moment a PIN was set, and which then answered "this
+        // program cannot undo" for a password that was right.
+        let dir = tempdir("none-stretching");
+        fs::write(dir.join(FN_VERSION), "1").unwrap();
+        fs::write(dir.join(FN_ENCRYPTED_KEY), [0u8; 64]).unwrap();
+        fs::write(dir.join(FN_STRETCHING), "none").unwrap();
+        let s = StoredKey::load(&dir).unwrap();
+        assert_eq!(s.encrypted.len(), 64);
     }
 
     #[test]

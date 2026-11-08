@@ -237,7 +237,16 @@ enum Cmd {
     /// Say what the phone's credential service answers, which takes no
     /// credential and changes nothing.
     #[cfg(target_os = "android")]
-    Gatekeeper,
+    Gatekeeper {
+        /// A pattern to check against the phone's own record of the owner's
+        /// credential, in the numbers the phone draws its dots with: `12369`
+        /// for the pattern that goes 1, 2, 3, 6, 9. With it, every number a
+        /// credential may be enrolled under is tried, and the one that
+        /// recognises it is named — which is how a wrong credential is told
+        /// from a wrong guess at where it is enrolled.
+        #[arg(long)]
+        pattern: Option<String>,
+    },
     /// Say what the phone's weaver says of itself, which reads no slot and
     /// changes nothing.
     #[cfg(target_os = "android")]
@@ -252,9 +261,16 @@ enum Cmd {
         /// world, the same as a wrong try on the screen itself.
         #[arg(long)]
         credential: Option<String>,
+        /// A pattern's dots, in the order the finger joins them, as the
+        /// numbers the phone draws them with: `12369` for the pattern that
+        /// goes 1, 2, 3, 6, 9. A pattern is not text — the phone keeps the
+        /// dots themselves, each numbered from nought — so it cannot be
+        /// given as one.
+        #[arg(long, conflicts_with = "credential")]
+        pattern: Option<String>,
         /// Close the data partition instead, as a factory reset does before
         /// it erases it: every other program holding it ends first.
-        #[arg(long, conflicts_with = "credential")]
+        #[arg(long, conflicts_with_all = ["credential", "pattern"])]
         close: bool,
     },
     /// Drive the panel and touchscreen with the recovery UI.
@@ -477,7 +493,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         #[cfg(target_os = "android")]
-        Cmd::Gatekeeper => {
+        Cmd::Gatekeeper { pattern } => {
             let (binder, hardware) = (
                 skyward_binder::driver::Binder::open()?,
                 skyward_binder::driver::Binder::hardware()?,
@@ -500,6 +516,22 @@ fn main() -> Result<()> {
                 Ok(_) => println!("it took a credential belonging to no one"),
                 Err(e) => println!("asked about a credential belonging to no one it says: {e:#}"),
             }
+            if let Some(dots) = pattern {
+                // The phone keeps the dots themselves, numbered from the top
+                // left and from nought, in the order the finger joins them,
+                // and it enrols a user's credential a hundred thousand above
+                // their own number. What is said here is which reading of
+                // those numbers, and which way of turning them into a token,
+                // the secure world takes.
+                let typed = pattern_bytes(&dots)?;
+                println!("the pattern {dots} comes to {typed:02x?}");
+                for (how, took) in skyward_crypto::data::which_derivation(0, &typed, 100_000)? {
+                    println!(
+                        "  {how}: {}",
+                        if took { "recognised" } else { "not recognised" }
+                    );
+                }
+            }
             Ok(())
         }
         #[cfg(target_os = "android")]
@@ -521,9 +553,16 @@ fn main() -> Result<()> {
         #[cfg(target_os = "android")]
         Cmd::Data {
             credential,
+            pattern,
             close: false,
         } => {
             use skyward_crypto::data;
+            // What the user gave, as the phone keeps it.
+            let typed: Option<Vec<u8>> = match (&credential, &pattern) {
+                (Some(said), _) => Some(said.as_bytes().to_vec()),
+                (None, Some(dots)) => Some(pattern_bytes(dots)?),
+                (None, None) => None,
+            };
             let binder = skyward_binder::driver::Binder::open()?;
             let service = skyward_crypto::keymint::KeyMint::open(&binder)?;
             let opening = data::open_without_credential(&service)?;
@@ -548,8 +587,8 @@ fn main() -> Result<()> {
             }
             let mut closed = opening.closed;
             let asked = closed.iter().find(|c| !c.made_up).map(|c| c.user);
-            if let (Some(credential), Some(user)) = (&credential, asked) {
-                closed = data::unlock(&service, &closed, user, credential.as_bytes())?;
+            if let (Some(typed), Some(user)) = (&typed, asked) {
+                closed = data::unlock(&service, &closed, user, typed)?;
             }
             for c in &closed {
                 match &c.why {
@@ -1133,6 +1172,23 @@ fn catch_faults() {
 }
 
 /// Open the data partition as the decrypt page does, and say how far it got.
+/// What a pattern comes to, as the phone keeps it: the dots themselves, each
+/// numbered from nought, in the order the finger joins them. `12369` is the
+/// pattern that goes 1, 2, 3, 6, 9, and is 0, 1, 2, 5, 8.
+#[cfg(target_os = "android")]
+fn pattern_bytes(dots: &str) -> Result<Vec<u8>> {
+    let mut said = Vec::new();
+    for dot in dots.chars().filter(|c| c.is_ascii_digit()) {
+        let at = dot as u8 - b'1';
+        anyhow::ensure!(
+            at < 9,
+            "a pattern joins dots numbered 1 to 9, and {dot} is not one of them"
+        );
+        said.push(at);
+    }
+    Ok(said)
+}
+
 #[cfg(target_os = "android")]
 fn opendata() -> Result<()> {
     catch_faults();

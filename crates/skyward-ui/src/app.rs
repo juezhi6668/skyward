@@ -2210,7 +2210,12 @@ pub enum Effect {
     /// did not open with [`App::unlock_failed`].
     Unlock {
         user: u32,
-        code: String,
+        /// What was entered, as the phone keeps it: a password or a PIN as
+        /// its characters, and **a pattern as the dots themselves**, each
+        /// numbered from nought in the order the finger joins them — not the
+        /// numbers drawn on them, which is a different thing entirely and one
+        /// the secure world does not recognise.
+        code: Vec<u8>,
     },
     /// Hand the USB port back from fastboot to adb, bring up what the
     /// recovery runs from the slot's partitions, then show its pages with
@@ -7140,7 +7145,7 @@ impl App {
     /// Send what was entered at the screen lock of the user whose own
     /// files wait. It is taken as it is sent, so the dots clear while it is
     /// checked, and nothing more is entered until it has been.
-    fn unlock(&mut self, code: String) -> Vec<Effect> {
+    fn unlock(&mut self, code: Vec<u8>) -> Vec<Effect> {
         let Data::Locked { user, keys, .. } = self.state.data else {
             unreachable!("only a screen lock waiting takes what is entered")
         };
@@ -7299,7 +7304,7 @@ impl App {
                 ),
                 Screen::Decrypt => {
                     let code = std::mem::take(&mut self.state.code);
-                    return self.unlock(code);
+                    return self.unlock(code.into_bytes());
                 }
                 // A name the folder cannot take is turned down here, in
                 // the user's words; an unchanged one leaves the page.
@@ -8377,7 +8382,7 @@ impl App {
             );
             return Vec::new();
         }
-        self.unlock(drawn.iter().map(|i| (b'1' + *i as u8) as char).collect())
+        self.unlock(drawn.iter().map(|i| *i as u8).collect())
     }
 
     /// A volume key: the first lights the control the keys were last on
@@ -11927,7 +11932,7 @@ mod tests {
             press(&mut app, Key::Power, 0),
             vec![Effect::Unlock {
                 user: 0,
-                code: "1236987".into()
+                code: vec![0, 1, 2, 5, 8, 7, 6]
             }],
             "the last one joined ends it"
         );
@@ -11949,7 +11954,7 @@ mod tests {
             press(&mut app, Key::Power, 0),
             vec![Effect::Unlock {
                 user: 0,
-                code: "2580".into()
+                code: b"2580".to_vec()
             }]
         );
     }
@@ -13471,7 +13476,7 @@ mod tests {
             fx,
             vec![Effect::Unlock {
                 user: 0,
-                code: "123".into()
+                code: b"123".to_vec()
             }]
         );
         assert_eq!(app.state.code, "", "what was typed is gone once it is sent");
@@ -13530,9 +13535,9 @@ mod tests {
             fx,
             vec![Effect::Unlock {
                 user: 0,
-                code: "1258".into()
+                code: vec![0, 1, 4, 7]
             }],
-            "the dots counted from one across the rows"
+            "the dots themselves, from nought, in the order joined"
         );
         assert!(
             app.state.pattern.is_empty(),

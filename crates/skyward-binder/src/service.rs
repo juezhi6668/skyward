@@ -165,9 +165,19 @@ pub fn declared(binder: &crate::driver::Binder, name: &str) -> Result<bool> {
     let directory = binder.directory()?;
     let mut call = Parcel::call(DIRECTORY);
     call.string(name);
-    let reply = directory
-        .transact(methods()?.is_declared, &call)
-        .with_context(|| format!("ask whether {name} is described"))?;
+    let reply = match directory.transact(methods()?.is_declared, &call) {
+        Ok(reply) => reply,
+        // **A directory from before this was one of its methods answers the
+        // question with a failed transaction**, not with "no". That is a
+        // phone that cannot be asked, and one that cannot be asked has
+        // nothing declared as far as anything here is concerned: what the
+        // caller does with a "no" is take the older way, which is the way
+        // such a phone has anyway. Measured on the Mi 6, whose directory has
+        // six methods: asking it this one answered "the call failed in the
+        // driver with error -2147483647", and the credential service was
+        // declared missing while it was running all along.
+        Err(_) => return Ok(false),
+    };
     let mut read = reply.read();
     status::ok(&mut read).with_context(|| format!("ask whether {name} is described"))?;
     read.bool()

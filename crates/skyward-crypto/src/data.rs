@@ -741,12 +741,96 @@ fn protector(user: u32) -> Result<Option<crate::user::Protector>> {
     }))
 }
 
-/// Which of the secure world's slots a user's enrolments sit in. What the
+/// Which of the secure world's slots a user's enrolment sits in. What the
 /// user types is enrolled a hundred thousand above their own number,
 /// keeping it apart from the enrolments made before phones kept
 /// credentials this way; the secret behind it is enrolled under the
 /// number itself.
 const TYPED_SLOT: u32 = 100_000;
+
+/// Whether the secure world recognises `typed` as the credential `user` set,
+/// enrolled under `slot`.
+///
+/// For telling a wrong credential from a wrong guess at what the phone keeps
+/// for it: the two answer the same way, and the difference is the whole of
+/// what a phone that will not open leaves to go on.
+pub fn credential_accepted(user: u32, typed: &[u8], slot: u32) -> Result<bool> {
+    let protector = protector(user)?
+        .with_context(|| format!("user {user} keeps no blob of a credential's secret"))?;
+    let lock = protector
+        .lock
+        .as_ref()
+        .with_context(|| format!("user {user} has set no screen lock"))?;
+    let password = crate::user::gatekeeper_password(&lock.stretched(typed)?);
+    let binder = Binder::open()?;
+    let hardware = Binder::hardware()?;
+    let gatekeeper = Gatekeeper::open(&binder, &hardware)?;
+    Ok(gatekeeper.verify(slot, &lock.enrolled, &password).is_ok())
+}
+
+/// Every plausible way of turning what a user typed into the token the secure
+/// world checks, tried in turn, and which of them it took.
+///
+/// The word the phone writes beside the credential says how slow the stretch
+/// is meant to be, and there is more than one reading of those three numbers
+/// and of what goes into the hash after it. A phone that will not open says
+/// the same thing for all of them, so they are all tried and the one that
+/// answers is named.
+pub fn which_derivation(user: u32, typed: &[u8], slot: u32) -> Result<Vec<(String, bool)>> {
+    let protector = protector(user)?
+        .with_context(|| format!("user {user} keeps no blob of a credential's secret"))?;
+    let lock = protector
+        .lock
+        .as_ref()
+        .with_context(|| format!("user {user} has set no screen lock"))?;
+    let [log_n, log_r, log_p] = lock.cost;
+    let mut tokens: Vec<(String, Vec<u8>)> = Vec::new();
+    for (cost, r, p) in [
+        ("the numbers as Android reads them", 1u32 << log_r, 1u32 << log_p),
+        ("the numbers as they are stored", u32::from(log_r), u32::from(log_p)),
+    ] {
+        let params = scrypt::Params::new(log_n, r, p, 32)
+            .map_err(|e| anyhow::anyhow!("the phone asks for stretching this code cannot do: {e}"))?;
+        let mut stretched = vec![0u8; 32];
+        scrypt::scrypt(typed, &lock.salt, &params, &mut stretched)
+            .map_err(|e| anyhow::anyhow!("stretch the credential: {e}"))?;
+        tokens.push((
+            format!("{cost}, under the credential's own name"),
+            crate::user::gatekeeper_password(&stretched),
+        ));
+        let mut with_salt = stretched.clone();
+        with_salt.extend_from_slice(&lock.salt);
+        tokens.push((
+            format!("{cost}, with the salt after it"),
+            crate::user::gatekeeper_password(&with_salt),
+        ));
+        let mut salt_first = lock.salt.clone();
+        salt_first.extend_from_slice(&stretched);
+        tokens.push((
+            format!("{cost}, with the salt before it"),
+            crate::user::gatekeeper_password(&salt_first),
+        ));
+    }
+    let binder = Binder::open()?;
+    let hardware = Binder::hardware()?;
+    let gatekeeper = Gatekeeper::open(&binder, &hardware)?;
+    // The blob the secure world is asked about: the one beside the
+    // credential, and — where this phone keeps its own way of these things —
+    // the one the blob's own directory names.
+    let mut handles: Vec<(&str, &[u8])> = vec![("the handle beside the credential", &lock.enrolled)];
+    let kept = std::fs::read(blobs(user).join(SECRET_HANDLE)).unwrap_or_default();
+    if !kept.is_empty() {
+        handles.push(("the handle the blob's directory names", &kept));
+    }
+    let mut said = Vec::new();
+    for (which, handle) in handles {
+        for (how, token) in &tokens {
+            let took = gatekeeper.verify(slot, handle, token).is_ok();
+            said.push((format!("{how}, against {which}"), took));
+        }
+    }
+    Ok(said)
+}
 
 /// What the phone calls the enrolment of a user's own secret, among the
 /// blobs it keeps for that user.
