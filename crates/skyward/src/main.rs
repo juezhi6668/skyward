@@ -81,8 +81,18 @@ enum Cmd {
     /// Print the bootloader control block in misc.
     Bcb,
     /// Start the phone's key hardware service and ask it about itself,
-    /// which is the first thing to try when a key will not unwrap.
-    Keytest,
+    /// which is the first thing to try when a key will not unwrap. With
+    /// `list`, print what the hardware directory holds instead.
+    Keytest {
+        /// Print the interfaces the hardware directory holds, rather than
+        /// asking the key service about itself.
+        #[arg(long)]
+        list: bool,
+        /// Load the key hardware into this process and ask it nothing at
+        /// all, which is how its C structures are checked against it.
+        #[arg(long)]
+        legacy: bool,
+    },
     /// Print the logical partition metadata in super.
     Lp {
         /// The super partition, or an image of its start.
@@ -248,7 +258,7 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
-        Cmd::Keytest => keytest(),
+        Cmd::Keytest { list, legacy } => keytest(list, legacy),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -999,7 +1009,32 @@ fn prepare(cfg: &DeviceConfig, slot: Option<skyward_vab::Slot>) -> Result<()> {
 /// call in the older layout — before anything that needs a key is asked of
 /// it, and it takes nothing and changes nothing.
 #[cfg(target_os = "android")]
-fn keytest() -> Result<()> {
+fn keytest(list: bool, legacy: bool) -> Result<()> {
+    if legacy {
+        // A blob of nothing is not a key: what the hardware answers to it
+        // proves the whole call path — the module, the device, the offset
+        // the function sits at, and the way its arguments are written —
+        // without a key or a credential being touched.
+        let hardware = skyward_crypto::keymaster1::Keymaster1::open()?;
+        println!("the key hardware is loaded");
+        match hardware.authorizations(&[0u8; 32], &[]) {
+            Ok(tags) => {
+                println!("it took a blob of zeros as a key, which it should not have:");
+                for (tag, value) in tags {
+                    println!("  {:#010x} {:<16} {value}", tag, skyward_crypto::keymaster1::tag_name(tag));
+                }
+            }
+            Err(e) => println!("a blob of zeros is refused: {e:#}"),
+        }
+        return Ok(());
+    }
+    if list {
+        let hardware = skyward_binder::driver::Binder::hardware()?;
+        for name in skyward_crypto::keymaster::registered(&hardware)? {
+            println!("{name}");
+        }
+        return Ok(());
+    }
     let mut started = keyhal::start()?;
     let hardware = skyward_binder::driver::Binder::hardware()?;
     let service = skyward_crypto::keymaster::Keymaster::open(&hardware)?;
@@ -1015,7 +1050,7 @@ fn keytest() -> Result<()> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn keytest() -> Result<()> {
+fn keytest(_list: bool, _legacy: bool) -> Result<()> {
     anyhow::bail!("the key hardware is only reachable on the phone")
 }
 

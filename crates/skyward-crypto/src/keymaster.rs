@@ -105,6 +105,39 @@ impl<'a> Keymaster<'a> {
     }
 }
 
+/// Every interface the hardware directory holds, as `interface/instance`.
+///
+/// This is the question to ask when a service is running and yet cannot be
+/// found: the directory's own answer says whether it registered under
+/// another name, or not at all. The list is read as far as it parses — an
+/// entry whose shape is not what this expects ends the reading rather than
+/// the answer, since what was read before it is still worth having.
+#[cfg(target_os = "android")]
+pub fn registered(hardware: &skyward_binder::driver::Binder) -> Result<Vec<String>> {
+    use skyward_binder::hidl::Message;
+    const DIRECTORY: &str = "android.hidl.manager@1.0::IServiceManager";
+    const LIST: u32 = 4;
+    let directory = hardware.directory()?;
+    let reply = directory
+        .transact(LIST, &Message::call(DIRECTORY))
+        .context("ask the hardware directory what it holds")?;
+    let mut read = Answer::new(reply.bytes());
+    read.status()
+        .context("ask the hardware directory what it holds")?;
+    let mut out = Vec::new();
+    for _ in 0..read.i32().unwrap_or(0).max(0) {
+        match read.string() {
+            Ok(name) => out.push(name),
+            Err(_) => break,
+        }
+        // The transport each entry carries, which is not needed here.
+        if read.i32().is_err() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// What the service says a key may be used for, as the older kind hands it
 /// over: a structure per level the key was made at, each with its own list
 /// of tags.
