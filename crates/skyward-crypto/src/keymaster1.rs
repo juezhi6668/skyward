@@ -52,6 +52,7 @@ const GET_MODULE: &str = "hw_get_module_by_class";
 /// Where each function sits in the device the module hands back, measured on
 /// the phone and named against the module's own symbols.
 pub mod at {
+    pub const GENERATE_KEY: usize = 248;
     pub const GET_KEY_CHARACTERISTICS: usize = 256;
     pub const BEGIN: usize = 296;
     pub const UPDATE: usize = 304;
@@ -73,6 +74,8 @@ mod tag {
     pub const BLOCK_MODE: u32 = 0x2000_0004;
     pub const PADDING: u32 = 0x2000_0006;
     pub const MIN_MAC_LENGTH: u32 = 0x3000_0008;
+    pub const KEY_SIZE: u32 = 0x3000_0003;
+    pub const ALGORITHM: u32 = 0x1000_0002;
     pub const APPLICATION_ID: u32 = 0x9000_0259;
     pub const NONCE: u32 = 0x9000_03e9;
 }
@@ -99,8 +102,18 @@ impl Blob {
         }
     }
 
+    /// Nothing at all, but **somewhere real**: a module that reads the bytes
+    /// without looking at the length first faults on what it is given, and
+    /// one was made to — twice, once on a null pointer and once on the
+    /// dangling one an empty slice carries, which is an address near zero
+    /// and just as unmapped. So what is empty is a real byte, and the length
+    /// says to read none of it.
     pub fn empty() -> Blob {
-        Blob::default()
+        static NOTHING: [u8; 8] = [0; 8];
+        Blob {
+            data: NOTHING.as_ptr(),
+            length: 0,
+        }
     }
 
     /// The bytes as the hardware handed them over, copied out before
@@ -156,9 +169,14 @@ impl ParamSet {
         }
     }
 
+    /// Nothing to say, pointed at something real, for the same reason.
     pub fn empty() -> ParamSet {
+        static NOTHING: [Param; 1] = [Param {
+            tag: 0,
+            arm: [0, 0],
+        }];
         ParamSet {
-            params: std::ptr::null(),
+            params: NOTHING.as_ptr(),
             length: 0,
         }
     }
@@ -198,6 +216,12 @@ struct Methods {
     open: Option<unsafe extern "C" fn(*const Module, *const c_char, *mut *mut c_void) -> c_int>,
 }
 
+type GenerateKey = unsafe extern "C" fn(
+    *mut c_void,
+    *const ParamSet,
+    *mut Blob,
+    *mut *mut Characteristics,
+) -> c_int;
 type GetKeyCharacteristics = unsafe extern "C" fn(
     *mut c_void,
     *const Blob,
@@ -377,6 +401,32 @@ impl Keymaster1 {
         Ok(())
     }
 
+    /// Have the hardware make a key of its own and give back the blob it
+    /// keeps it in. Nothing here uses the key: what the blob looks like is
+    /// the question, when a blob written by someone else will not be read.
+    pub fn generate_aes_gcm(&self, bits: u32, app_id: &[u8]) -> Result<Vec<u8>> {
+        let mut params = vec![
+            Param::number(tag::ALGORITHM, ALGORITHM_AES),
+            Param::number(tag::PURPOSE, PURPOSE_ENCRYPT),
+            Param::number(tag::PURPOSE, PURPOSE_DECRYPT as u32),
+            Param::number(tag::BLOCK_MODE, MODE_GCM),
+            Param::number(tag::PADDING, PAD_NONE),
+            Param::number(tag::MIN_MAC_LENGTH, MAC_BITS),
+            Param::number(tag::KEY_SIZE, bits),
+        ];
+        if !app_id.is_empty() {
+            params.push(Param::bytes(tag::APPLICATION_ID, app_id));
+        }
+        let generate: GenerateKey = unsafe { self.function(at::GENERATE_KEY) }?;
+        let asked = ParamSet::of(&params);
+        let mut blob = Blob::empty();
+        let answer = unsafe { generate(self.device, &asked, &mut blob, std::ptr::null_mut()) };
+        if answer != OK {
+            bail!("the key hardware refused to make a key ({answer})");
+        }
+        Ok(unsafe { blob.take() })
+    }
+
     /// Undo an AES-GCM encryption the hardware did with `key`. It only hands
     /// back the plaintext when the application id is the one the key was
     /// made for, so a wrong secret fails here rather than yielding something
@@ -440,10 +490,12 @@ impl Keymaster1 {
 /// How long the nonce of an AES-GCM key is.
 const NONCE_BYTES: usize = 12;
 
-/// The block mode and padding an AES-GCM decryption is opened with, and the
-/// purpose, as `keymaster_defs.h` numbers them.
+/// The block mode and padding an AES-GCM decryption is opened with, the
+/// purpose, and the algorithm, as `keymaster_defs.h` numbers them.
 const MODE_GCM: u32 = 32;
 const PAD_NONE: u32 = 1;
+const ALGORITHM_AES: u32 = 32;
+const PURPOSE_ENCRYPT: u32 = 0;
 
 impl crate::keystore::Decryptor for Keymaster1 {
     fn gcm_decrypt(
