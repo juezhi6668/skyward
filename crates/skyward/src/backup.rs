@@ -58,9 +58,10 @@ const RESTORE_ORDER: [Part; 4] = [Part::Boot, Part::System, Part::Efs, Part::Dat
 /// restore leaves as it is: internal storage, which is the user's own; the
 /// keys the partition opens with, and what the lock screen and the key
 /// service bind to the secure world, which an older copy would not open;
-/// and what the system makes again, its caches, compiled code and the
-/// updates it downloaded.
-const DATA_SKIPPED: [&str; 20] = [
+/// what the system makes again, its caches, compiled code and the updates
+/// it downloaded; and the second system, which lies where /metadata keeps
+/// it.
+const DATA_SKIPPED: [&str; 21] = [
     "media",
     "lost+found",
     "per_boot",
@@ -81,6 +82,7 @@ const DATA_SKIPPED: [&str; 20] = [
     "cache",
     "ota",
     "ota_package",
+    "skyward/systems",
 ];
 
 /// What of the data partition backups leave out on this phone: what every
@@ -627,6 +629,12 @@ fn backup(t: BackupTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<Pa
     // has nothing to keep, and is left out as it is left out of the offer.
     let mut plan: Vec<(Part, String, Source, u64)> = Vec::new();
     let mut needed = 0;
+    let boot = picked.iter().any(|c| c.part == Part::Boot);
+    if boot {
+        // The boot partitions are backed up as the installed system's,
+        // whose boot set goes back into them first.
+        skyward_systems::install::ensure_installed()?;
+    }
     for c in &picked {
         match c.part {
             Part::Data => {
@@ -873,6 +881,12 @@ fn restore(t: RestoreTask, tell: &dyn Fn(Event), cancel: &AtomicBool) -> Result<
         // backup does not hold mounted and undisturbed: the cache a log is
         // open on could not be taken off any other way.
         (t.detach)().context("take the system's partitions off before writing over them")?;
+    }
+    // The boot partitions are restored as the installed system's, whose
+    // boot set goes back into them first, so that the second system's is
+    // not left kept as being there.
+    if items.iter().any(|i| i.part == Part::Boot) {
+        skyward_systems::install::ensure_installed()?;
     }
     // Once anything is written, the restore goes on to its end.
     let go_on = AtomicBool::new(false);
