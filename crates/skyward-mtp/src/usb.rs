@@ -13,6 +13,8 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::path::Path;
+use std::time::{Duration, Instant};
 use zerocopy::little_endian::{U16, U32};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -23,6 +25,31 @@ const EP_IN: &str = "/dev/usb-ffs/mtp/ep1";
 const EP_OUT: &str = "/dev/usb-ffs/mtp/ep2";
 /// Interrupt in, the events.
 const EP_EVENT: &str = "/dev/usb-ffs/mtp/ep3";
+
+/// How long the functionfs is waited for, and how often it is looked for.
+///
+/// **Init mounts it in its own time, and the page asks for file transfer as
+/// soon as it is drawn.** Measured on the Mi MIX 2: the page asked at 3.93
+/// seconds and init mounted the functionfs at 4.18, so the switch started
+/// off broken on that phone and file transfer had to be turned on by hand.
+/// Waiting for the endpoint to be there is what makes the switch start off
+/// working.
+const FFS_WAIT: Duration = Duration::from_secs(3);
+const FFS_POLL: Duration = Duration::from_millis(50);
+
+/// Wait until the functionfs is mounted, which init does in its own time.
+fn wait_for_function() -> Result<()> {
+    let start = Instant::now();
+    while !Path::new(EP0).exists() {
+        if start.elapsed() >= FFS_WAIT {
+            anyhow::bail!(
+                "{EP0} is not there after {FFS_WAIT:?}: the functionfs is not mounted, and file transfer has nothing to write its descriptors to"
+            );
+        }
+        std::thread::sleep(FFS_POLL);
+    }
+    Ok(())
+}
 
 /// How much one transfer of a file moves: two of these take turns, one on
 /// the bus while the other is read from the file or written to it.
@@ -548,6 +575,7 @@ impl Port {
     /// init can bind the function, and open its endpoints; `wake` is what
     /// the phone wakes the function's thread with.
     pub fn open(wake: RawFd) -> Result<Port> {
+        wait_for_function()?;
         let ep0 = OpenOptions::new()
             .read(true)
             .write(true)
