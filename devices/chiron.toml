@@ -84,6 +84,30 @@ writes = [
     { path = "/proc/touchpanel/wake_gesture", value = "0" },
 ]
 
+# The vendor files, mounted where the Mi 6 mounts its own: this phone's table
+# calls them `/cust`, and every part of the port — and the installed system's
+# own table, which lives in them — looks for them at `/vendor`. The
+# partitions are the same, so the mount is the same.
+#
+# Two things were wrong with the table's own line. It mounts them at `/cust`,
+# so `vendor` answered "the phone's own table does not mount vendor" and the
+# wipe page could not make it afresh either; and its words for the filesystem
+# include `data=ordered`, which this filesystem cannot honour: it has no
+# journal to order through, and a mount that asks for one is refused
+# outright. Measured on the phone, `-o rw,data=ordered` answers Invalid
+# argument where `-o rw,barrier=1` mounts and writes. So nothing could mount
+# it at all, read-write or otherwise.
+#
+# This line replaces the table's own, rather than standing beside it: a line
+# this recovery adds for a partition the phone names somewhere else takes its
+# place, so the page shows the vendor files once, where they are.
+[[fstab]]
+device = "/dev/block/bootdevice/by-name/cust"
+mount_point = "/vendor"
+filesystem = "ext4"
+options = "ro,barrier=1"
+extras = "wait"
+
 # This phone's own table has no metadata line either: its `oops` partition
 # answers for one, and is where the recovery keeps its settings, which every
 # phone puts on /metadata. Read-only as the phone's own metadata is, and

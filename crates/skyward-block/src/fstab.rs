@@ -20,13 +20,14 @@ use std::path::{Path, PathBuf};
 /// this recovery rebuilds" while the recovery's own table says it is. A
 /// phone whose recovery carries no table of its own still gets fstab.qcom,
 /// which is why it is kept rather than dropped.
+/// The file this recovery writes from the device configuration: lines for a
+/// partition the phone's own table says nothing about, and lines that say
+/// what it says wrongly.
+pub const ADDED: &str = "/system/etc/skyward.fstab";
+
 pub const FILES: [&str; 4] = [
     "/system/etc/recovery.fstab",
-    // Lines this recovery adds for a partition the phone's own table says
-    // nothing about, written into the ramdisk from the device
-    // configuration: a phone that keeps no metadata partition but has one
-    // that answers for it says so there.
-    "/system/etc/skyward.fstab",
+    ADDED,
     "/vendor/etc/fstab.qcom",
     "/odm/etc/fstab.qcom",
 ];
@@ -113,16 +114,41 @@ pub fn entries(text: &str) -> Vec<Entry> {
 
 /// Every entry of the phone's own table, read from wherever the table is.
 fn table() -> Result<Vec<Entry>> {
-    let mut out = Vec::new();
+    let mut out: Vec<Entry> = Vec::new();
     for file in FILES {
         let text = match std::fs::read_to_string(file) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e).with_context(|| format!("read {file}")),
         };
-        out.extend(entries(&text));
+        merge(&mut out, entries(&text), file == ADDED);
     }
     Ok(out)
+}
+
+/// Add `fresh` to `out`, and where `replacing` says these are the lines this
+/// recovery added, drop what the phone's table said about a partition one of
+/// them now names **somewhere else**.
+///
+/// The file written from the device configuration is there to say what the
+/// phone's own table gets wrong, and this phone's `cust` is the case: it
+/// holds the vendor files and the table calls them `/cust`, where everything
+/// that looks for them looks at `/vendor`. Keeping both would show one
+/// partition twice, one of the two not being where anything looks, and that
+/// one not even mounting — its own words for a filesystem with no journal
+/// ask for a journal mode, which the kernel refuses. Lines that agree on the
+/// place are all kept, which is how a partition the table names once per
+/// filesystem it might hold is offered as both.
+fn merge(out: &mut Vec<Entry>, fresh: Vec<Entry>, replacing: bool) {
+    if replacing {
+        for entry in &fresh {
+            let Some(name) = partition_name(&entry.device) else {
+                continue;
+            };
+            out.retain(|had| !names(had, name) || had.mount_point == entry.mount_point);
+        }
+    }
+    out.extend(fresh);
 }
 
 /// What the phone's own table says about `mount_point`.
@@ -139,11 +165,14 @@ pub fn partition(name: &str) -> Result<Option<Entry>> {
     Ok(table()?.into_iter().find(|e| names(e, name)))
 }
 
+/// The partition an entry's device path names, such as `cust`.
+fn partition_name(device: &str) -> Option<&str> {
+    Path::new(device).file_name().and_then(|n| n.to_str())
+}
+
 /// Whether an entry is of the partition `name`.
 fn names(entry: &Entry, name: &str) -> bool {
-    Path::new(&entry.device)
-        .file_name()
-        .is_some_and(|n| n == name)
+    partition_name(&entry.device) == Some(name)
 }
 
 /// Whether an entry is about the partition `name`: reached by that name, or
@@ -227,9 +256,10 @@ pub fn mountable() -> Result<Vec<Mountable>> {
     Ok(out)
 }
 
-/// Mount the partition `name` where and as the phone's own table mounts
-/// it, and say where. Whatever shows there already, as what an earlier run
-/// of the recovery service mounted does, is taken as it is.
+/// Mount the partition `name` where the phone's own table mounts it, and say
+/// where — **to be worked on, which is writable.** Whatever shows there
+/// already, as what an earlier run of the recovery service mounted does, is
+/// taken as it is, and made writable like the rest.
 pub fn mount(name: &str) -> Result<PathBuf> {
     let ways: Vec<Entry> = table()?.into_iter().filter(|e| about(e, name)).collect();
     ensure!(
@@ -238,6 +268,12 @@ pub fn mount(name: &str) -> Result<PathBuf> {
     );
     let at = PathBuf::from(point(&ways[0].mount_point));
     if crate::mount::is_mount_point(&at)? {
+        // **Shown already is still this page's to make writable.** The
+        // phone's own init mounts the system partition read-only before the
+        // recovery starts, so a partition mounted from the page was often
+        // one that was already there — and returning here without a word is
+        // why it could never be written to.
+        make_writable(&at);
         return Ok(at);
     }
     crate::mount::prepare(&at)?;
@@ -253,12 +289,46 @@ pub fn mount(name: &str) -> Result<PathBuf> {
     for entry in &ways {
         let where_ = device(entry)?;
         let path = Path::new(&where_);
-        match crate::mount::mount(path, &at, &entry.filesystem, &entry.options) {
+        // **Writable first.** The table names most of these read-only,
+        // because that is how the phone's own system mounts them; a
+        // partition mounted from a recovery is mounted to be worked on. One
+        // that will not go writable — a firmware image on a read-only
+        // partition, a filesystem that wants repairing first — is still
+        // better mounted than not, so the table's own words are the second
+        // try.
+        match crate::mount::mount(path, &at, &entry.filesystem, &writable(&entry.options)) {
             Ok(()) => return Ok(at),
-            Err(e) => why = e.context(format!("mount {where_} as {}", entry.filesystem)),
+            Err(e) => {
+                if crate::mount::mount(path, &at, &entry.filesystem, &entry.options).is_ok() {
+                    eprintln!("{where_} is mounted read-only: it would not go writable");
+                    return Ok(at);
+                }
+                why = e.context(format!("mount {where_} as {}", entry.filesystem));
+            }
         }
     }
     Err(why)
+}
+
+/// Make what shows at `at` writable, saying so where it will not go: a
+/// partition that cannot be written is still one that can be read, and a
+/// recovery that refuses to show it is worse than one that says why.
+fn make_writable(at: &Path) {
+    if let Err(e) = crate::mount::remount_writable(at, true) {
+        eprintln!("{} stays read-only: {e:#}", at.display());
+    }
+}
+
+/// The table's own words for a mount, with `ro` taken out and `rw` in its
+/// place.
+fn writable(options: &[String]) -> Vec<String> {
+    let mut said: Vec<String> = options
+        .iter()
+        .filter(|said| !matches!(said.as_str(), "ro" | "rw"))
+        .cloned()
+        .collect();
+    said.push("rw".to_string());
+    said
 }
 
 /// Take the partition `name` off every place the phone's own table mounts
@@ -313,6 +383,37 @@ mod tests {
         // Everything else keeps the phone's own word for it.
         assert_eq!(point("/vendor"), "/vendor");
         assert_eq!(point("/data"), "/data");
+    }
+
+    #[test]
+    fn a_line_the_recovery_adds_replaces_the_phones_where_they_disagree() {
+        // This phone's `cust` holds the vendor files and its own table calls
+        // them `/cust`; the recovery adds the line that says `/vendor`, and
+        // the phone's line for that partition goes with it. A partition the
+        // table names twice at the *same* place keeps both, which is how a
+        // filesystem it might hold either way is offered as both.
+        let phone = entries(
+            "/dev/block/bootdevice/by-name/cust /cust ext4 noatime,data=ordered wait\n\
+             /dev/block/bootdevice/by-name/userdata /data ext4 ro wait\n",
+        );
+        let added = entries(
+            "/dev/block/bootdevice/by-name/cust /vendor ext4 ro,barrier=1 wait\n\
+             /dev/block/bootdevice/by-name/userdata /data f2fs nosuid wait\n",
+        );
+        let mut all = phone;
+        merge(&mut all, added, true);
+        let points: Vec<&str> = all.iter().map(|e| e.mount_point.as_str()).collect();
+        assert!(!points.contains(&"/cust"), "{points:?}");
+        assert_eq!(points.iter().filter(|p| **p == "/vendor").count(), 1);
+        assert_eq!(points.iter().filter(|p| **p == "/data").count(), 2);
+        // Nothing is dropped where the lines were not the recovery's own.
+        let mut plain = entries("/dev/block/bootdevice/by-name/cust /cust ext4 ro wait\n");
+        merge(
+            &mut plain,
+            entries("/dev/block/bootdevice/by-name/cust /vendor ext4 ro wait\n"),
+            false,
+        );
+        assert_eq!(plain.len(), 2);
     }
 
     #[test]
