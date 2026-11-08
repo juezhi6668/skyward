@@ -50,6 +50,11 @@ enum Cmd {
         /// Skyward built for the device (aarch64-linux-android).
         #[arg(long)]
         binary: PathBuf,
+        /// The first program of a system installed beside the installed
+        /// one, skyward-system-init built for the device and linked
+        /// statically.
+        #[arg(long)]
+        system_init: PathBuf,
         /// The device configuration, devices/<codename>.toml.
         #[arg(long)]
         config: PathBuf,
@@ -119,6 +124,7 @@ fn main() -> Result<()> {
         Cmd::Recovery {
             stock,
             binary,
+            system_init,
             config,
             font,
             mono,
@@ -169,6 +175,7 @@ fn main() -> Result<()> {
             for command in paths::COMMANDS {
                 rd.link(command, recovery)?;
             }
+            rd.add(paths::SYSTEM_INIT, 0o755, read(&system_init)?)?;
             rd.add(paths::CONFIG, 0o644, read(&config)?)?;
             // What the phone's own table leaves out, this recovery needs to
             // know anyway: it goes in a table of its own beside the phone's,
