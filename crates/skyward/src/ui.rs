@@ -1500,7 +1500,8 @@ pub fn run(
         | Work::Sideload { .. }
         | Work::Rescue
         | Work::UnshareBlocks
-        | Work::SwitchSystem { .. } => start,
+        | Work::SwitchSystem { .. }
+        | Work::SystemStopped => start,
     };
     let mut app = App::new(first, w, h, cfg.display.density as f32 / 160.0);
     app.set_screen_corners(cfg.display.corner_radius as f32);
@@ -1828,6 +1829,15 @@ pub fn run(
                 kept = false;
             }
         },
+        // The second system's start stopped and brought the recovery up to
+        // say why; it still starts next, unless the user switches.
+        Work::SystemStopped => {
+            let why = request.reason.clone().unwrap_or_default();
+            skyward_sys::kmsg(&format!("the second system's start stopped: {why}"))?;
+            if app.state.dual_boot {
+                app.system_stopped(why);
+            }
+        }
         Work::Menu | Work::Exit | Work::Fastboot | Work::PromptWipeData | Work::Unsupported(_) => {}
     }
     // A switch asked for finishes one cut off before itself; fastboot leaves

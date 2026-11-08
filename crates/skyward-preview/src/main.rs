@@ -1985,12 +1985,17 @@ fn main() -> Result<()> {
             }))
         }),
         (
-            "202-systems-dark-switching",
+            "202-systems-light-stopped",
             Screen::Systems,
-            true,
+            false,
             &|app| {
-                app.set_systems(Ok(two_systems()));
-                app.state.systems_work = Some(SystemsWork::Switching(Who::Other));
+                app.set_systems(Ok(Overview {
+                    other_starts: true,
+                    ..two_systems()
+                }));
+                app.state.system_notice =
+                    Some("the root holds no program /sbin/init to start".into());
+                app.state.data = Data::Closed;
             },
         ),
         ("203-home-light-systems", Screen::Home, false, &|app| {
@@ -1999,6 +2004,7 @@ fn main() -> Result<()> {
                 other_starts: true,
                 ..two_systems()
             }));
+            app.state.system_notice = Some("the root holds no program /sbin/init to start".into());
         }),
         ("70-erase-light", Screen::Erase, false, &|app| {
             app.set_asked(reset_asked());

@@ -2311,7 +2311,9 @@ dependencies = [
  "anyhow",
  "cpio",
  "flate2",
+ "libc",
  "lz4_flex",
+ "tempfile",
 ]
 
 [[package]]
@@ -2488,7 +2490,9 @@ dependencies = [
  "anyhow",
  "libc",
  "skyward-block",
+ "skyward-bootimg",
  "skyward-modules",
+ "skyward-sys",
  "skyward-systems",
 ]
 
