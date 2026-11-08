@@ -41,7 +41,12 @@ impl Kept {
             Slot::A => (a, image_a),
             Slot::B => (b, image_b),
         };
-        Ok(held.skyward.then(|| Kept { dir: dir.to_path_buf(), image, own: held.digest, before: [a, b] }))
+        Ok(held.skyward.then(|| Kept {
+            dir: dir.to_path_buf(),
+            image,
+            own: held.digest,
+            before: [a, b],
+        }))
     }
 
     /// The slots whose recovery partition gets this recovery back, by what
@@ -56,8 +61,16 @@ impl Kept {
     /// Write this recovery into the recovery partitions of `slots` and read
     /// each back; `progress` hears the bytes so far, of all.
     pub fn write(&self, slots: &[Slot], progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
-        let devices: Vec<PathBuf> = slots.iter().map(|&slot| image::device(&self.dir, PARTITION, slot)).collect();
-        image::flash(&mut Cursor::new(&self.image), self.image.len() as u64, &devices, progress)
+        let devices: Vec<PathBuf> = slots
+            .iter()
+            .map(|&slot| image::device(&self.dir, PARTITION, slot))
+            .collect();
+        image::flash(
+            &mut Cursor::new(&self.image),
+            self.image.len() as u64,
+            &devices,
+            progress,
+        )
     }
 }
 
@@ -65,11 +78,20 @@ impl Kept {
 /// and all of it.
 fn read(path: &Path) -> Result<(Held, Vec<u8>)> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    image::drop_cache(&file).with_context(|| format!("drop the cached pages of {}", path.display()))?;
+    image::drop_cache(&file)
+        .with_context(|| format!("drop the cached pages of {}", path.display()))?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).with_context(|| format!("read {}", path.display()))?;
-    let skyward = image::is_skyward(&mut Cursor::new(&bytes)).with_context(|| format!("look into {}", path.display()))?;
-    Ok((Held { digest: Sha256::digest(&bytes).into(), skyward }, bytes))
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    let skyward = image::is_skyward(&mut Cursor::new(&bytes))
+        .with_context(|| format!("look into {}", path.display()))?;
+    Ok((
+        Held {
+            digest: Sha256::digest(&bytes).into(),
+            skyward,
+        },
+        bytes,
+    ))
 }
 
 /// The slots whose recovery partition gets this recovery back once an
@@ -95,27 +117,66 @@ mod tests {
     use super::*;
     use crate::image::samples::recovery;
 
-    const SKYWARD: Held = Held { digest: [1; 32], skyward: true };
+    const SKYWARD: Held = Held {
+        digest: [1; 32],
+        skyward: true,
+    };
     const OWN: [u8; 32] = SKYWARD.digest;
     /// Another build of Skyward.
-    const OTHER_BUILD: Held = Held { digest: [4; 32], skyward: true };
-    const STOCK: Held = Held { digest: [2; 32], skyward: false };
-    const OLD: Held = Held { digest: [3; 32], skyward: false };
+    const OTHER_BUILD: Held = Held {
+        digest: [4; 32],
+        skyward: true,
+    };
+    const STOCK: Held = Held {
+        digest: [2; 32],
+        skyward: false,
+    };
+    const OLD: Held = Held {
+        digest: [3; 32],
+        skyward: false,
+    };
 
     #[test]
     fn the_slot_that_starts_next_gets_this_build() {
-        assert_eq!(restore([SKYWARD, OLD], [SKYWARD, STOCK], OWN, Slot::B), [Slot::B], "an update or a package that went to slot B");
-        assert_eq!(restore([SKYWARD, OLD], [SKYWARD, OLD], OWN, Slot::B), [Slot::B], "an older recovery there, left alone by the install");
-        assert_eq!(restore([SKYWARD, OTHER_BUILD], [SKYWARD, OTHER_BUILD], OWN, Slot::B), [Slot::B], "another build of Skyward there");
-        assert!(restore([SKYWARD, SKYWARD], [SKYWARD, SKYWARD], OWN, Slot::A).is_empty(), "this recovery is there already");
+        assert_eq!(
+            restore([SKYWARD, OLD], [SKYWARD, STOCK], OWN, Slot::B),
+            [Slot::B],
+            "an update or a package that went to slot B"
+        );
+        assert_eq!(
+            restore([SKYWARD, OLD], [SKYWARD, OLD], OWN, Slot::B),
+            [Slot::B],
+            "an older recovery there, left alone by the install"
+        );
+        assert_eq!(
+            restore([SKYWARD, OTHER_BUILD], [SKYWARD, OTHER_BUILD], OWN, Slot::B),
+            [Slot::B],
+            "another build of Skyward there"
+        );
+        assert!(
+            restore([SKYWARD, SKYWARD], [SKYWARD, SKYWARD], OWN, Slot::A).is_empty(),
+            "this recovery is there already"
+        );
     }
 
     #[test]
     fn elsewhere_it_goes_back_only_where_the_install_wrote_something_else() {
-        assert!(restore([SKYWARD, OLD], [SKYWARD, OLD], OWN, Slot::A).is_empty(), "a package that left recovery alone, such as a root installer");
-        assert_eq!(restore([SKYWARD, OLD], [SKYWARD, STOCK], OWN, Slot::A), [Slot::B]);
-        assert_eq!(restore([SKYWARD, OLD], [STOCK, STOCK], OWN, Slot::A), [Slot::A, Slot::B]);
-        assert!(restore([SKYWARD, OLD], [SKYWARD, OTHER_BUILD], OWN, Slot::A).is_empty(), "a package that put another build of Skyward in");
+        assert!(
+            restore([SKYWARD, OLD], [SKYWARD, OLD], OWN, Slot::A).is_empty(),
+            "a package that left recovery alone, such as a root installer"
+        );
+        assert_eq!(
+            restore([SKYWARD, OLD], [SKYWARD, STOCK], OWN, Slot::A),
+            [Slot::B]
+        );
+        assert_eq!(
+            restore([SKYWARD, OLD], [STOCK, STOCK], OWN, Slot::A),
+            [Slot::A, Slot::B]
+        );
+        assert!(
+            restore([SKYWARD, OLD], [SKYWARD, OTHER_BUILD], OWN, Slot::A).is_empty(),
+            "a package that put another build of Skyward in"
+        );
     }
 
     /// Recovery partitions of `size` bytes holding `a` and `b`.
@@ -134,21 +195,39 @@ mod tests {
         let (skyward, stock) = (recovery(true), recovery(false));
         let size = skyward.len().max(stock.len()) + 4096;
         let dir = partitions(&skyward, &stock, size);
-        let kept = Kept::hold(dir.path(), Slot::A).unwrap().expect("slot A's partition holds Skyward");
-        assert!(kept.wanted(Slot::A).unwrap().is_empty(), "nothing written over");
+        let kept = Kept::hold(dir.path(), Slot::A)
+            .unwrap()
+            .expect("slot A's partition holds Skyward");
+        assert!(
+            kept.wanted(Slot::A).unwrap().is_empty(),
+            "nothing written over"
+        );
         // A package puts the stock recovery in both slots.
         let mut written = stock.clone();
         written.resize(size, 0);
         std::fs::write(dir.path().join("recovery_a"), &written).unwrap();
-        assert_eq!(kept.wanted(Slot::A).unwrap(), [Slot::A], "slot B held the stock recovery already");
+        assert_eq!(
+            kept.wanted(Slot::A).unwrap(),
+            [Slot::A],
+            "slot B held the stock recovery already"
+        );
         let mut told = Vec::new();
-        kept.write(&[Slot::A], &mut |done, total| told.push((done, total))).unwrap();
-        assert_eq!(told.last(), Some(&(2 * size as u64, 2 * size as u64)), "written and read back");
+        kept.write(&[Slot::A], &mut |done, total| told.push((done, total)))
+            .unwrap();
+        assert_eq!(
+            told.last(),
+            Some(&(2 * size as u64, 2 * size as u64)),
+            "written and read back"
+        );
         let mut whole = skyward.clone();
         whole.resize(size, 0);
         assert_eq!(std::fs::read(dir.path().join("recovery_a")).unwrap(), whole);
         assert!(kept.wanted(Slot::A).unwrap().is_empty());
-        assert_eq!(kept.wanted(Slot::B).unwrap(), [Slot::B], "an install that has slot B start next");
+        assert_eq!(
+            kept.wanted(Slot::B).unwrap(),
+            [Slot::B],
+            "an install that has slot B start next"
+        );
     }
 
     #[test]
@@ -156,7 +235,10 @@ mod tests {
         let dir = partitions(&recovery(false), &recovery(false), 1 << 20);
         assert!(Kept::hold(dir.path(), Slot::B).unwrap().is_none());
         let erased = partitions(&recovery(true), &[], 1 << 20);
-        assert!(Kept::hold(erased.path(), Slot::B).unwrap().is_none(), "an erased partition");
+        assert!(
+            Kept::hold(erased.path(), Slot::B).unwrap().is_none(),
+            "an erased partition"
+        );
         assert!(Kept::hold(erased.path(), Slot::A).unwrap().is_some());
     }
 }

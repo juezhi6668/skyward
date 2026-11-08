@@ -46,7 +46,13 @@ fn block_devices(md: &Metadata, super_dev: &Path) -> Result<Vec<(u32, u32)>> {
     md.block_devices
         .iter()
         .enumerate()
-        .map(|(i, d)| if i == 0 { devnum(super_dev) } else { devnum(Path::new(BY_NAME).join(&d.partition_name)) })
+        .map(|(i, d)| {
+            if i == 0 {
+                devnum(super_dev)
+            } else {
+                devnum(Path::new(BY_NAME).join(&d.partition_name))
+            }
+        })
         .collect()
 }
 
@@ -55,7 +61,15 @@ pub(crate) fn targets(p: &Partition, devices: &[(u32, u32)]) -> Vec<dm::Target> 
     p.extents
         .iter()
         .map(|e| match *e {
-            Extent::Linear { sectors, device, sector } => dm::Target::Linear { sectors, device: devices[device], offset: sector },
+            Extent::Linear {
+                sectors,
+                device,
+                sector,
+            } => dm::Target::Linear {
+                sectors,
+                device: devices[device],
+                offset: sector,
+            },
             Extent::Zero { sectors } => dm::Target::Zero { sectors },
         })
         .collect()
@@ -72,11 +86,19 @@ fn map_and_mount(p: &Partition, devices: &[(u32, u32)], slot: Slot) -> Result<Mo
     let device = dm::create(&p.name, &targets(p, devices), true)?;
     let mount_point = mount_point(base(p, slot));
     let mounted = (|| -> Result<String> {
-        fs::create_dir_all(&mount_point).with_context(|| format!("create {}", mount_point.display()))?;
-        Ok(mount::mount_ro_over(&device, &mount_point).with_context(|| format!("mount {}", p.name))?.to_string())
+        fs::create_dir_all(&mount_point)
+            .with_context(|| format!("create {}", mount_point.display()))?;
+        Ok(mount::mount_ro_over(&device, &mount_point)
+            .with_context(|| format!("mount {}", p.name))?
+            .to_string())
     })();
     match mounted {
-        Ok(filesystem) => Ok(Mounted { partition: p.name.clone(), device, mount_point, filesystem }),
+        Ok(filesystem) => Ok(Mounted {
+            partition: p.name.clone(),
+            device,
+            mount_point,
+            filesystem,
+        }),
         Err(e) => Err(match dm::remove(&p.name) {
             Ok(()) => e,
             Err(r) => e.context(format!("removing {} afterwards failed too: {r:#}", p.name)),
@@ -89,7 +111,11 @@ fn map_and_mount(p: &Partition, devices: &[(u32, u32)], slot: Slot) -> Result<Mo
 fn slot_partitions(md: &Metadata, slot: Slot) -> Vec<&Partition> {
     md.partitions
         .iter()
-        .filter(|p| p.name.ends_with(slot.suffix()) && !p.extents.is_empty() && p.attributes & ATTR_DISABLED == 0)
+        .filter(|p| {
+            p.name.ends_with(slot.suffix())
+                && !p.extents.is_empty()
+                && p.attributes & ATTR_DISABLED == 0
+        })
         .collect()
 }
 
@@ -101,7 +127,10 @@ fn base(p: &Partition, slot: Slot) -> &str {
 /// since a snapshotted partition reads correctly only through its snapshot.
 fn ensure_no_snapshot() -> Result<()> {
     let state = snapshot_state()?;
-    ensure!(state == SnapshotState::None, "an update snapshot is outstanding ({state:?})");
+    ensure!(
+        state == SnapshotState::None,
+        "an update snapshot is outstanding ({state:?})"
+    );
     Ok(())
 }
 
@@ -126,13 +155,19 @@ pub fn mount_partitions(slot: Slot) -> Result<Mounts> {
     };
 
     let shown = mounted_partitions(slot)?;
-    let mut mounts = Mounts { partitions: Vec::new(), damaged: md.damaged.clone() };
+    let mut mounts = Mounts {
+        partitions: Vec::new(),
+        damaged: md.damaged.clone(),
+    };
     for p in slot_partitions(&md, slot) {
         if let Some(m) = shown.iter().find(|m| m.partition == p.name) {
             mounts.partitions.push(m.clone());
             continue;
         }
-        let mounted = match through.map(|s| Ok::<_, anyhow::Error>((s, s.live(p)?))).transpose()? {
+        let mounted = match through
+            .map(|s| Ok::<_, anyhow::Error>((s, s.live(p)?)))
+            .transpose()?
+        {
             Some((s, Some(status))) => mount_snapshot(s, &md, &devices, p, &status, slot)?,
             _ => map_and_mount(p, &devices, slot)?,
         };
@@ -156,7 +191,9 @@ pub fn start_merge(slot: Slot, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Resu
 /// none.
 pub fn snapshots_mapped(slot: Slot) -> Result<bool> {
     let md = skyward_lp::read(&super_device(), slot.number())?;
-    let Some(snaps) = Snapshots::lock(false)? else { return Ok(false) };
+    let Some(snaps) = Snapshots::lock(false)? else {
+        return Ok(false);
+    };
     if !snaps.needed(slot)? {
         return Ok(false);
     }
@@ -184,7 +221,14 @@ pub fn check_merge(slot: Slot, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Resu
 
 /// Map partition `p` through its snapshot `status` and mount it read-only;
 /// a snapshot that does not mount is taken apart again.
-fn mount_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p: &Partition, status: &SnapshotStatus, slot: Slot) -> Result<Mounted> {
+fn mount_snapshot(
+    snaps: &Snapshots,
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    p: &Partition,
+    status: &SnapshotStatus,
+    slot: Slot,
+) -> Result<Mounted> {
     let device = snapshots::map_snapshot(snaps, md, devices, p, status)?;
     mount_mapped(p, device, slot)
 }
@@ -194,14 +238,25 @@ fn mount_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p: &
 fn mount_mapped(p: &Partition, device: PathBuf, slot: Slot) -> Result<Mounted> {
     let mount_point = mount_point(base(p, slot));
     let mounted = (|| -> Result<String> {
-        fs::create_dir_all(&mount_point).with_context(|| format!("create {}", mount_point.display()))?;
-        Ok(mount::mount_ro_over(&device, &mount_point).with_context(|| format!("mount {}", p.name))?.to_string())
+        fs::create_dir_all(&mount_point)
+            .with_context(|| format!("create {}", mount_point.display()))?;
+        Ok(mount::mount_ro_over(&device, &mount_point)
+            .with_context(|| format!("mount {}", p.name))?
+            .to_string())
     })();
     match mounted {
-        Ok(filesystem) => Ok(Mounted { partition: p.name.clone(), device, mount_point, filesystem }),
+        Ok(filesystem) => Ok(Mounted {
+            partition: p.name.clone(),
+            device,
+            mount_point,
+            filesystem,
+        }),
         Err(e) => Err(match snapshots::unmap_snapshot(&p.name) {
             Ok(()) => e,
-            Err(r) => e.context(format!("taking {} apart afterwards failed too: {r:#}", p.name)),
+            Err(r) => e.context(format!(
+                "taking {} apart afterwards failed too: {r:#}",
+                p.name
+            )),
         }),
     }
 }
@@ -210,14 +265,20 @@ fn mount_mapped(p: &Partition, device: PathBuf, slot: Slot) -> Result<Mounted> {
 /// `vendor`), in the order super lists them, whether or not they are mounted.
 pub fn slot_bases(slot: Slot) -> Result<Vec<String>> {
     let md = skyward_lp::read(&super_device(), slot.number())?;
-    Ok(slot_partitions(&md, slot).into_iter().map(|p| base(p, slot).to_string()).collect())
+    Ok(slot_partitions(&md, slot)
+        .into_iter()
+        .map(|p| base(p, slot).to_string())
+        .collect())
 }
 
 /// The slot's logical partitions by base name with the bytes each holds, in
 /// the order super lists them.
 pub fn slot_sizes(slot: Slot) -> Result<Vec<(String, u64)>> {
     let md = skyward_lp::read(&super_device(), slot.number())?;
-    Ok(slot_partitions(&md, slot).into_iter().map(|p| (base(p, slot).to_string(), bytes(p))).collect())
+    Ok(slot_partitions(&md, slot)
+        .into_iter()
+        .map(|p| (base(p, slot).to_string(), bytes(p)))
+        .collect())
 }
 
 /// One of the slot's logical partitions mapped whole under a name of its
@@ -238,9 +299,16 @@ pub fn map_whole(slot: Slot, base_name: &str, name: &str, readonly: bool) -> Res
     let md = skyward_lp::read(&super_dev, slot.number())?;
     let devices = block_devices(&md, &super_dev)?;
     let full = format!("{base_name}{}", slot.suffix());
-    let p = slot_partitions(&md, slot).into_iter().find(|p| p.name == full).with_context(|| format!("super holds no {full}"))?;
+    let p = slot_partitions(&md, slot)
+        .into_iter()
+        .find(|p| p.name == full)
+        .with_context(|| format!("super holds no {full}"))?;
     let device = dm::create(name, &targets(p, &devices), readonly)?;
-    Ok(Whole { name: name.into(), device, size: bytes(p) })
+    Ok(Whole {
+        name: name.into(),
+        device,
+        size: bytes(p),
+    })
 }
 
 /// Remove a mapping [`map_whole`] made.
@@ -323,7 +391,9 @@ pub fn mount_one(slot: Slot, base_name: &str) -> Result<Mounted> {
         _ => None,
     };
     match status {
-        Some(_) if dm::status(&name)?.is_some() => mount_mapped(p, Path::new("/dev/block").join(dm_node(&name)?), slot),
+        Some(_) if dm::status(&name)?.is_some() => {
+            mount_mapped(p, Path::new("/dev/block").join(dm_node(&name)?), slot)
+        }
         Some((s, status)) => mount_snapshot(s, &md, &devices, p, &status, slot),
         None => map_and_mount(p, &devices, slot),
     }
@@ -340,7 +410,9 @@ fn dm_node(name: &str) -> Result<String> {
 /// it reads through a snapshot, the snapshot's own devices too. A partition
 /// that is not mapped is left as it is.
 fn unmap(name: &str, point: &Path) -> Result<()> {
-    let Some(dev) = dm::status(name)? else { return Ok(()) };
+    let Some(dev) = dm::status(name)? else {
+        return Ok(());
+    };
     if mount::visible(point)?.is_some_and(|v| v.device == dev) {
         mount::umount_over(point)?;
     }
@@ -371,18 +443,30 @@ pub fn mounted_partitions(slot: Slot) -> Result<Vec<Mounted>> {
     for entry in fs::read_dir("/sys/block").context("read /sys/block")? {
         let entry = entry?;
         let node = entry.file_name().to_string_lossy().into_owned();
-        let Some(minor) = node.strip_prefix("dm-") else { continue };
+        let Some(minor) = node.strip_prefix("dm-") else {
+            continue;
+        };
         let name_file = entry.path().join("dm/name");
-        let name = fs::read_to_string(&name_file).with_context(|| format!("read {}", name_file.display()))?;
+        let name = fs::read_to_string(&name_file)
+            .with_context(|| format!("read {}", name_file.display()))?;
         let name = name.trim();
-        let Some(base) = name.strip_suffix(slot.suffix()) else { continue };
+        let Some(base) = name.strip_suffix(slot.suffix()) else {
+            continue;
+        };
         let device = Path::new("/dev/block").join(&node);
         let mount_point = mount_point(base);
-        let Some(shown) = mount::visible(&mount_point)? else { continue };
+        let Some(shown) = mount::visible(&mount_point)? else {
+            continue;
+        };
         if shown.device != devnum(&device)? {
             continue;
         }
-        let m = Mounted { partition: name.to_string(), device, mount_point, filesystem: shown.filesystem };
+        let m = Mounted {
+            partition: name.to_string(),
+            device,
+            mount_point,
+            filesystem: shown.filesystem,
+        };
         found.push((minor.parse::<u32>()?, m));
     }
     found.sort_by_key(|(minor, _)| *minor);

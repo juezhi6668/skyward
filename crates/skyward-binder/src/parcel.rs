@@ -142,7 +142,10 @@ impl<'a> Reader<'a> {
 
     pub fn go(&mut self, at: usize) -> Result<()> {
         if at > self.data.len() {
-            bail!("the reply ends at {} and holds no position {at}", self.data.len());
+            bail!(
+                "the reply ends at {} and holds no position {at}",
+                self.data.len()
+            );
         }
         self.at = at;
         Ok(())
@@ -151,7 +154,11 @@ impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.at + n;
         if end > self.data.len() {
-            bail!("the reply holds {} bytes, {n} more were read at {}", self.data.len(), self.at);
+            bail!(
+                "the reply holds {} bytes, {n} more were read at {}",
+                self.data.len(),
+                self.at
+            );
         }
         let out = &self.data[self.at..end];
         self.at = end;
@@ -159,11 +166,15 @@ impl<'a> Reader<'a> {
     }
 
     pub fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4)?.try_into().expect("four bytes")))
+        Ok(i32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
     }
 
     pub fn i64(&mut self) -> Result<i64> {
-        Ok(i64::from_le_bytes(self.take(8)?.try_into().expect("eight bytes")))
+        Ok(i64::from_le_bytes(
+            self.take(8)?.try_into().expect("eight bytes"),
+        ))
     }
 
     pub fn bool(&mut self) -> Result<bool> {
@@ -187,7 +198,12 @@ impl<'a> Reader<'a> {
         }
         let raw = self.take((units as usize + 1) * 2)?;
         self.skip_padding();
-        let utf16: Vec<u16> = raw[..units as usize * 2].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        let utf16: Vec<u16> = raw[..units as usize * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
         Ok(String::from_utf16_lossy(&utf16))
     }
 
@@ -199,7 +215,8 @@ impl<'a> Reader<'a> {
         let raw = self.take(24)?;
         let kind = u32::from_le_bytes(raw[0..4].try_into().expect("four bytes"));
         let handle = u32::from_le_bytes(raw[8..12].try_into().expect("four bytes"));
-        self.i32().context("read how far the object's interface travels")?;
+        self.i32()
+            .context("read how far the object's interface travels")?;
         Ok((kind == BINDER_TYPE_HANDLE).then_some(handle))
     }
 
@@ -251,7 +268,11 @@ mod tests {
         p.string("路");
         p.opt_blob(None);
         p.blob(&[]);
-        assert_eq!(p.bytes().len() % 4, 0, "every value ends on a four-byte boundary");
+        assert_eq!(
+            p.bytes().len() % 4,
+            0,
+            "every value ends on a four-byte boundary"
+        );
         let mut r = Reader::new(p.bytes());
         assert_eq!(r.i32().unwrap(), -7);
         assert_eq!(r.i64().unwrap(), 1 << 40);
@@ -322,7 +343,11 @@ mod tests {
         let end = r.structure().unwrap();
         assert_eq!(r.i32().unwrap(), 7);
         r.go(end).unwrap();
-        assert_eq!(r.i32().unwrap(), 99, "what follows the structure comes next");
+        assert_eq!(
+            r.i32().unwrap(),
+            99,
+            "what follows the structure comes next"
+        );
     }
 
     #[test]

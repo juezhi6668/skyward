@@ -105,23 +105,53 @@ impl Binder {
             .iter()
             .map(Path::new)
             .find(|p| p.exists())
-            .with_context(|| format!("none of {} is here, so no hardware service can be reached", HARDWARE.join(" or ")))?;
+            .with_context(|| {
+                format!(
+                    "none of {} is here, so no hardware service can be reached",
+                    HARDWARE.join(" or ")
+                )
+            })?;
         Binder::on(node)
     }
 
     fn on(node: &Path) -> Result<Binder> {
-        let file = File::options().read(true).write(true).open(node).with_context(|| format!("open {}", node.display()))?;
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .open(node)
+            .with_context(|| format!("open {}", node.display()))?;
         let mut version: i32 = 0;
-        unsafe { call(&file, BINDER_VERSION, &mut version as *mut i32 as *mut libc::c_void) }.context("ask the driver its protocol")?;
+        unsafe {
+            call(
+                &file,
+                BINDER_VERSION,
+                &mut version as *mut i32 as *mut libc::c_void,
+            )
+        }
+        .context("ask the driver its protocol")?;
         if version != PROTOCOL {
             bail!("the driver speaks protocol {version}, Skyward speaks {PROTOCOL}");
         }
         // Skyward only ever calls out, so the driver never needs us to take
         // a call and never has to ask for a thread to take it on.
         let mut threads: u32 = 0;
-        unsafe { call(&file, BINDER_SET_MAX_THREADS, &mut threads as *mut u32 as *mut libc::c_void) }.context("give up taking calls")?;
+        unsafe {
+            call(
+                &file,
+                BINDER_SET_MAX_THREADS,
+                &mut threads as *mut u32 as *mut libc::c_void,
+            )
+        }
+        .context("give up taking calls")?;
         let map = unsafe {
-            libc::mmap(std::ptr::null_mut(), MAP_BYTES, libc::PROT_READ, libc::MAP_PRIVATE | libc::MAP_NORESERVE, file.as_raw_fd(), 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                MAP_BYTES,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE | libc::MAP_NORESERVE,
+                file.as_raw_fd(),
+                0,
+            )
         };
         if map == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error()).context("map the driver's replies");
@@ -136,7 +166,11 @@ impl Binder {
     /// directory's own object counted up and down from outside while it is
     /// still starting.
     pub fn directory(&self) -> Result<Handle<'_>> {
-        Ok(Handle { binder: self, handle: 0, held: false })
+        Ok(Handle {
+            binder: self,
+            handle: 0,
+            held: false,
+        })
     }
 
     /// Call method `code` on `handle` and wait for what it answers.
@@ -175,7 +209,14 @@ impl Binder {
                 read_buffer: read.as_mut_ptr() as u64,
                 ..WriteRead::default()
             };
-            unsafe { call(&self.file, BINDER_WRITE_READ, &mut bwr as *mut WriteRead as *mut libc::c_void) }.context("send a call")?;
+            unsafe {
+                call(
+                    &self.file,
+                    BINDER_WRITE_READ,
+                    &mut bwr as *mut WriteRead as *mut libc::c_void,
+                )
+            }
+            .context("send a call")?;
             sent = true;
             if let Some(reply) = self.answer(&read[..bwr.read_consumed as usize])? {
                 return Ok(reply);
@@ -200,14 +241,21 @@ impl Binder {
                 }
                 BR_REPLY => {
                     let raw = skip(size_of::<TransactionData>());
-                    let td: TransactionData = unsafe { std::ptr::read_unaligned(raw.as_ptr().cast()) };
+                    let td: TransactionData =
+                        unsafe { std::ptr::read_unaligned(raw.as_ptr().cast()) };
                     if td.flags & TF_STATUS_CODE != 0 {
                         let code = unsafe { std::ptr::read_unaligned(td.buffer as *const i32) };
                         self.free(td.buffer)?;
                         bail!("the call failed in the driver with error {code}");
                     }
-                    let data = unsafe { std::slice::from_raw_parts(td.buffer as *const u8, td.data_size as usize) };
-                    return Ok(Some(Reply { binder: self, buffer: td.buffer, data }));
+                    let data = unsafe {
+                        std::slice::from_raw_parts(td.buffer as *const u8, td.data_size as usize)
+                    };
+                    return Ok(Some(Reply {
+                        binder: self,
+                        buffer: td.buffer,
+                        data,
+                    }));
                 }
                 BR_DEAD_REPLY => bail!("the other side is gone"),
                 BR_FAILED_REPLY => bail!("the driver refused the call"),
@@ -232,7 +280,14 @@ impl Binder {
             write_buffer: write.as_ptr() as u64,
             ..WriteRead::default()
         };
-        unsafe { call(&self.file, BINDER_WRITE_READ, &mut bwr as *mut WriteRead as *mut libc::c_void) }.context("tell the driver")
+        unsafe {
+            call(
+                &self.file,
+                BINDER_WRITE_READ,
+                &mut bwr as *mut WriteRead as *mut libc::c_void,
+            )
+        }
+        .context("tell the driver")
     }
 
     fn free(&self, buffer: u64) -> Result<()> {
@@ -272,8 +327,14 @@ impl<'a> Handle<'a> {
     /// Take a share of an object the driver has just named, so it outlives
     /// the reply that carried it.
     pub fn hold(binder: &'a Binder, handle: u32) -> Result<Handle<'a>> {
-        binder.tell(BC_ACQUIRE, &handle.to_ne_bytes()).context("hold an object open")?;
-        Ok(Handle { binder, handle, held: true })
+        binder
+            .tell(BC_ACQUIRE, &handle.to_ne_bytes())
+            .context("hold an object open")?;
+        Ok(Handle {
+            binder,
+            handle,
+            held: true,
+        })
     }
 
     pub fn transact(&self, code: u32, data: &impl Payload) -> Result<Reply<'a>> {

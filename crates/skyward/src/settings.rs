@@ -34,7 +34,9 @@ fn read_file() -> Result<Kept> {
         Ok(text) => match Settings::read(&text) {
             Ok(settings) => Ok(Kept::Settings(settings)),
             Err(e) => {
-                skyward_sys::kmsg(&format!("{FILE} does not read as settings, and is written afresh: {e:#}"))?;
+                skyward_sys::kmsg(&format!(
+                    "{FILE} does not read as settings, and is written afresh: {e:#}"
+                ))?;
                 Ok(Kept::Nothing)
             }
         },
@@ -58,10 +60,14 @@ pub fn write(settings: &Settings) -> Result<()> {
 fn write_file(settings: &Settings) -> Result<()> {
     fs::create_dir_all(FOLDER).with_context(|| format!("make {FOLDER}"))?;
     let mut file = File::create(WRITING).with_context(|| format!("make {WRITING}"))?;
-    file.write_all(settings.text().as_bytes()).with_context(|| format!("write {WRITING}"))?;
-    file.sync_all().with_context(|| format!("write {WRITING}"))?;
+    file.write_all(settings.text().as_bytes())
+        .with_context(|| format!("write {WRITING}"))?;
+    file.sync_all()
+        .with_context(|| format!("write {WRITING}"))?;
     fs::rename(WRITING, FILE).with_context(|| format!("move {WRITING} over {FILE}"))?;
-    File::open(FOLDER).and_then(|folder| folder.sync_all()).with_context(|| format!("write {FOLDER}"))
+    File::open(FOLDER)
+        .and_then(|folder| folder.sync_all())
+        .with_context(|| format!("write {FOLDER}"))
 }
 
 /// Do `work` on /metadata, mounted read-only for the moment where it is not
@@ -71,8 +77,13 @@ fn with_metadata<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
     if mount::is_mount_point(at)? {
         return work();
     }
-    mount::mount_ro(&Path::new(skyward_block::BY_NAME).join("metadata"), at)?;
+    // The phone's own table says where its metadata is: a partition of the
+    // name on most, and on a phone that keeps none, whatever its
+    // configuration says answers for it. The table's options mount it read
+    // only, as the module's own rule has it, and it is writable only while
+    // a file is moved into it.
+    let at = skyward_block::fstab::mount("metadata")?;
     let done = work();
-    mount::umount(at)?;
+    mount::umount(&at)?;
     done
 }

@@ -65,7 +65,8 @@ impl Merger {
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
             return Err(std::io::Error::last_os_error()).context("make the merger's wake pipe");
         }
-        let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let (wake, signal) =
+            unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         let (tx, events) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("merge".into())
@@ -81,7 +82,11 @@ impl Merger {
                 }
             })
             .context("start the merger")?;
-        Ok(Merger { events, wake, thread: Some(thread) })
+        Ok(Merger {
+            events,
+            wake,
+            thread: Some(thread),
+        })
     }
 
     pub fn fd(&self) -> RawFd {
@@ -91,7 +96,14 @@ impl Merger {
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
         let mut drain = [0u8; 64];
-        while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
+        while unsafe {
+            libc::read(
+                self.wake.as_raw_fd(),
+                drain.as_mut_ptr().cast(),
+                drain.len(),
+            )
+        } > 0
+        {}
         self.events.try_iter().collect()
     }
 

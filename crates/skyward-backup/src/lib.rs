@@ -74,9 +74,16 @@ impl Manifest {
     /// The manifest in the backup's `folder`.
     pub fn read(folder: &Path) -> Result<Manifest> {
         let path = folder.join(MANIFEST);
-        let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let manifest: Manifest = toml::from_str(&text).with_context(|| format!("read {}", path.display()))?;
-        ensure!(manifest.format == FORMAT, "{} is in layout {}, which this recovery does not read", path.display(), manifest.format);
+        let text =
+            std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let manifest: Manifest =
+            toml::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+        ensure!(
+            manifest.format == FORMAT,
+            "{} is in layout {}, which this recovery does not read",
+            path.display(),
+            manifest.format
+        );
         Ok(manifest)
     }
 
@@ -85,13 +92,22 @@ impl Manifest {
         let path = folder.join(MANIFEST);
         let text = toml::to_string(self).context("write the manifest")?;
         let mut file = skyward_files::make_file(&path, ownership)?;
-        file.write_all(text.as_bytes()).with_context(|| format!("write {}", path.display()))?;
-        file.sync_all().with_context(|| format!("write {}", path.display()))
+        file.write_all(text.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("write {}", path.display()))
     }
 
     /// Which of [`Part::ALL`] it holds.
     pub fn parts(&self) -> [bool; 4] {
         Part::ALL.map(|p| self.items.iter().any(|i| i.part == p))
+    }
+
+    /// What it holds, by partition name, in the order its manifest lists
+    /// them: what a restore is chosen from, since a backup of one phone's
+    /// partitions is not a backup of another phone's parts.
+    pub fn names(&self) -> Vec<String> {
+        self.items.iter().map(|i| i.name.clone()).collect()
     }
 
     /// The bytes its files take.
@@ -109,7 +125,13 @@ mod tests {
     fn a_manifest_reads_back_as_written() {
         let at = std::env::temp_dir().join(format!("skyward-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&at).unwrap();
-        let stored = |name: &str, size| Stored { files: vec![format!("{name}.000")], size, stored: size / 2, compressed: true, sha256: "ab".repeat(32) };
+        let stored = |name: &str, size| Stored {
+            files: vec![format!("{name}.000")],
+            size,
+            stored: size / 2,
+            compressed: true,
+            sha256: "ab".repeat(32),
+        };
         let m = Manifest {
             format: FORMAT,
             device: "ishtar".into(),
@@ -118,8 +140,16 @@ mod tests {
             system: Some("OS3.0.305.0.WMACNXM".into()),
             data_key: Some("00112233445566778899aabbccddeeff".into()),
             items: vec![
-                Item { part: Part::Boot, name: "boot".into(), stored: stored("boot", 201_326_592) },
-                Item { part: Part::Data, name: "data".into(), stored: stored("data", 9_000_000_000) },
+                Item {
+                    part: Part::Boot,
+                    name: "boot".into(),
+                    stored: stored("boot", 201_326_592),
+                },
+                Item {
+                    part: Part::Data,
+                    name: "data".into(),
+                    stored: stored("data", 9_000_000_000),
+                },
             ],
         };
         m.write(&at, Ownership::Kept).unwrap();

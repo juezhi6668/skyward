@@ -24,12 +24,20 @@ pub struct Header {
 impl Header {
     pub fn read(bytes: &[u8]) -> Option<Header> {
         let mut r = Reader::new(bytes.get(..HEADER)?);
-        Some(Header { length: r.u32()?, kind: r.u16()?, code: r.u16()?, transaction: r.u32()? })
+        Some(Header {
+            length: r.u32()?,
+            kind: r.u16()?,
+            code: r.u16()?,
+            transaction: r.u32()?,
+        })
     }
 
     pub fn bytes(&self) -> [u8; HEADER] {
         let mut w = Writer::new();
-        w.u32(self.length).u16(self.kind).u16(self.code).u32(self.transaction);
+        w.u32(self.length)
+            .u16(self.kind)
+            .u16(self.code)
+            .u32(self.transaction);
         w.into_bytes().try_into().expect("a header is twelve bytes")
     }
 }
@@ -48,12 +56,20 @@ impl Command {
     pub fn read(bytes: &[u8]) -> Option<Command> {
         let header = Header::read(bytes)?;
         let rest = bytes.len() - HEADER;
-        if header.kind != container::COMMAND || header.length as usize != bytes.len() || !rest.is_multiple_of(4) || rest > 5 * 4 {
+        if header.kind != container::COMMAND
+            || header.length as usize != bytes.len()
+            || !rest.is_multiple_of(4)
+            || rest > 5 * 4
+        {
             return None;
         }
         let mut r = Reader::new(&bytes[HEADER..]);
         let params = (0..rest / 4).map(|_| r.u32()).collect::<Option<_>>()?;
-        Some(Command { code: header.code, transaction: header.transaction, params })
+        Some(Command {
+            code: header.code,
+            transaction: header.transaction,
+            params,
+        })
     }
 
     /// The first `N` parameters, which the operation needs; `None` where
@@ -79,7 +95,13 @@ pub fn short(kind: u16, code: u16, transaction: u32, params: &[u32]) -> Vec<u8> 
 /// it to its end on the bus instead.
 pub fn data_header(code: u16, transaction: u32, length: u64) -> [u8; HEADER] {
     let length = u32::try_from(length + HEADER as u64).unwrap_or(u32::MAX);
-    Header { length, kind: container::DATA, code, transaction }.bytes()
+    Header {
+        length,
+        kind: container::DATA,
+        code,
+        transaction,
+    }
+    .bytes()
 }
 
 /// A dataset being written.
@@ -206,11 +228,16 @@ impl<'a> Reader<'a> {
         if count == 0 {
             return Some(String::new());
         }
-        let units = (0..count).map(|_| self.u16()).collect::<Option<Vec<u16>>>()?;
+        let units = (0..count)
+            .map(|_| self.u16())
+            .collect::<Option<Vec<u16>>>()?;
         if units[count - 1] != 0 {
             return None;
         }
-        let end = units.iter().position(|&u| u == 0).expect("the last unit is zero");
+        let end = units
+            .iter()
+            .position(|&u| u == 0)
+            .expect("the last unit is zero");
         String::from_utf16(&units[..end]).ok()
     }
 
@@ -227,10 +254,18 @@ mod tests {
     #[test]
     fn numbers_and_strings_read_back_as_written() {
         let mut w = Writer::new();
-        w.u8(7).u16(0x1234).u32(0xDEAD_BEEF).u64(1 << 40).string("相册 📷 photos").string("");
+        w.u8(7)
+            .u16(0x1234)
+            .u32(0xDEAD_BEEF)
+            .u64(1 << 40)
+            .string("相册 📷 photos")
+            .string("");
         let bytes = w.into_bytes();
         let mut r = Reader::new(&bytes);
-        assert_eq!((r.u8(), r.u16(), r.u32(), r.u64()), (Some(7), Some(0x1234), Some(0xDEAD_BEEF), Some(1 << 40)));
+        assert_eq!(
+            (r.u8(), r.u16(), r.u32(), r.u64()),
+            (Some(7), Some(0x1234), Some(0xDEAD_BEEF), Some(1 << 40))
+        );
         assert_eq!(r.string().as_deref(), Some("相册 📷 photos"));
         assert_eq!(r.string().as_deref(), Some(""));
         assert!(r.rest().is_empty());
@@ -262,32 +297,75 @@ mod tests {
 
     #[test]
     fn strings_that_are_not_utf16_or_not_ended_are_refused() {
-        assert_eq!(Reader::new(&[2, b'a', 0, b'b', 0]).string(), None, "no terminating zero");
-        assert_eq!(Reader::new(&[2, 0x00, 0xD8, 0, 0]).string(), None, "a lone surrogate");
+        assert_eq!(
+            Reader::new(&[2, b'a', 0, b'b', 0]).string(),
+            None,
+            "no terminating zero"
+        );
+        assert_eq!(
+            Reader::new(&[2, 0x00, 0xD8, 0, 0]).string(),
+            None,
+            "a lone surrogate"
+        );
         assert_eq!(Reader::new(&[3, b'a', 0]).string(), None, "cut off");
-        assert_eq!(Reader::new(&[4, b'a', 0, 0, 0, b'b', 0, 0, 0]).string().as_deref(), Some("a"), "ends at the first zero");
+        assert_eq!(
+            Reader::new(&[4, b'a', 0, 0, 0, b'b', 0, 0, 0])
+                .string()
+                .as_deref(),
+            Some("a"),
+            "ends at the first zero"
+        );
     }
 
     #[test]
     fn commands_are_read_whole_with_up_to_five_parameters() {
-        let bytes = short(container::COMMAND, 0x1007, 9, &[0x0001_0001, 0, 0xFFFF_FFFF]);
+        let bytes = short(
+            container::COMMAND,
+            0x1007,
+            9,
+            &[0x0001_0001, 0, 0xFFFF_FFFF],
+        );
         let cmd = Command::read(&bytes).unwrap();
-        assert_eq!(cmd, Command { code: 0x1007, transaction: 9, params: vec![0x0001_0001, 0, 0xFFFF_FFFF] });
+        assert_eq!(
+            cmd,
+            Command {
+                code: 0x1007,
+                transaction: 9,
+                params: vec![0x0001_0001, 0, 0xFFFF_FFFF]
+            }
+        );
         assert_eq!(cmd.take::<3>(), Some([0x0001_0001, 0, 0xFFFF_FFFF]));
         assert_eq!(cmd.take::<4>(), None, "the operation needs more than came");
         assert!(Command::read(&short(container::COMMAND, 0x1001, 1, &[])).is_some());
-        assert!(Command::read(&short(container::DATA, 0x1001, 1, &[])).is_none(), "not a command");
-        assert!(Command::read(&short(container::COMMAND, 0x1001, 1, &[1, 2, 3, 4, 5, 6])).is_none(), "six parameters");
+        assert!(
+            Command::read(&short(container::DATA, 0x1001, 1, &[])).is_none(),
+            "not a command"
+        );
+        assert!(
+            Command::read(&short(container::COMMAND, 0x1001, 1, &[1, 2, 3, 4, 5, 6])).is_none(),
+            "six parameters"
+        );
         let mut short_by_one = short(container::COMMAND, 0x1001, 1, &[1]);
         short_by_one.pop();
-        assert!(Command::read(&short_by_one).is_none(), "the header counts more than came");
+        assert!(
+            Command::read(&short_by_one).is_none(),
+            "the header counts more than came"
+        );
         assert!(Command::read(&[0; 4]).is_none());
     }
 
     #[test]
     fn a_data_header_past_four_gibibytes_says_the_largest_length() {
         let small = Header::read(&data_header(0x1009, 3, 100)).unwrap();
-        assert_eq!(small, Header { length: 112, kind: container::DATA, code: 0x1009, transaction: 3 });
+        assert_eq!(
+            small,
+            Header {
+                length: 112,
+                kind: container::DATA,
+                code: 0x1009,
+                transaction: 3
+            }
+        );
         let big = Header::read(&data_header(0x1009, 3, 5 << 30)).unwrap();
         assert_eq!(big.length, u32::MAX);
         let edge = Header::read(&data_header(0x1009, 3, u64::from(u32::MAX) - 12)).unwrap();

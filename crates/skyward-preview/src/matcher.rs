@@ -38,7 +38,13 @@ fn luma(r: u8, g: u8, b: u8) -> f32 {
     0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32
 }
 
-fn measure(px: impl Fn(u32, u32) -> (u8, u8, u8), w: u32, h: u32, bg: [u8; 3], ink: [u8; 3]) -> Ink {
+fn measure(
+    px: impl Fn(u32, u32) -> (u8, u8, u8),
+    w: u32,
+    h: u32,
+    bg: [u8; 3],
+    ink: [u8; 3],
+) -> Ink {
     let (lb, li) = (luma(bg[0], bg[1], bg[2]), luma(ink[0], ink[1], ink[2]));
     let (mut total, mut x0, mut y0, mut x1, mut y1) = (0.0, u32::MAX, u32::MAX, 0, 0);
     for y in 0..h {
@@ -51,12 +57,17 @@ fn measure(px: impl Fn(u32, u32) -> (u8, u8, u8), w: u32, h: u32, bg: [u8; 3], i
             }
         }
     }
-    let (w, h) = if x0 == u32::MAX { (0.0, 0.0) } else { ((x1 - x0 + 1) as f32, (y1 - y0 + 1) as f32) };
+    let (w, h) = if x0 == u32::MAX {
+        (0.0, 0.0)
+    } else {
+        ((x1 - x0 + 1) as f32, (y1 - y0 + 1) as f32)
+    };
     Ink { total, w, h }
 }
 
 fn load_rgb(path: &Path) -> Result<(u32, u32, usize, Vec<u8>)> {
-    let decoder = png::Decoder::new(File::open(path).with_context(|| format!("open {}", path.display()))?);
+    let decoder =
+        png::Decoder::new(File::open(path).with_context(|| format!("open {}", path.display()))?);
     let mut reader = decoder.read_info()?;
     let mut buf = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf)?;
@@ -69,11 +80,15 @@ fn load_rgb(path: &Path) -> Result<(u32, u32, usize, Vec<u8>)> {
 /// For every probe, search size and weight so that rendered text matches the
 /// screenshot's ink width, height and total coverage; print the best fits.
 pub fn run(fonts: &Fonts, probes: &Path) -> Result<()> {
-    let text = std::fs::read_to_string(probes).with_context(|| format!("read {}", probes.display()))?;
+    let text =
+        std::fs::read_to_string(probes).with_context(|| format!("read {}", probes.display()))?;
     let p: Probes = toml::from_str(&text).context("parse probes")?;
     let (rw, rh, ch, data) = load_rgb(Path::new(&p.reference))?;
     let weights: Vec<f32> = (0..=40).map(|i| 300.0 + 10.0 * i as f32).collect();
-    let faces = weights.iter().map(|&w| fonts.face(w)).collect::<Result<Vec<_>>>()?;
+    let faces = weights
+        .iter()
+        .map(|&w| fonts.face(w))
+        .collect::<Result<Vec<_>>>()?;
     let ruler = Canvas::new(1, 1);
     for pr in &p.probe {
         let [cx, cy, cw, chh] = pr.crop;
@@ -85,7 +100,10 @@ pub fn run(fonts: &Fonts, probes: &Path) -> Result<()> {
             (data[i], data[i + 1], data[i + 2])
         };
         let want = measure(at, cw, chh, pr.bg, pr.ink);
-        let (bg, ink) = (Rgba::rgb(pr.bg[0], pr.bg[1], pr.bg[2]), Rgba::rgb(pr.ink[0], pr.ink[1], pr.ink[2]));
+        let (bg, ink) = (
+            Rgba::rgb(pr.bg[0], pr.bg[1], pr.bg[2]),
+            Rgba::rgb(pr.ink[0], pr.ink[1], pr.ink[2]),
+        );
         let mut fits = Vec::new();
         let steps = ((pr.size[1] - pr.size[0]) / 0.1).round() as i32;
         for s in 0..=steps {

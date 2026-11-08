@@ -122,13 +122,17 @@ fn exists(path: &Path) -> Result<bool> {
 }
 
 fn name(path: &Path) -> Result<&OsStr> {
-    path.file_name().with_context(|| format!("{} names no entry", path.display()))
+    path.file_name()
+        .with_context(|| format!("{} names no entry", path.display()))
 }
 
 /// Where an entry really is: its folder with every link in the way
 /// followed, and its own name, the entry itself not followed if a link.
 fn real(path: &Path) -> Result<PathBuf> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let folder = fs::canonicalize(parent).with_context(|| format!("find {}", parent.display()))?;
     Ok(folder.join(name(path)?))
 }
@@ -136,7 +140,9 @@ fn real(path: &Path) -> Result<PathBuf> {
 /// Whether an entry is where a filesystem, or a file, is mounted: it sits
 /// on another device than the folder it is in.
 fn mounted_at(path: &Path, meta: &fs::Metadata) -> Result<bool> {
-    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else { return Ok(true) };
+    let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return Ok(true);
+    };
     let up = fs::metadata(parent).with_context(|| format!("look at {}", parent.display()))?;
     Ok(up.dev() != meta.dev())
 }
@@ -146,10 +152,19 @@ fn mounted_at(path: &Path, meta: &fs::Metadata) -> Result<bool> {
 /// filesystem mounted on or inside it is refused: the work would reach
 /// into that filesystem.
 fn measure(paths: &[PathBuf], one_filesystem: bool) -> Result<(u64, u64)> {
-    fn walk(path: &Path, dev: Option<u64>, one_filesystem: bool, sum: &mut (u64, u64)) -> Result<()> {
-        let meta = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
+    fn walk(
+        path: &Path,
+        dev: Option<u64>,
+        one_filesystem: bool,
+        sum: &mut (u64, u64),
+    ) -> Result<()> {
+        let meta =
+            fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
         if one_filesystem && meta.is_dir() && dev.is_some_and(|d| d != meta.dev()) {
-            bail!("another filesystem is mounted at {}; unmount it first", path.display());
+            bail!(
+                "another filesystem is mounted at {}; unmount it first",
+                path.display()
+            );
         }
         sum.1 += 1;
         if meta.is_file() {
@@ -165,9 +180,13 @@ fn measure(paths: &[PathBuf], one_filesystem: bool) -> Result<(u64, u64)> {
     let mut sum = (0, 0);
     for path in paths {
         if one_filesystem {
-            let meta = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
+            let meta = fs::symlink_metadata(path)
+                .with_context(|| format!("look at {}", path.display()))?;
             if meta.is_dir() && mounted_at(path, &meta)? {
-                bail!("a filesystem is mounted at {}; unmount it first", path.display());
+                bail!(
+                    "a filesystem is mounted at {}; unmount it first",
+                    path.display()
+                );
             }
         }
         walk(path, None, one_filesystem, &mut sum)?;
@@ -193,7 +212,10 @@ pub fn clashes(sources: &[PathBuf], into: &Path) -> Result<Vec<PathBuf>> {
 fn free_name(into: &Path, name: &OsStr) -> Result<PathBuf> {
     let as_path = Path::new(name);
     let stem = as_path.file_stem().unwrap_or(name).to_string_lossy();
-    let extension = as_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let extension = as_path
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
     for n in 1.. {
         let candidate = into.join(format!("{stem} ({n}){extension}"));
         if !exists(&candidate)? {
@@ -207,13 +229,19 @@ fn free_name(into: &Path, name: &OsStr) -> Result<PathBuf> {
 /// what cannot be done refused before anything is written. An entry moved
 /// to the folder it is in already stays as it is; one copied there is a
 /// second one beside it, under a name of its own.
-fn plan(sources: &[PathBuf], into: &Path, clash: Clash, moving: bool) -> Result<Vec<(PathBuf, PathBuf)>> {
+fn plan(
+    sources: &[PathBuf],
+    into: &Path,
+    clash: Clash,
+    moving: bool,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
     let folder = fs::metadata(into).with_context(|| format!("look at {}", into.display()))?;
     ensure!(folder.is_dir(), "{} is not a folder", into.display());
     let into_real = fs::canonicalize(into).with_context(|| format!("find {}", into.display()))?;
     let mut out = Vec::new();
     for source in sources {
-        let meta = fs::symlink_metadata(source).with_context(|| format!("look at {}", source.display()))?;
+        let meta = fs::symlink_metadata(source)
+            .with_context(|| format!("look at {}", source.display()))?;
         let source_real = real(source)?;
         if meta.is_dir() && into_real.starts_with(&source_real) {
             bail!("{} cannot go inside itself", source.display());
@@ -246,21 +274,36 @@ fn keeps(into: &Path) -> Result<Keeps> {
     use std::os::unix::ffi::OsStrExt;
     const EXFAT_SUPER_MAGIC: u64 = 0x2011_bab0;
     const SDCARDFS_SUPER_MAGIC: u64 = 0x5dca_2df5;
-    let c = std::ffi::CString::new(into.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", into.display()))?;
+    let c = std::ffi::CString::new(into.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", into.display()))?;
     let mut st: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("look at the filesystem of {}", into.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("look at the filesystem of {}", into.display()));
     }
-    let foreign = [libc::MSDOS_SUPER_MAGIC as u64, EXFAT_SUPER_MAGIC, libc::FUSE_SUPER_MAGIC as u64, SDCARDFS_SUPER_MAGIC];
+    let foreign = [
+        libc::MSDOS_SUPER_MAGIC as u64,
+        EXFAT_SUPER_MAGIC,
+        libc::FUSE_SUPER_MAGIC as u64,
+        SDCARDFS_SUPER_MAGIC,
+    ];
     let native = !foreign.contains(&st.f_type);
-    Ok(Keeps { owner: native, mode: native, xattrs: native })
+    Ok(Keeps {
+        owner: native,
+        mode: native,
+        xattrs: native,
+    })
 }
 
 /// A computer the tests run on keeps owners and permissions; extended
 /// attributes are copied only on the phone.
 #[cfg(not(target_os = "android"))]
 fn keeps(_into: &Path) -> Result<Keeps> {
-    Ok(Keeps { owner: true, mode: true, xattrs: false })
+    Ok(Keeps {
+        owner: true,
+        mode: true,
+        xattrs: false,
+    })
 }
 
 /// What each entry a copy into the folder `into` makes is given under
@@ -270,21 +313,39 @@ fn give(into: &Path, ownership: Ownership) -> Result<Give> {
     if ownership == Ownership::Kept {
         return Ok(Give::Original(keeps));
     }
-    ensure!(keeps.owner, "{} is on a filesystem that keeps no owners to give what is made there", into.display());
+    ensure!(
+        keeps.owner,
+        "{} is on a filesystem that keeps no owners to give what is made there",
+        into.display()
+    );
     let folder = fs::metadata(into).with_context(|| format!("look at {}", into.display()))?;
     let mode = (ownership == Ownership::Shared).then_some(folder.mode() & 0o7777);
-    Ok(Give::Folder(Like { uid: folder.uid(), gid: folder.gid(), label: label(into)?, mode }))
+    Ok(Give::Folder(Like {
+        uid: folder.uid(),
+        gid: folder.gid(),
+        label: label(into)?,
+        mode,
+    }))
 }
 
 /// The SELinux label of the folder `into`, as stored.
 #[cfg(target_os = "android")]
 fn label(into: &Path) -> Result<Option<Vec<u8>>> {
     use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(into.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", into.display()))?;
+    let c = std::ffi::CString::new(into.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", into.display()))?;
     let mut value = vec![0u8; 256];
-    let len = unsafe { libc::getxattr(c.as_ptr(), c"security.selinux".as_ptr(), value.as_mut_ptr().cast(), value.len()) };
+    let len = unsafe {
+        libc::getxattr(
+            c.as_ptr(),
+            c"security.selinux".as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len(),
+        )
+    };
     if len < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("read the label of {}", into.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("read the label of {}", into.display()));
     }
     value.truncate(len as usize);
     Ok(Some(value))
@@ -309,7 +370,11 @@ pub fn copy(
     let plan = plan(sources, into, clash, false)?;
     let froms: Vec<PathBuf> = plan.iter().map(|(from, _)| from.clone()).collect();
     let (total_bytes, total_entries) = measure(&froms, false)?;
-    let mut p = Progress { total_bytes, total_entries, ..Progress::default() };
+    let mut p = Progress {
+        total_bytes,
+        total_entries,
+        ..Progress::default()
+    };
     progress(p);
     let give = give(into, ownership)?;
     for (from, to) in plan {
@@ -335,7 +400,11 @@ pub fn move_into(
     let plan = plan(sources, into, clash, true)?;
     let froms: Vec<PathBuf> = plan.iter().map(|(from, _)| from.clone()).collect();
     let (total_bytes, total_entries) = measure(&froms, true)?;
-    let mut p = Progress { total_bytes, total_entries, ..Progress::default() };
+    let mut p = Progress {
+        total_bytes,
+        total_entries,
+        ..Progress::default()
+    };
     progress(p);
     let give = give(into, ownership)?;
     for (from, to) in plan {
@@ -354,7 +423,10 @@ pub fn move_into(
                 copy_entry(&from, &to, &give, cancel, &mut p, progress)?;
                 remove(&from, cancel, &mut Progress::default(), &mut |_| {})?;
             }
-            Err(e) => return Err(e).with_context(|| format!("move {} to {}", from.display(), to.display())),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("move {} to {}", from.display(), to.display()))
+            }
         }
     }
     Ok(())
@@ -367,7 +439,10 @@ pub fn make_folders(path: &Path, ownership: Ownership) -> Result<()> {
     if exists(path)? {
         return Ok(());
     }
-    let into = path.parent().filter(|p| !p.as_os_str().is_empty()).with_context(|| format!("{} is in no folder", path.display()))?;
+    let into = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .with_context(|| format!("{} is in no folder", path.display()))?;
     make_folders(into, ownership)?;
     let give = give(into, ownership)?;
     fs::create_dir(path).with_context(|| format!("make {}", path.display()))?;
@@ -377,9 +452,17 @@ pub fn make_folders(path: &Path, ownership: Ownership) -> Result<()> {
 /// Make the file `path`, which is not there yet, given what `ownership`
 /// says as a copy into its folder would be, and open it to be written.
 pub fn make_file(path: &Path, ownership: Ownership) -> Result<File> {
-    let into = path.parent().filter(|p| !p.as_os_str().is_empty()).with_context(|| format!("{} is in no folder", path.display()))?;
+    let into = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .with_context(|| format!("{} is in no folder", path.display()))?;
     let give = give(into, ownership)?;
-    let file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).with_context(|| format!("make {}", path.display()))?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("make {}", path.display()))?;
     given(path, &give, false)?;
     Ok(file)
 }
@@ -389,14 +472,18 @@ pub fn make_file(path: &Path, ownership: Ownership) -> Result<File> {
 /// without execute. One that keeps an original's keeps what it was made
 /// with, as there is no original.
 fn given(path: &Path, give: &Give, folder: bool) -> Result<()> {
-    let Give::Folder(like) = give else { return Ok(()) };
+    let Give::Folder(like) = give else {
+        return Ok(());
+    };
     if let Some(label) = &like.label {
         set_label(path, label)?;
     }
-    std::os::unix::fs::lchown(path, Some(like.uid), Some(like.gid)).with_context(|| format!("give {} its owner", path.display()))?;
+    std::os::unix::fs::lchown(path, Some(like.uid), Some(like.gid))
+        .with_context(|| format!("give {} its owner", path.display()))?;
     if let Some(mode) = like.mode {
         let mode = if folder { mode } else { mode & 0o666 };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).with_context(|| format!("give {} its permissions", path.display()))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .with_context(|| format!("give {} its permissions", path.display()))?;
     }
     Ok(())
 }
@@ -411,7 +498,9 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf> {
         !new.is_empty() && new != "." && new != ".." && !new.contains(['/', '\0']),
         "{new:?} cannot be the name of a file or folder"
     );
-    let folder = path.parent().with_context(|| format!("{} is in no folder", path.display()))?;
+    let folder = path
+        .parent()
+        .with_context(|| format!("{} is in no folder", path.display()))?;
     let to = folder.join(new);
     if to == path {
         return Ok(to);
@@ -419,15 +508,21 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf> {
     if exists(&to)? {
         let mut named = false;
         for entry in fs::read_dir(folder).with_context(|| format!("read {}", folder.display()))? {
-            named |= entry.with_context(|| format!("read {}", folder.display()))?.file_name() == new;
+            named |= entry
+                .with_context(|| format!("read {}", folder.display()))?
+                .file_name()
+                == new;
         }
-        let own = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
-        let found = fs::symlink_metadata(&to).with_context(|| format!("look at {}", to.display()))?;
+        let own =
+            fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
+        let found =
+            fs::symlink_metadata(&to).with_context(|| format!("look at {}", to.display()))?;
         if named || (own.dev(), own.ino()) != (found.dev(), found.ino()) {
             return Err(Taken(to).into());
         }
         let step = free_name(folder, name(path)?)?;
-        fs::rename(path, &step).with_context(|| format!("rename {} to {}", path.display(), step.display()))?;
+        fs::rename(path, &step)
+            .with_context(|| format!("rename {} to {}", path.display(), step.display()))?;
         fs::rename(&step, &to).with_context(|| format!("rename {} to {new}", step.display()))?;
         return Ok(to);
     }
@@ -441,18 +536,34 @@ pub fn rename(path: &Path, new: &str) -> Result<PathBuf> {
 /// they were.
 pub fn set_mode(path: &Path, mode: u32) -> Result<u32> {
     let mode = mode & 0o7777;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).with_context(|| format!("give {} the permissions {mode:04o}", path.display()))?;
-    Ok(fs::metadata(path).with_context(|| format!("look at {}", path.display()))?.mode() & 0o7777)
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("give {} the permissions {mode:04o}", path.display()))?;
+    Ok(fs::metadata(path)
+        .with_context(|| format!("look at {}", path.display()))?
+        .mode()
+        & 0o7777)
 }
 
 /// What the file at `path` holds, if that is no more than `most` bytes.
 pub fn read_up_to(path: &Path, most: u64) -> Result<Option<Vec<u8>>> {
     // Opened without waiting, as a pipe waits for a writer, to be turned
     // down for what it is.
-    let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path).with_context(|| format!("open {}", path.display()))?;
-    ensure!(file.metadata().with_context(|| format!("look at {}", path.display()))?.is_file(), "{} is not a file", path.display());
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    ensure!(
+        file.metadata()
+            .with_context(|| format!("look at {}", path.display()))?
+            .is_file(),
+        "{} is not a file",
+        path.display()
+    );
     let mut bytes = Vec::new();
-    file.take(most + 1).read_to_end(&mut bytes).with_context(|| format!("read {}", path.display()))?;
+    file.take(most + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
     Ok((bytes.len() as u64 <= most).then_some(bytes))
 }
 
@@ -466,36 +577,59 @@ pub fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     let meta = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
     ensure!(meta.is_file(), "{} is not a file", path.display());
     if meta.nlink() > 1 || mounted_at(path, &meta)? {
-        let mut file = OpenOptions::new().write(true).truncate(true).open(path).with_context(|| format!("open {}", path.display()))?;
-        file.write_all(bytes).with_context(|| format!("write {}", path.display()))?;
-        return file.sync_all().with_context(|| format!("write {}", path.display()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .with_context(|| format!("open {}", path.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {}", path.display()))?;
+        return file
+            .sync_all()
+            .with_context(|| format!("write {}", path.display()));
     }
-    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let (temp, mut file) = beside(path)?;
     let written = (|| -> Result<()> {
-        file.write_all(bytes).with_context(|| format!("write {}", temp.display()))?;
-        file.sync_all().with_context(|| format!("write {}", temp.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("write {}", temp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("write {}", temp.display()))?;
         attributes(path, &temp, &meta, &Give::Original(keeps(folder)?))?;
-        fs::rename(&temp, path).with_context(|| format!("put {} in place of {}", temp.display(), path.display()))
+        fs::rename(&temp, path)
+            .with_context(|| format!("put {} in place of {}", temp.display(), path.display()))
     })();
     if written.is_err() {
         drop(file);
         fs::remove_file(&temp).with_context(|| format!("take away {}", temp.display()))?;
         return written;
     }
-    File::open(folder).and_then(|f| f.sync_all()).with_context(|| format!("write {}", folder.display()))
+    File::open(folder)
+        .and_then(|f| f.sync_all())
+        .with_context(|| format!("write {}", folder.display()))
 }
 
 /// A new file beside the file at `path`, hidden and named after it, to be
 /// written and then put in its place.
 fn beside(path: &Path) -> Result<(PathBuf, File)> {
-    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     for n in 0.. {
         let mut temp = std::ffi::OsString::from(".");
         temp.push(name(path)?);
         temp.push(format!(".{n}.saving"));
         let temp = folder.join(temp);
-        match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)
+        {
             Ok(file) => return Ok((temp, file)),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e).with_context(|| format!("make {}", temp.display())),
@@ -538,10 +672,24 @@ enum Treat {
 fn treat(rel: &Path) -> Treat {
     let names: Vec<&OsStr> = rel.iter().collect();
     match names.as_slice() {
-        [top, _, ..] if ["data", "user", "user_de", "storage_area"].iter().any(|n| top == n) => Treat::Leave,
+        [top, _, ..]
+            if ["data", "user", "user_de", "storage_area"]
+                .iter()
+                .any(|n| top == n) =>
+        {
+            Treat::Leave
+        }
         [misc, _, sandbox, ..] if *misc == "misc_de" && *sandbox == "sdksandbox" => Treat::Leave,
-        [top, ..] if ["system_ce", "vendor_ce", "misc_ce"].iter().any(|n| top == n) => Treat::Alone,
-        [misc, profiles, cur, _] if *misc == "misc" && *profiles == "profiles" && *cur == "cur" => Treat::Within,
+        [top, ..]
+            if ["system_ce", "vendor_ce", "misc_ce"]
+                .iter()
+                .any(|n| top == n) =>
+        {
+            Treat::Alone
+        }
+        [misc, profiles, cur, _] if *misc == "misc" && *profiles == "profiles" && *cur == "cur" => {
+            Treat::Within
+        }
         _ => Treat::Label,
     }
 }
@@ -561,7 +709,9 @@ pub fn relabel(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Relabeling),
 ) -> Result<()> {
-    let dev = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?.dev();
+    let dev = fs::symlink_metadata(root)
+        .with_context(|| format!("look at {}", root.display()))?
+        .dev();
     let mut p = Relabeling::default();
     progress(p);
     walk_labeled(root, Path::new(""), dev, cancel, &mut |_, _, _| {
@@ -603,16 +753,30 @@ fn walk_labeled(
     }
     for entry in fs::read_dir(path).with_context(|| format!("read {}", path.display()))? {
         let entry = entry.with_context(|| format!("read {}", path.display()))?;
-        walk_labeled(&entry.path(), &rel.join(entry.file_name()), dev, cancel, visit)?;
+        walk_labeled(
+            &entry.path(),
+            &rel.join(entry.file_name()),
+            dev,
+            cancel,
+            visit,
+        )?;
     }
     Ok(())
 }
 
 /// Delete each of `paths`, folders with all they hold. A folder that has a
 /// filesystem mounted on or inside it is refused before anything goes.
-pub fn delete(paths: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+pub fn delete(
+    paths: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     let (total_bytes, total_entries) = measure(paths, true)?;
-    let mut p = Progress { total_bytes, total_entries, ..Progress::default() };
+    let mut p = Progress {
+        total_bytes,
+        total_entries,
+        ..Progress::default()
+    };
     progress(p);
     for path in paths {
         remove(path, cancel, &mut p, progress)?;
@@ -625,7 +789,11 @@ pub fn delete(paths: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn FnMut(P
 /// those keep them where they left them. A folder that is not there holds
 /// nothing to delete; one with another filesystem mounted inside it is
 /// refused before anything goes.
-pub fn delete_files(folders: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+pub fn delete_files(
+    folders: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     let mut files = Vec::new();
     for folder in folders {
         if exists(folder)? {
@@ -633,7 +801,11 @@ pub fn delete_files(folders: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn
         }
     }
     let total_bytes = files.iter().map(|(_, len)| len).sum();
-    let mut p = Progress { total_bytes, total_entries: files.len() as u64, ..Progress::default() };
+    let mut p = Progress {
+        total_bytes,
+        total_entries: files.len() as u64,
+        ..Progress::default()
+    };
     progress(p);
     for (file, len) in &files {
         going(cancel)?;
@@ -648,14 +820,21 @@ pub fn delete_files(folders: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn
 /// The files under `folder` and how many bytes each holds, added to `out`;
 /// `dev` is the device of the folder it is in, which it has to be on.
 fn files_in(folder: &Path, dev: Option<u64>, out: &mut Vec<(PathBuf, u64)>) -> Result<()> {
-    let meta = fs::symlink_metadata(folder).with_context(|| format!("look at {}", folder.display()))?;
+    let meta =
+        fs::symlink_metadata(folder).with_context(|| format!("look at {}", folder.display()))?;
     ensure!(meta.is_dir(), "{} is not a folder", folder.display());
     if dev.is_some_and(|d| d != meta.dev()) {
-        bail!("another filesystem is mounted at {}; unmount it first", folder.display());
+        bail!(
+            "another filesystem is mounted at {}; unmount it first",
+            folder.display()
+        );
     }
     for entry in fs::read_dir(folder).with_context(|| format!("read {}", folder.display()))? {
-        let path = entry.with_context(|| format!("read {}", folder.display()))?.path();
-        let inside = fs::symlink_metadata(&path).with_context(|| format!("look at {}", path.display()))?;
+        let path = entry
+            .with_context(|| format!("read {}", folder.display()))?
+            .path();
+        let inside =
+            fs::symlink_metadata(&path).with_context(|| format!("look at {}", path.display()))?;
         if inside.is_dir() {
             files_in(&path, Some(meta.dev()), out)?;
         } else if inside.is_file() {
@@ -665,7 +844,12 @@ fn files_in(folder: &Path, dev: Option<u64>, out: &mut Vec<(PathBuf, u64)>) -> R
     Ok(())
 }
 
-fn remove(path: &Path, cancel: &AtomicBool, p: &mut Progress, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+fn remove(
+    path: &Path,
+    cancel: &AtomicBool,
+    p: &mut Progress,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     going(cancel)?;
     let meta = fs::symlink_metadata(path).with_context(|| format!("look at {}", path.display()))?;
     if meta.is_dir() {
@@ -685,13 +869,22 @@ fn remove(path: &Path, cancel: &AtomicBool, p: &mut Progress, progress: &mut dyn
     Ok(())
 }
 
-fn copy_entry(from: &Path, to: &Path, give: &Give, cancel: &AtomicBool, p: &mut Progress, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+fn copy_entry(
+    from: &Path,
+    to: &Path,
+    give: &Give,
+    cancel: &AtomicBool,
+    p: &mut Progress,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     going(cancel)?;
     let meta = fs::symlink_metadata(from).with_context(|| format!("look at {}", from.display()))?;
     let kind = meta.file_type();
     if kind.is_symlink() {
-        let target = fs::read_link(from).with_context(|| format!("read the link {}", from.display()))?;
-        std::os::unix::fs::symlink(&target, to).with_context(|| format!("make the link {}", to.display()))?;
+        let target =
+            fs::read_link(from).with_context(|| format!("read the link {}", from.display()))?;
+        std::os::unix::fs::symlink(&target, to)
+            .with_context(|| format!("make the link {}", to.display()))?;
     } else if kind.is_dir() {
         fs::create_dir(to).with_context(|| format!("make {}", to.display()))?;
         let mut entries: Vec<PathBuf> = fs::read_dir(from)
@@ -708,7 +901,10 @@ fn copy_entry(from: &Path, to: &Path, give: &Give, cancel: &AtomicBool, p: &mut 
     } else if kind.is_block_device() || kind.is_char_device() || kind.is_fifo() {
         make_node(to, meta.mode(), meta.rdev())?;
     } else {
-        bail!("{} is a socket, which only the program that made it can answer", from.display());
+        bail!(
+            "{} is a socket, which only the program that made it can answer",
+            from.display()
+        );
     }
     keep(from, to, &meta, give)?;
     p.entries += 1;
@@ -718,7 +914,13 @@ fn copy_entry(from: &Path, to: &Path, give: &Give, cancel: &AtomicBool, p: &mut 
 
 /// Copy a file's contents, telling how far each chunk takes the work. A
 /// file stopped halfway is not left behind.
-fn copy_file(from: &Path, to: &Path, cancel: &AtomicBool, p: &mut Progress, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+fn copy_file(
+    from: &Path,
+    to: &Path,
+    cancel: &AtomicBool,
+    p: &mut Progress,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     let mut source = File::open(from).with_context(|| format!("open {}", from.display()))?;
     let mut target = OpenOptions::new()
         .write(true)
@@ -730,27 +932,36 @@ fn copy_file(from: &Path, to: &Path, cancel: &AtomicBool, p: &mut Progress, prog
     let copied = (|| -> Result<()> {
         loop {
             going(cancel)?;
-            let n = source.read(&mut buf).with_context(|| format!("read {}", from.display()))?;
+            let n = source
+                .read(&mut buf)
+                .with_context(|| format!("read {}", from.display()))?;
             if n == 0 {
-                return target.sync_all().with_context(|| format!("write {}", to.display()));
+                return target
+                    .sync_all()
+                    .with_context(|| format!("write {}", to.display()));
             }
-            target.write_all(&buf[..n]).with_context(|| format!("write {}", to.display()))?;
+            target
+                .write_all(&buf[..n])
+                .with_context(|| format!("write {}", to.display()))?;
             p.bytes += n as u64;
             progress(*p);
         }
     })();
     if copied.is_err() {
         drop(target);
-        fs::remove_file(to).with_context(|| format!("take away the part of {} written", to.display()))?;
+        fs::remove_file(to)
+            .with_context(|| format!("take away the part of {} written", to.display()))?;
     }
     copied
 }
 
 fn make_node(to: &Path, mode: u32, rdev: u64) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(to.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", to.display()))?;
+    let c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", to.display()))?;
     if unsafe { libc::mknod(c.as_ptr(), mode as libc::mode_t, rdev as libc::dev_t) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("make {}", to.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("make {}", to.display()));
     }
     Ok(())
 }
@@ -760,13 +971,29 @@ fn make_node(to: &Path, mode: u32, rdev: u64) -> Result<()> {
 fn keep(from: &Path, to: &Path, meta: &fs::Metadata, give: &Give) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
     attributes(from, to, meta, give)?;
-    let c = std::ffi::CString::new(to.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", to.display()))?;
+    let c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", to.display()))?;
     let times = [
-        libc::timespec { tv_sec: meta.atime() as _, tv_nsec: meta.atime_nsec() as _ },
-        libc::timespec { tv_sec: meta.mtime() as _, tv_nsec: meta.mtime_nsec() as _ },
+        libc::timespec {
+            tv_sec: meta.atime() as _,
+            tv_nsec: meta.atime_nsec() as _,
+        },
+        libc::timespec {
+            tv_sec: meta.mtime() as _,
+            tv_nsec: meta.mtime_nsec() as _,
+        },
     ];
-    if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("give {} its times", to.display()));
+    if unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("give {} its times", to.display()));
     }
     Ok(())
 }
@@ -781,7 +1008,10 @@ fn attributes(from: &Path, to: &Path, meta: &fs::Metadata, give: &Give) -> Resul
             if keeps.xattrs {
                 copy_xattrs(from, to)?;
             }
-            (keeps.owner.then_some((meta.uid(), meta.gid())), keeps.mode.then_some(meta.mode() & 0o7777))
+            (
+                keeps.owner.then_some((meta.uid(), meta.gid())),
+                keeps.mode.then_some(meta.mode() & 0o7777),
+            )
         }
         Give::Folder(like) => {
             if let Some(label) = &like.label {
@@ -796,10 +1026,12 @@ fn attributes(from: &Path, to: &Path, meta: &fs::Metadata, give: &Give) -> Resul
         }
     };
     if let Some((uid, gid)) = owner {
-        std::os::unix::fs::lchown(to, Some(uid), Some(gid)).with_context(|| format!("give {} its owner", to.display()))?;
+        std::os::unix::fs::lchown(to, Some(uid), Some(gid))
+            .with_context(|| format!("give {} its owner", to.display()))?;
     }
     if let Some(mode) = mode.filter(|_| !link) {
-        fs::set_permissions(to, fs::Permissions::from_mode(mode)).with_context(|| format!("give {} its permissions", to.display()))?;
+        fs::set_permissions(to, fs::Permissions::from_mode(mode))
+            .with_context(|| format!("give {} its permissions", to.display()))?;
     }
     Ok(())
 }
@@ -811,29 +1043,55 @@ fn attributes(from: &Path, to: &Path, meta: &fs::Metadata, give: &Give) -> Resul
 #[cfg(target_os = "android")]
 fn copy_xattrs(from: &Path, to: &Path) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
-    let cstr = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", p.display()));
+    let cstr = |p: &Path| {
+        std::ffi::CString::new(p.as_os_str().as_bytes())
+            .with_context(|| format!("{} holds a NUL", p.display()))
+    };
     let (f, t) = (cstr(from)?, cstr(to)?);
     let size = unsafe { libc::llistxattr(f.as_ptr(), std::ptr::null_mut(), 0) };
     if size < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("list the attributes of {}", from.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("list the attributes of {}", from.display()));
     }
     let mut names = vec![0u8; size as usize];
     let size = unsafe { libc::llistxattr(f.as_ptr(), names.as_mut_ptr().cast(), names.len()) };
     if size < 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("list the attributes of {}", from.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("list the attributes of {}", from.display()));
     }
-    for attr in names[..size as usize].split(|&b| b == 0).filter(|n| !n.is_empty()) {
+    for attr in names[..size as usize]
+        .split(|&b| b == 0)
+        .filter(|n| !n.is_empty())
+    {
         let n = std::ffi::CString::new(attr).expect("a name split at NULs holds none");
         let len = unsafe { libc::lgetxattr(f.as_ptr(), n.as_ptr(), std::ptr::null_mut(), 0) };
         if len < 0 {
-            return Err(std::io::Error::last_os_error()).with_context(|| format!("read {:?} of {}", n, from.display()));
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("read {:?} of {}", n, from.display()));
         }
         let mut value = vec![0u8; len as usize];
-        let len = unsafe { libc::lgetxattr(f.as_ptr(), n.as_ptr(), value.as_mut_ptr().cast(), value.len()) };
+        let len = unsafe {
+            libc::lgetxattr(
+                f.as_ptr(),
+                n.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+            )
+        };
         if len < 0 {
-            return Err(std::io::Error::last_os_error()).with_context(|| format!("read {:?} of {}", n, from.display()));
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("read {:?} of {}", n, from.display()));
         }
-        if unsafe { libc::lsetxattr(t.as_ptr(), n.as_ptr(), value.as_ptr().cast(), len as usize, 0) } != 0 {
+        if unsafe {
+            libc::lsetxattr(
+                t.as_ptr(),
+                n.as_ptr(),
+                value.as_ptr().cast(),
+                len as usize,
+                0,
+            )
+        } != 0
+        {
             let e = std::io::Error::last_os_error();
             if e.raw_os_error() == Some(libc::EOPNOTSUPP) {
                 continue;
@@ -853,9 +1111,20 @@ fn copy_xattrs(_from: &Path, _to: &Path) -> Result<()> {
 #[cfg(target_os = "android")]
 fn set_label(to: &Path, label: &[u8]) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(to.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", to.display()))?;
-    if unsafe { libc::lsetxattr(c.as_ptr(), c"security.selinux".as_ptr(), label.as_ptr().cast(), label.len(), 0) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("label {}", to.display()));
+    let c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", to.display()))?;
+    if unsafe {
+        libc::lsetxattr(
+            c.as_ptr(),
+            c"security.selinux".as_ptr(),
+            label.as_ptr().cast(),
+            label.len(),
+            0,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("label {}", to.display()));
     }
     Ok(())
 }
@@ -902,15 +1171,48 @@ mod tests {
         let root = tree(&at);
         fs::create_dir(at.join("into")).unwrap();
         let mut last = Progress::default();
-        copy(std::slice::from_ref(&root), &at.join("into"), Clash::Refuse, Ownership::Kept, &AtomicBool::new(false), &mut |p| last = p).unwrap();
+        copy(
+            std::slice::from_ref(&root),
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &AtomicBool::new(false),
+            &mut |p| last = p,
+        )
+        .unwrap();
         let copied = at.join("into/photos");
-        assert_eq!(fs::read(copied.join("a.jpg")).unwrap(), vec![7u8; 3 * CHUNK + 5]);
+        assert_eq!(
+            fs::read(copied.join("a.jpg")).unwrap(),
+            vec![7u8; 3 * CHUNK + 5]
+        );
         assert_eq!(fs::read(copied.join("2026/b.txt")).unwrap(), b"hello");
-        assert_eq!(fs::read_link(copied.join("latest")).unwrap(), Path::new("2026/b.txt"));
-        assert_eq!(fs::metadata(copied.join("2026/b.txt")).unwrap().mode() & 0o777, 0o640, "permissions are kept");
-        let (before, after) = (fs::metadata(root.join("a.jpg")).unwrap(), fs::metadata(copied.join("a.jpg")).unwrap());
-        assert_eq!((after.mtime(), after.mtime_nsec()), (before.mtime(), before.mtime_nsec()), "times are kept");
-        assert_eq!(last, Progress { bytes: 3 * CHUNK as u64 + 10, total_bytes: 3 * CHUNK as u64 + 10, entries: 5, total_entries: 5 });
+        assert_eq!(
+            fs::read_link(copied.join("latest")).unwrap(),
+            Path::new("2026/b.txt")
+        );
+        assert_eq!(
+            fs::metadata(copied.join("2026/b.txt")).unwrap().mode() & 0o777,
+            0o640,
+            "permissions are kept"
+        );
+        let (before, after) = (
+            fs::metadata(root.join("a.jpg")).unwrap(),
+            fs::metadata(copied.join("a.jpg")).unwrap(),
+        );
+        assert_eq!(
+            (after.mtime(), after.mtime_nsec()),
+            (before.mtime(), before.mtime_nsec()),
+            "times are kept"
+        );
+        assert_eq!(
+            last,
+            Progress {
+                bytes: 3 * CHUNK as u64 + 10,
+                total_bytes: 3 * CHUNK as u64 + 10,
+                entries: 5,
+                total_entries: 5
+            }
+        );
         assert!(root.join("a.jpg").exists(), "the original stays");
         fs::remove_dir_all(&at).unwrap();
     }
@@ -922,16 +1224,58 @@ mod tests {
         fs::write(at.join("note.txt"), b"new").unwrap();
         fs::write(at.join("into/note.txt"), b"old").unwrap();
         let (cancel, sources) = (AtomicBool::new(false), [at.join("note.txt")]);
-        assert_eq!(clashes(&sources, &at.join("into")).unwrap(), [at.join("into/note.txt")]);
-        let refused = copy(&sources, &at.join("into"), Clash::Refuse, Ownership::Kept, &cancel, &mut quiet());
+        assert_eq!(
+            clashes(&sources, &at.join("into")).unwrap(),
+            [at.join("into/note.txt")]
+        );
+        let refused = copy(
+            &sources,
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        );
         assert!(refused.unwrap_err().is::<Taken>());
-        copy(&sources, &at.join("into"), Clash::Skip, Ownership::Kept, &cancel, &mut quiet()).unwrap();
+        copy(
+            &sources,
+            &at.join("into"),
+            Clash::Skip,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
         assert_eq!(fs::read(at.join("into/note.txt")).unwrap(), b"old");
-        copy(&sources, &at.join("into"), Clash::KeepBoth, Ownership::Kept, &cancel, &mut quiet()).unwrap();
-        copy(&sources, &at.join("into"), Clash::KeepBoth, Ownership::Kept, &cancel, &mut quiet()).unwrap();
+        copy(
+            &sources,
+            &at.join("into"),
+            Clash::KeepBoth,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
+        copy(
+            &sources,
+            &at.join("into"),
+            Clash::KeepBoth,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
         assert_eq!(fs::read(at.join("into/note (1).txt")).unwrap(), b"new");
         assert_eq!(fs::read(at.join("into/note (2).txt")).unwrap(), b"new");
-        copy(&sources, &at.join("into"), Clash::Replace, Ownership::Kept, &cancel, &mut quiet()).unwrap();
+        copy(
+            &sources,
+            &at.join("into"),
+            Clash::Replace,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
         assert_eq!(fs::read(at.join("into/note.txt")).unwrap(), b"new");
         fs::remove_dir_all(&at).unwrap();
     }
@@ -941,13 +1285,32 @@ mod tests {
         let at = scratch("duplicate");
         fs::write(at.join(".profile"), b"x").unwrap();
         let cancel = AtomicBool::new(false);
-        assert!(clashes(&[at.join(".profile")], &at).unwrap().is_empty(), "an entry does not clash with itself");
+        assert!(
+            clashes(&[at.join(".profile")], &at).unwrap().is_empty(),
+            "an entry does not clash with itself"
+        );
         for clash in [Clash::Refuse, Clash::Replace] {
-            copy(&[at.join(".profile")], &at, clash, Ownership::Kept, &cancel, &mut quiet()).unwrap();
+            copy(
+                &[at.join(".profile")],
+                &at,
+                clash,
+                Ownership::Kept,
+                &cancel,
+                &mut quiet(),
+            )
+            .unwrap();
         }
-        assert_eq!(fs::read(at.join(".profile")).unwrap(), b"x", "the original stays");
+        assert_eq!(
+            fs::read(at.join(".profile")).unwrap(),
+            b"x",
+            "the original stays"
+        );
         assert_eq!(fs::read(at.join(".profile (1)")).unwrap(), b"x");
-        assert_eq!(fs::read(at.join(".profile (2)")).unwrap(), b"x", "whatever is chosen for names taken by others");
+        assert_eq!(
+            fs::read(at.join(".profile (2)")).unwrap(),
+            b"x",
+            "whatever is chosen for names taken by others"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -961,7 +1324,10 @@ mod tests {
         let mut log = make_file(&deep.join("kernel.log"), Ownership::Kept).unwrap();
         log.write_all(b"x").unwrap();
         assert_eq!(fs::read(deep.join("kernel.log")).unwrap(), b"x");
-        assert!(make_file(&deep.join("kernel.log"), Ownership::Kept).is_err(), "a file there already is not made over");
+        assert!(
+            make_file(&deep.join("kernel.log"), Ownership::Kept).is_err(),
+            "a file there already is not made over"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -970,8 +1336,24 @@ mod tests {
         let at = scratch("inside");
         let root = tree(&at);
         let cancel = AtomicBool::new(false);
-        assert!(copy(std::slice::from_ref(&root), &root.join("2026"), Clash::Refuse, Ownership::Kept, &cancel, &mut quiet()).is_err());
-        assert!(move_into(std::slice::from_ref(&root), &root, Clash::Refuse, Ownership::Kept, &cancel, &mut quiet()).is_err());
+        assert!(copy(
+            std::slice::from_ref(&root),
+            &root.join("2026"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet()
+        )
+        .is_err());
+        assert!(move_into(
+            std::slice::from_ref(&root),
+            &root,
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet()
+        )
+        .is_err());
         assert!(!root.join("2026/photos").exists(), "nothing was written");
         fs::remove_dir_all(&at).unwrap();
     }
@@ -983,12 +1365,34 @@ mod tests {
         fs::create_dir(at.join("into")).unwrap();
         let cancel = AtomicBool::new(false);
         let mut last = Progress::default();
-        move_into(std::slice::from_ref(&root), &at.join("into"), Clash::Refuse, Ownership::Kept, &cancel, &mut |p| last = p).unwrap();
+        move_into(
+            std::slice::from_ref(&root),
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut |p| last = p,
+        )
+        .unwrap();
         assert!(!root.exists());
-        assert_eq!(fs::read(at.join("into/photos/2026/b.txt")).unwrap(), b"hello");
+        assert_eq!(
+            fs::read(at.join("into/photos/2026/b.txt")).unwrap(),
+            b"hello"
+        );
         assert_eq!((last.entries, last.total_entries), (5, 5));
-        move_into(&[at.join("into/photos")], &at.join("into"), Clash::Refuse, Ownership::Kept, &cancel, &mut quiet()).unwrap();
-        assert!(at.join("into/photos").exists(), "moving to the folder it is in leaves it as it is");
+        move_into(
+            &[at.join("into/photos")],
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
+        assert!(
+            at.join("into/photos").exists(),
+            "moving to the folder it is in leaves it as it is"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -997,13 +1401,25 @@ mod tests {
         let at = scratch("rename");
         fs::write(at.join("a.txt"), b"a").unwrap();
         fs::write(at.join("b.txt"), b"b").unwrap();
-        assert_eq!(rename(&at.join("a.txt"), "c.txt").unwrap(), at.join("c.txt"));
+        assert_eq!(
+            rename(&at.join("a.txt"), "c.txt").unwrap(),
+            at.join("c.txt")
+        );
         assert_eq!(fs::read(at.join("c.txt")).unwrap(), b"a");
-        assert!(rename(&at.join("c.txt"), "b.txt").unwrap_err().is::<Taken>(), "a name taken stays with its own entry");
+        assert!(
+            rename(&at.join("c.txt"), "b.txt")
+                .unwrap_err()
+                .is::<Taken>(),
+            "a name taken stays with its own entry"
+        );
         for bad in ["", ".", "..", "x/y"] {
             assert!(rename(&at.join("c.txt"), bad).is_err(), "{bad:?}");
         }
-        assert_eq!(rename(&at.join("c.txt"), "c.txt").unwrap(), at.join("c.txt"), "the same name changes nothing");
+        assert_eq!(
+            rename(&at.join("c.txt"), "c.txt").unwrap(),
+            at.join("c.txt"),
+            "the same name changes nothing"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -1013,13 +1429,31 @@ mod tests {
         fs::write(at.join("run.sh"), b"#!/system/bin/sh\n").unwrap();
         fs::set_permissions(at.join("run.sh"), fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(set_mode(&at.join("run.sh"), 0o755).unwrap(), 0o755);
-        assert_eq!(fs::metadata(at.join("run.sh")).unwrap().mode() & 0o7777, 0o755);
-        assert_eq!(set_mode(&at.join("run.sh"), 0o100_600).unwrap(), 0o600, "the bits of the type are not permissions");
+        assert_eq!(
+            fs::metadata(at.join("run.sh")).unwrap().mode() & 0o7777,
+            0o755
+        );
+        assert_eq!(
+            set_mode(&at.join("run.sh"), 0o100_600).unwrap(),
+            0o600,
+            "the bits of the type are not permissions"
+        );
         fs::create_dir(at.join("shared")).unwrap();
-        assert_eq!(set_mode(&at.join("shared"), 0o1777).unwrap(), 0o1777, "a folder takes the sticky bit");
+        assert_eq!(
+            set_mode(&at.join("shared"), 0o1777).unwrap(),
+            0o1777,
+            "a folder takes the sticky bit"
+        );
         std::os::unix::fs::symlink("run.sh", at.join("link")).unwrap();
-        assert_eq!(set_mode(&at.join("link"), 0o700).unwrap(), 0o700, "a link's target is changed");
-        assert_eq!(fs::metadata(at.join("run.sh")).unwrap().mode() & 0o7777, 0o700);
+        assert_eq!(
+            set_mode(&at.join("link"), 0o700).unwrap(),
+            0o700,
+            "a link's target is changed"
+        );
+        assert_eq!(
+            fs::metadata(at.join("run.sh")).unwrap().mode() & 0o7777,
+            0o700
+        );
         assert!(set_mode(&at.join("gone"), 0o644).is_err());
         fs::remove_dir_all(&at).unwrap();
     }
@@ -1028,12 +1462,26 @@ mod tests {
     fn a_file_is_read_only_up_to_the_bytes_asked_for() {
         let at = scratch("read");
         fs::write(at.join("a.txt"), b"12345").unwrap();
-        assert_eq!(read_up_to(&at.join("a.txt"), 5).unwrap(), Some(b"12345".to_vec()));
-        assert_eq!(read_up_to(&at.join("a.txt"), 4).unwrap(), None, "a byte more than asked for");
+        assert_eq!(
+            read_up_to(&at.join("a.txt"), 5).unwrap(),
+            Some(b"12345".to_vec())
+        );
+        assert_eq!(
+            read_up_to(&at.join("a.txt"), 4).unwrap(),
+            None,
+            "a byte more than asked for"
+        );
         assert!(read_up_to(&at, 5).is_err(), "a folder is no file");
         let pipe = std::ffi::CString::new(at.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0, "make a pipe");
-        assert!(read_up_to(&at.join("pipe"), 5).is_err(), "a pipe is turned down rather than waited on");
+        assert_eq!(
+            unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) },
+            0,
+            "make a pipe"
+        );
+        assert!(
+            read_up_to(&at.join("pipe"), 5).is_err(),
+            "a pipe is turned down rather than waited on"
+        );
         assert!(read_up_to(&at.join("gone"), 5).is_err());
         fs::remove_dir_all(&at).unwrap();
     }
@@ -1051,16 +1499,27 @@ mod tests {
         assert_eq!(after.mode() & 0o7777, 0o750, "permissions are kept");
         assert_eq!((after.uid(), after.gid()), (before.uid(), before.gid()));
         assert_ne!(after.ino(), before.ino(), "a new file took its place");
-        let names: Vec<_> = fs::read_dir(&at).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = fs::read_dir(&at)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names, ["run.sh"], "nothing is left beside it");
         fs::write(at.join(".run.sh.0.saving"), b"left by a save cut short").unwrap();
         replace(&path, b"again").unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"again", "a name taken beside it is passed over");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            b"again",
+            "a name taken beside it is passed over"
+        );
         fs::remove_file(at.join(".run.sh.0.saving")).unwrap();
         fs::hard_link(&path, at.join("same.sh")).unwrap();
         let shared = fs::metadata(&path).unwrap().ino();
         replace(&path, b"both").unwrap();
-        assert_eq!(fs::read(at.join("same.sh")).unwrap(), b"both", "a file with another name is written where it is");
+        assert_eq!(
+            fs::read(at.join("same.sh")).unwrap(),
+            b"both",
+            "a file with another name is written where it is"
+        );
         assert_eq!(fs::metadata(&path).unwrap().ino(), shared);
         assert!(replace(&at, b"x").is_err(), "a folder is no file");
         assert!(replace(&at.join("gone"), b"x").is_err());
@@ -1086,8 +1545,13 @@ mod tests {
         for folder in folders {
             fs::create_dir_all(root.join(folder)).unwrap();
         }
-        let files =
-            ["data/com.app/files/a", "misc_ce/0/apexdata/f", "system_ce/0/accounts/db", "misc/profiles/cur/0/com.app/primary.prof", "local/tmp/run.sh"];
+        let files = [
+            "data/com.app/files/a",
+            "misc_ce/0/apexdata/f",
+            "system_ce/0/accounts/db",
+            "misc/profiles/cur/0/com.app/primary.prof",
+            "local/tmp/run.sh",
+        ];
         for file in files {
             fs::write(root.join(file), b"x").unwrap();
         }
@@ -1108,7 +1572,10 @@ mod tests {
             seen.push(rel.to_string_lossy().into_owned());
             Ok(rel.starts_with("local"))
         };
-        relabel(&root, &mut label, &AtomicBool::new(false), &mut |p| last = p).unwrap();
+        relabel(&root, &mut label, &AtomicBool::new(false), &mut |p| {
+            last = p
+        })
+        .unwrap();
         seen.sort();
         let labeled = [
             "",
@@ -1135,8 +1602,21 @@ mod tests {
             "user_de",
         ];
         assert_eq!(seen, labeled, "apps' data is the installer's, and each user's encrypted system files are left in their folders");
-        assert_eq!(last, Relabeling { checked: 22, total: 22, changed: 3 }, "each entry under local took a new label");
-        let stopped = relabel(&root, &mut |_, _, _| Ok(false), &AtomicBool::new(true), &mut |_| {});
+        assert_eq!(
+            last,
+            Relabeling {
+                checked: 22,
+                total: 22,
+                changed: 3
+            },
+            "each entry under local took a new label"
+        );
+        let stopped = relabel(
+            &root,
+            &mut |_, _, _| Ok(false),
+            &AtomicBool::new(true),
+            &mut |_| {},
+        );
         assert!(stopped.unwrap_err().is::<Cancelled>());
         fs::remove_dir_all(&at).unwrap();
     }
@@ -1155,13 +1635,22 @@ mod tests {
         fs::write(at.join("readme.txt"), b"r").unwrap();
         fs::write(at.join("notes.txt"), b"n").unwrap();
         rename(&at.join("readme.txt"), "README.txt").unwrap();
-        let names: Vec<_> = fs::read_dir(&at).unwrap().map(|e| e.unwrap().file_name()).collect();
-        assert!(names.contains(&"README.txt".into()) && !names.contains(&"readme.txt".into()), "{names:?}");
+        let names: Vec<_> = fs::read_dir(&at)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            names.contains(&"README.txt".into()) && !names.contains(&"readme.txt".into()),
+            "{names:?}"
+        );
         assert_eq!(fs::read(at.join("README.txt")).unwrap(), b"r");
         assert_eq!(names.len(), 2, "no name is left over from the way there");
         let other = rename(&at.join("README.txt"), "NOTES.txt");
         match any_case(&at) {
-            true => assert!(other.unwrap_err().is::<Taken>(), "another entry's name in another case is taken"),
+            true => assert!(
+                other.unwrap_err().is::<Taken>(),
+                "another entry's name in another case is taken"
+            ),
             false => assert_eq!(fs::read(other.unwrap()).unwrap(), b"r"),
         }
         fs::remove_dir_all(&at).unwrap();
@@ -1177,16 +1666,46 @@ mod tests {
             let into = at.join(folder);
             fs::create_dir(&into).unwrap();
             fs::set_permissions(&into, fs::Permissions::from_mode(0o750)).unwrap();
-            copy(std::slice::from_ref(&root), &into, Clash::Refuse, ownership, &cancel, &mut quiet()).unwrap();
+            copy(
+                std::slice::from_ref(&root),
+                &into,
+                Clash::Refuse,
+                ownership,
+                &cancel,
+                &mut quiet(),
+            )
+            .unwrap();
             let mode = |p: &str| fs::symlink_metadata(into.join(p)).unwrap().mode() & 0o7777;
             let own = fs::metadata(&into).unwrap();
-            for p in ["photos", "photos/a.jpg", "photos/2026", "photos/2026/b.txt", "photos/latest"] {
+            for p in [
+                "photos",
+                "photos/a.jpg",
+                "photos/2026",
+                "photos/2026/b.txt",
+                "photos/latest",
+            ] {
                 let m = fs::symlink_metadata(into.join(p)).unwrap();
-                assert_eq!((m.uid(), m.gid()), (own.uid(), own.gid()), "{folder}: {p} is owned as the folder is");
+                assert_eq!(
+                    (m.uid(), m.gid()),
+                    (own.uid(), own.gid()),
+                    "{folder}: {p} is owned as the folder is"
+                );
             }
             match ownership {
-                Ownership::Folder => assert_eq!((mode("photos/a.jpg"), mode("photos/2026/b.txt")), (0o604, 0o640), "their own permissions"),
-                _ => assert_eq!((mode("photos"), mode("photos/2026"), mode("photos/a.jpg"), mode("photos/2026/b.txt")), (0o750, 0o750, 0o640, 0o640)),
+                Ownership::Folder => assert_eq!(
+                    (mode("photos/a.jpg"), mode("photos/2026/b.txt")),
+                    (0o604, 0o640),
+                    "their own permissions"
+                ),
+                _ => assert_eq!(
+                    (
+                        mode("photos"),
+                        mode("photos/2026"),
+                        mode("photos/a.jpg"),
+                        mode("photos/2026/b.txt")
+                    ),
+                    (0o750, 0o750, 0o640, 0o640)
+                ),
             }
         }
         fs::remove_dir_all(&at).unwrap();
@@ -1198,9 +1717,18 @@ mod tests {
         let root = tree(&at);
         fs::write(at.join("loose.txt"), b"x").unwrap();
         let mut seen = Vec::new();
-        delete(&[root.clone(), at.join("loose.txt")], &AtomicBool::new(false), &mut |p| seen.push(p.entries)).unwrap();
+        delete(
+            &[root.clone(), at.join("loose.txt")],
+            &AtomicBool::new(false),
+            &mut |p| seen.push(p.entries),
+        )
+        .unwrap();
         assert!(!root.exists() && !at.join("loose.txt").exists());
-        assert_eq!(seen, [0, 1, 2, 3, 4, 5, 6], "every entry is told as it goes");
+        assert_eq!(
+            seen,
+            [0, 1, 2, 3, 4, 5, 6],
+            "every entry is told as it goes"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -1208,18 +1736,50 @@ mod tests {
     fn deleting_files_leaves_every_folder_link_and_pipe() {
         let at = scratch("delete-files");
         let root = tree(&at);
-        let pipe = std::ffi::CString::new(root.join("2026/pipe").as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) }, 0, "make a pipe");
+        let pipe =
+            std::ffi::CString::new(root.join("2026/pipe").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(pipe.as_ptr(), 0o600) },
+            0,
+            "make a pipe"
+        );
         fs::create_dir(root.join("empty")).unwrap();
         let mut last = Progress::default();
         let folders = [root.clone(), at.join("absent")];
         delete_files(&folders, &AtomicBool::new(false), &mut |p| last = p).unwrap();
-        assert!(!root.join("a.jpg").exists() && !root.join("2026/b.txt").exists(), "the files are gone");
-        assert!(root.join("2026").is_dir() && root.join("empty").is_dir(), "the folders stay");
-        assert!(fs::symlink_metadata(root.join("latest")).unwrap().file_type().is_symlink(), "the link stays");
-        assert!(fs::symlink_metadata(root.join("2026/pipe")).unwrap().file_type().is_fifo(), "the pipe stays");
+        assert!(
+            !root.join("a.jpg").exists() && !root.join("2026/b.txt").exists(),
+            "the files are gone"
+        );
+        assert!(
+            root.join("2026").is_dir() && root.join("empty").is_dir(),
+            "the folders stay"
+        );
+        assert!(
+            fs::symlink_metadata(root.join("latest"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link stays"
+        );
+        assert!(
+            fs::symlink_metadata(root.join("2026/pipe"))
+                .unwrap()
+                .file_type()
+                .is_fifo(),
+            "the pipe stays"
+        );
         let bytes = 3 * CHUNK as u64 + 5 + 5;
-        assert_eq!(last, Progress { bytes, total_bytes: bytes, entries: 2, total_entries: 2 }, "only files are counted");
+        assert_eq!(
+            last,
+            Progress {
+                bytes,
+                total_bytes: bytes,
+                entries: 2,
+                total_entries: 2
+            },
+            "only files are counted"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -1237,11 +1797,23 @@ mod tests {
     #[cfg(target_os = "android")]
     fn label(path: &Path) -> String {
         use std::os::unix::ffi::OsStrExt;
-        let (p, n) = (std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap(), c"security.selinux");
+        let (p, n) = (
+            std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap(),
+            c"security.selinux",
+        );
         let mut value = vec![0u8; 256];
-        let len = unsafe { libc::lgetxattr(p.as_ptr(), n.as_ptr(), value.as_mut_ptr().cast(), value.len()) };
+        let len = unsafe {
+            libc::lgetxattr(
+                p.as_ptr(),
+                n.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+            )
+        };
         assert!(len > 0, "{} has a label", path.display());
-        String::from_utf8_lossy(&value[..len as usize]).trim_end_matches('\0').to_string()
+        String::from_utf8_lossy(&value[..len as usize])
+            .trim_end_matches('\0')
+            .to_string()
     }
 
     /// On the phone, as root: labels go with a copy, and a move to another
@@ -1253,22 +1825,66 @@ mod tests {
         let at = scratch("phone");
         let root = tree(&at);
         let file = root.join("2026/b.txt");
-        let (p, n, v) = (std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap(), c"security.selinux", b"u:object_r:system_file:s0\0");
-        assert_eq!(unsafe { libc::lsetxattr(p.as_ptr(), n.as_ptr(), v.as_ptr().cast(), v.len(), 0) }, 0, "{}", std::io::Error::last_os_error());
+        let (p, n, v) = (
+            std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap(),
+            c"security.selinux",
+            b"u:object_r:system_file:s0\0",
+        );
+        assert_eq!(
+            unsafe { libc::lsetxattr(p.as_ptr(), n.as_ptr(), v.as_ptr().cast(), v.len(), 0) },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
         fs::create_dir(at.join("into")).unwrap();
         let cancel = AtomicBool::new(false);
-        copy(std::slice::from_ref(&root), &at.join("into"), Clash::Refuse, Ownership::Kept, &cancel, &mut quiet()).unwrap();
-        assert_eq!(label(&at.join("into/photos/2026/b.txt")), "u:object_r:system_file:s0");
+        copy(
+            std::slice::from_ref(&root),
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
+        assert_eq!(
+            label(&at.join("into/photos/2026/b.txt")),
+            "u:object_r:system_file:s0"
+        );
         let other = Path::new("/dev").join(format!("skyward-files-{}", std::process::id()));
         fs::create_dir(&other).unwrap();
-        assert_ne!(fs::metadata(&other).unwrap().dev(), fs::metadata(&at).unwrap().dev(), "two filesystems");
+        assert_ne!(
+            fs::metadata(&other).unwrap().dev(),
+            fs::metadata(&at).unwrap().dev(),
+            "two filesystems"
+        );
         let mut last = Progress::default();
-        move_into(std::slice::from_ref(&root), &other, Clash::Refuse, Ownership::Kept, &cancel, &mut |p| last = p).unwrap();
+        move_into(
+            std::slice::from_ref(&root),
+            &other,
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut |p| last = p,
+        )
+        .unwrap();
         assert!(!root.exists(), "the original goes once copied");
-        assert_eq!(fs::read(other.join("photos/a.jpg")).unwrap(), vec![7u8; 3 * CHUNK + 5]);
-        assert_eq!(label(&other.join("photos/2026/b.txt")), "u:object_r:system_file:s0");
-        assert_eq!((last.bytes, last.entries), (last.total_bytes, last.total_entries));
-        assert!(delete(&[Path::new("/dev").to_path_buf()], &cancel, &mut quiet()).is_err(), "a filesystem's own folder is not deleted");
+        assert_eq!(
+            fs::read(other.join("photos/a.jpg")).unwrap(),
+            vec![7u8; 3 * CHUNK + 5]
+        );
+        assert_eq!(
+            label(&other.join("photos/2026/b.txt")),
+            "u:object_r:system_file:s0"
+        );
+        assert_eq!(
+            (last.bytes, last.entries),
+            (last.total_bytes, last.total_entries)
+        );
+        assert!(
+            delete(&[Path::new("/dev").to_path_buf()], &cancel, &mut quiet()).is_err(),
+            "a filesystem's own folder is not deleted"
+        );
         delete(&[other], &cancel, &mut quiet()).unwrap();
         fs::remove_dir_all(&at).unwrap();
     }
@@ -1286,17 +1902,39 @@ mod tests {
         // Version 2, then the entries of the owner, the group, group 1000,
         // the mask and everyone else: tag, permissions, id.
         let mut acl = 2u32.to_le_bytes().to_vec();
-        for (tag, perm, id) in [(0x01u16, 6u16, u32::MAX), (0x04, 4, u32::MAX), (0x08, 4, 1000), (0x10, 4, u32::MAX), (0x20, 0, u32::MAX)] {
+        for (tag, perm, id) in [
+            (0x01u16, 6u16, u32::MAX),
+            (0x04, 4, u32::MAX),
+            (0x08, 4, 1000),
+            (0x10, 4, u32::MAX),
+            (0x20, 0, u32::MAX),
+        ] {
             acl.extend(tag.to_le_bytes());
             acl.extend(perm.to_le_bytes());
             acl.extend(id.to_le_bytes());
         }
         let p = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
-        let set = unsafe { libc::lsetxattr(p.as_ptr(), c"system.posix_acl_access".as_ptr(), acl.as_ptr().cast(), acl.len(), 0) };
+        let set = unsafe {
+            libc::lsetxattr(
+                p.as_ptr(),
+                c"system.posix_acl_access".as_ptr(),
+                acl.as_ptr().cast(),
+                acl.len(),
+                0,
+            )
+        };
         assert_eq!(set, 0, "{}", std::io::Error::last_os_error());
         let into = Path::new("/").join(format!("skyward-files-acl-{}", std::process::id()));
         fs::create_dir(&into).unwrap();
-        copy(&[file], &into, Clash::Refuse, Ownership::Kept, &AtomicBool::new(false), &mut quiet()).unwrap();
+        copy(
+            &[file],
+            &into,
+            Clash::Refuse,
+            Ownership::Kept,
+            &AtomicBool::new(false),
+            &mut quiet(),
+        )
+        .unwrap();
         assert_eq!(fs::read(into.join("listed.txt")).unwrap(), b"x");
         fs::remove_dir_all(&into).unwrap();
         fs::remove_dir_all(&at).unwrap();
@@ -1312,13 +1950,39 @@ mod tests {
         let root = tree(&at);
         let into = at.join("into");
         fs::create_dir(&into).unwrap();
-        let (p, n, v) = (std::ffi::CString::new(into.as_os_str().as_bytes()).unwrap(), c"security.selinux", b"u:object_r:system_file:s0\0");
-        assert_eq!(unsafe { libc::lsetxattr(p.as_ptr(), n.as_ptr(), v.as_ptr().cast(), v.len(), 0) }, 0, "{}", std::io::Error::last_os_error());
+        let (p, n, v) = (
+            std::ffi::CString::new(into.as_os_str().as_bytes()).unwrap(),
+            c"security.selinux",
+            b"u:object_r:system_file:s0\0",
+        );
+        assert_eq!(
+            unsafe { libc::lsetxattr(p.as_ptr(), n.as_ptr(), v.as_ptr().cast(), v.len(), 0) },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
         assert_ne!(label(&root.join("2026/b.txt")), "u:object_r:system_file:s0");
         let cancel = AtomicBool::new(false);
-        copy(std::slice::from_ref(&root), &into, Clash::Refuse, Ownership::Shared, &cancel, &mut quiet()).unwrap();
-        for entry in ["photos", "photos/a.jpg", "photos/2026/b.txt", "photos/latest"] {
-            assert_eq!(label(&into.join(entry)), "u:object_r:system_file:s0", "{entry}");
+        copy(
+            std::slice::from_ref(&root),
+            &into,
+            Clash::Refuse,
+            Ownership::Shared,
+            &cancel,
+            &mut quiet(),
+        )
+        .unwrap();
+        for entry in [
+            "photos",
+            "photos/a.jpg",
+            "photos/2026/b.txt",
+            "photos/latest",
+        ] {
+            assert_eq!(
+                label(&into.join(entry)),
+                "u:object_r:system_file:s0",
+                "{entry}"
+            );
         }
         fs::remove_dir_all(&at).unwrap();
     }
@@ -1329,11 +1993,18 @@ mod tests {
         let root = tree(&at);
         fs::create_dir(at.join("into")).unwrap();
         let cancel = AtomicBool::new(false);
-        let stopped = copy(&[root.join("a.jpg")], &at.join("into"), Clash::Refuse, Ownership::Kept, &cancel, &mut |p| {
-            if p.bytes >= CHUNK as u64 {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        });
+        let stopped = copy(
+            &[root.join("a.jpg")],
+            &at.join("into"),
+            Clash::Refuse,
+            Ownership::Kept,
+            &cancel,
+            &mut |p| {
+                if p.bytes >= CHUNK as u64 {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+        );
         assert!(stopped.unwrap_err().is::<Cancelled>());
         assert!(!at.join("into/a.jpg").exists());
         fs::remove_dir_all(&at).unwrap();

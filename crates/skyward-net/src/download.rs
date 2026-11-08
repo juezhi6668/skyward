@@ -22,7 +22,10 @@ pub enum Sum {
 
 /// Where a package is downloaded to until it is whole and checked.
 pub fn partial(path: &Path) -> PathBuf {
-    let mut name = path.file_name().expect("a package has a name").to_os_string();
+    let mut name = path
+        .file_name()
+        .expect("a package has a name")
+        .to_os_string();
     name.push(".part");
     path.with_file_name(name)
 }
@@ -32,8 +35,14 @@ pub fn partial(path: &Path) -> PathBuf {
 pub enum Progress {
     /// What an earlier download left is read for its digest, before the
     /// rest is added to it.
-    Checking { done: u64, total: u64 },
-    Downloading { done: u64, total: u64 },
+    Checking {
+        done: u64,
+        total: u64,
+    },
+    Downloading {
+        done: u64,
+        total: u64,
+    },
 }
 
 /// Why a download did not end with the package whole.
@@ -85,7 +94,11 @@ pub struct NoRoom {
 
 impl std::fmt::Display for NoRoom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} bytes more are needed, and {} are free", self.needed, self.free)
+        write!(
+            f,
+            "{} bytes more are needed, and {} are free",
+            self.needed, self.free
+        )
     }
 }
 
@@ -93,16 +106,23 @@ impl std::error::Error for NoRoom {}
 
 /// The bytes free for anyone to write in the filesystem `dir` is on.
 pub fn free(dir: &Path) -> Result<u64> {
-    let c = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).context("a path with a NUL")?;
+    let c =
+        std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).context("a path with a NUL")?;
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("read the free space of {}", dir.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("read the free space of {}", dir.display()));
     }
     Ok(s.f_bavail as u64 * s.f_frsize as u64)
 }
 
 /// The digest, by `D`, of what `file` holds, read from its start.
-fn hash_of<D: Digest>(file: &mut File, total: u64, stop: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<D> {
+fn hash_of<D: Digest>(
+    file: &mut File,
+    total: u64,
+    stop: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<D> {
     let mut hash = D::new();
     let mut buf = vec![0u8; CHUNK];
     let mut done = 0;
@@ -110,7 +130,9 @@ fn hash_of<D: Digest>(file: &mut File, total: u64, stop: &AtomicBool, progress: 
         if stop.load(Ordering::Relaxed) {
             bail!(crate::Stopped);
         }
-        let n = file.read(&mut buf).context("read what was downloaded before")?;
+        let n = file
+            .read(&mut buf)
+            .context("read what was downloaded before")?;
         if n == 0 {
             return Ok(hash);
         }
@@ -128,7 +150,14 @@ fn hex(digest: &[u8]) -> String {
 /// left, and give it its name once it has the digest `sum`. A part as long
 /// as the package is only checked; a server that will not send from the
 /// middle sends it all again.
-pub fn fetch(agent: &ureq::Agent, url: &str, path: &Path, sum: &Sum, stop: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+pub fn fetch(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    sum: &Sum,
+    stop: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     match sum {
         Sum::Md5(hex) => fetch_as::<Md5>(agent, url, path, hex, stop, progress),
         Sum::Sha256(hex) => fetch_as::<Sha256>(agent, url, path, hex, stop, progress),
@@ -136,25 +165,48 @@ pub fn fetch(agent: &ureq::Agent, url: &str, path: &Path, sum: &Sum, stop: &Atom
 }
 
 /// [`fetch`], with the digest by `D` in hex.
-fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, stop: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<()> {
+fn fetch_as<D: Digest>(
+    agent: &ureq::Agent,
+    url: &str,
+    path: &Path,
+    sum: &str,
+    stop: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<()> {
     let part = partial(path);
     let dir = path.parent().context("a package's path is in a folder")?;
     fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
-    let head = agent.head(url).call().context("ask the server about the package")?;
+    let head = agent
+        .head(url)
+        .call()
+        .context("ask the server about the package")?;
     match head.status().as_u16() {
         200 => {}
         status => bail!(Refused(status)),
     }
-    let total = content_length(head.headers()).context("the server does not say how long the package is")?;
-    let mut file = OpenOptions::new().create(true).read(true).append(true).open(&part).with_context(|| format!("open {}", part.display()))?;
-    let mut have = file.metadata().with_context(|| format!("read {}", part.display()))?.len();
+    let total = content_length(head.headers())
+        .context("the server does not say how long the package is")?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&part)
+        .with_context(|| format!("open {}", part.display()))?;
+    let mut have = file
+        .metadata()
+        .with_context(|| format!("read {}", part.display()))?
+        .len();
     if have > total {
-        file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
+        file.set_len(0)
+            .with_context(|| format!("empty {}", part.display()))?;
         have = 0;
     }
     let room = free(dir)?;
     if total - have > room {
-        bail!(NoRoom { needed: total - have, free: room });
+        bail!(NoRoom {
+            needed: total - have,
+            free: room
+        });
     }
     let mut hash = hash_of::<D>(&mut file, have, stop, progress)?;
     if have < total {
@@ -167,7 +219,8 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
             206 if have > 0 => {}
             200 => {
                 if have > 0 {
-                    file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
+                    file.set_len(0)
+                        .with_context(|| format!("empty {}", part.display()))?;
                     have = 0;
                     hash = D::new();
                 }
@@ -187,12 +240,14 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
                 bail!("the server stopped sending at {done} of {total} bytes");
             }
             let n = n.min((total - done) as usize);
-            file.write_all(&buf[..n]).with_context(|| format!("write {}", part.display()))?;
+            file.write_all(&buf[..n])
+                .with_context(|| format!("write {}", part.display()))?;
             hash.update(&buf[..n]);
             done += n as u64;
             progress(Progress::Downloading { done, total });
         }
-        file.sync_all().with_context(|| format!("write {} through", part.display()))?;
+        file.sync_all()
+            .with_context(|| format!("write {} through", part.display()))?;
     }
     if hex(&hash.finalize()) != sum.to_lowercase() {
         drop(file);
@@ -204,7 +259,12 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
 
 /// The length a response says its body has.
 pub(crate) fn content_length(headers: &ureq::http::HeaderMap) -> Option<u64> {
-    headers.get(ureq::http::header::CONTENT_LENGTH)?.to_str().ok()?.parse().ok()
+    headers
+        .get(ureq::http::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
 }
 
 #[cfg(test)]
@@ -213,7 +273,10 @@ mod tests {
 
     #[test]
     fn a_part_is_named_after_its_package() {
-        assert_eq!(partial(Path::new("/sdcard/downloaded_rom/a.zip")), Path::new("/sdcard/downloaded_rom/a.zip.part"));
+        assert_eq!(
+            partial(Path::new("/sdcard/downloaded_rom/a.zip")),
+            Path::new("/sdcard/downloaded_rom/a.zip.part")
+        );
     }
 
     #[test]
@@ -223,12 +286,41 @@ mod tests {
         let path = dir.join("a.part");
         fs::write(&path, vec![7u8; CHUNK + 5]).unwrap();
         let mut seen = Vec::new();
-        let hash = hash_of::<Md5>(&mut File::open(&path).unwrap(), (CHUNK + 5) as u64, &AtomicBool::new(false), &mut |p| seen.push(p)).unwrap();
-        assert_eq!(hex(&hash.finalize()), hex(&Md5::digest(vec![7u8; CHUNK + 5])));
-        assert_eq!(seen.last(), Some(&Progress::Checking { done: (CHUNK + 5) as u64, total: (CHUNK + 5) as u64 }));
-        let hash = hash_of::<Sha256>(&mut File::open(&path).unwrap(), (CHUNK + 5) as u64, &AtomicBool::new(false), &mut |_| {}).unwrap();
-        assert_eq!(hex(&hash.finalize()), hex(&Sha256::digest(vec![7u8; CHUNK + 5])));
-        let stopped = hash_of::<Md5>(&mut File::open(&path).unwrap(), 1, &AtomicBool::new(true), &mut |_| {});
+        let hash = hash_of::<Md5>(
+            &mut File::open(&path).unwrap(),
+            (CHUNK + 5) as u64,
+            &AtomicBool::new(false),
+            &mut |p| seen.push(p),
+        )
+        .unwrap();
+        assert_eq!(
+            hex(&hash.finalize()),
+            hex(&Md5::digest(vec![7u8; CHUNK + 5]))
+        );
+        assert_eq!(
+            seen.last(),
+            Some(&Progress::Checking {
+                done: (CHUNK + 5) as u64,
+                total: (CHUNK + 5) as u64
+            })
+        );
+        let hash = hash_of::<Sha256>(
+            &mut File::open(&path).unwrap(),
+            (CHUNK + 5) as u64,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            hex(&hash.finalize()),
+            hex(&Sha256::digest(vec![7u8; CHUNK + 5]))
+        );
+        let stopped = hash_of::<Md5>(
+            &mut File::open(&path).unwrap(),
+            1,
+            &AtomicBool::new(true),
+            &mut |_| {},
+        );
         assert!(stopped.unwrap_err().is::<crate::Stopped>());
         fs::remove_dir_all(&dir).unwrap();
     }

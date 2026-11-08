@@ -10,19 +10,37 @@ use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout};
 pub enum Target {
     /// `sectors` sectors of block device `device` (major, minor), starting
     /// at its sector `offset`.
-    Linear { sectors: u64, device: (u32, u32), offset: u64 },
-    Zero { sectors: u64 },
+    Linear {
+        sectors: u64,
+        device: (u32, u32),
+        offset: u64,
+    },
+    Zero {
+        sectors: u64,
+    },
     /// `sectors` sectors of `device`, decrypted with `key` under `cipher`
     /// as the kernel names it. `wrapped` says the key is one only the
     /// storage hardware can unwrap, which is how a phone keeps the key its
     /// data partition is encrypted with out of the running system.
-    DefaultKey { sectors: u64, device: String, cipher: String, key: String, wrapped: bool },
+    DefaultKey {
+        sectors: u64,
+        device: String,
+        cipher: String,
+        key: String,
+        wrapped: bool,
+    },
     /// `sectors` sectors of block device `base` as changed by what block
     /// device `cow` keeps, both (major, minor), in chunks of
     /// [`SNAPSHOT_CHUNK`] sectors that last across restarts. Merging, the
     /// kernel writes the changes into `base` as it goes. `overflow` has the
     /// kernel say when `cow` runs out, where its target can.
-    Snapshot { sectors: u64, base: (u32, u32), cow: (u32, u32), merge: bool, overflow: bool },
+    Snapshot {
+        sectors: u64,
+        base: (u32, u32),
+        cow: (u32, u32),
+        merge: bool,
+        overflow: bool,
+    },
 }
 
 /// The chunk an update's snapshots keep their changes in, in sectors.
@@ -50,16 +68,35 @@ impl Target {
 
     fn params(&self) -> String {
         match self {
-            Target::Linear { device: (major, minor), offset, .. } => format!("{major}:{minor} {offset}"),
+            Target::Linear {
+                device: (major, minor),
+                offset,
+                ..
+            } => format!("{major}:{minor} {offset}"),
             Target::Zero { .. } => String::new(),
-            Target::DefaultKey { device, cipher, key, wrapped, .. } => {
+            Target::DefaultKey {
+                device,
+                cipher,
+                key,
+                wrapped,
+                ..
+            } => {
                 let mut extra = vec!["allow_discards", "sector_size:4096", "iv_large_sectors"];
                 if *wrapped {
                     extra.push("wrappedkey_v0");
                 }
-                format!("{cipher} {key} 0 {device} 0 {} {}", extra.len(), extra.join(" "))
+                format!(
+                    "{cipher} {key} 0 {device} 0 {} {}",
+                    extra.len(),
+                    extra.join(" ")
+                )
             }
-            Target::Snapshot { base: (bmaj, bmin), cow: (cmaj, cmin), overflow, .. } => {
+            Target::Snapshot {
+                base: (bmaj, bmin),
+                cow: (cmaj, cmin),
+                overflow,
+                ..
+            } => {
                 let mode = if *overflow { "PO" } else { "P" };
                 format!("{bmaj}:{bmin} {cmaj}:{cmin} {mode} {SNAPSHOT_CHUNK}")
             }
@@ -149,7 +186,10 @@ const DM_LIST_VERSIONS: u32 = request(13);
 
 impl DmIoctl {
     fn new(name: &str) -> Result<DmIoctl> {
-        ensure!(!name.is_empty() && name.len() < DM_NAME_LEN, "device-mapper name {name:?}");
+        ensure!(
+            !name.is_empty() && name.len() < DM_NAME_LEN,
+            "device-mapper name {name:?}"
+        );
         let mut io = DmIoctl::new_zeroed();
         io.version = DM_VERSION;
         io.data_size = size_of::<DmIoctl>() as u32;
@@ -199,16 +239,32 @@ fn c_name(field: &[u8]) -> String {
 /// target's spec, then its text, up to the next spec, which starts `next`
 /// bytes after the first one.
 fn lines(buf: &[u8], io: &DmIoctl) -> Result<Vec<Line>> {
-    let (first, end) = (io.data_start as usize, (io.data_size as usize).min(buf.len()));
+    let (first, end) = (
+        io.data_start as usize,
+        (io.data_size as usize).min(buf.len()),
+    );
     let mut cursor = first;
     let mut out = Vec::with_capacity(io.target_count as usize);
     for _ in 0..io.target_count {
-        ensure!(cursor + size_of::<DmTargetSpec>() <= end, "the table ends inside a target's spec");
-        let (spec, _) = DmTargetSpec::read_from_prefix(&buf[cursor..end]).expect("the spec fits, as checked above");
+        ensure!(
+            cursor + size_of::<DmTargetSpec>() <= end,
+            "the table ends inside a target's spec"
+        );
+        let (spec, _) = DmTargetSpec::read_from_prefix(&buf[cursor..end])
+            .expect("the spec fits, as checked above");
         let text = cursor + size_of::<DmTargetSpec>();
         let next = (first + spec.next as usize).min(end);
-        let text = if next > text { c_name(&buf[text..next]) } else { String::new() };
-        out.push(Line { start: spec.sector_start, sectors: spec.length, kind: c_name(&spec.target_type), text });
+        let text = if next > text {
+            c_name(&buf[text..next])
+        } else {
+            String::new()
+        };
+        out.push(Line {
+            start: spec.sector_start,
+            sectors: spec.length,
+            kind: c_name(&spec.target_type),
+            text,
+        });
         cursor = next;
     }
     Ok(out)
@@ -220,7 +276,8 @@ fn versions(data: &[u8]) -> Result<Vec<(String, [u32; 3])>> {
     let mut out = Vec::new();
     let mut at = 0;
     while at < data.len() {
-        let (entry, name) = DmTargetVersions::read_from_prefix(&data[at..]).map_err(|_| anyhow!("the list ends inside a target's version"))?;
+        let (entry, name) = DmTargetVersions::read_from_prefix(&data[at..])
+            .map_err(|_| anyhow!("the list ends inside a target's version"))?;
         out.push((c_name(name), entry.version));
         if entry.next == 0 {
             break;
@@ -244,7 +301,11 @@ mod sys {
     const NODE_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn control() -> Result<File> {
-        OpenOptions::new().read(true).write(true).open(CONTROL).with_context(|| format!("open {CONTROL}"))
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(CONTROL)
+            .with_context(|| format!("open {CONTROL}"))
     }
 
     fn call(ctl: &File, request: u32, buf: &mut [u8]) -> std::io::Result<()> {
@@ -261,13 +322,16 @@ mod sys {
     pub fn create(name: &str, targets: &[Target], readonly: bool) -> Result<PathBuf> {
         let ctl = control()?;
         let mut io = DmIoctl::new(name)?;
-        call(&ctl, DM_DEV_CREATE, io.as_mut_bytes()).with_context(|| format!("create device-mapper device {name}"))?;
+        call(&ctl, DM_DEV_CREATE, io.as_mut_bytes())
+            .with_context(|| format!("create device-mapper device {name}"))?;
         let node = PathBuf::from(format!("/dev/block/dm-{}", decode(io.dev).1));
         let up = (|| -> Result<()> {
             let mut table = table_load(name, targets, readonly)?;
-            call(&ctl, DM_TABLE_LOAD, &mut table).with_context(|| format!("load the table of {name}"))?;
+            call(&ctl, DM_TABLE_LOAD, &mut table)
+                .with_context(|| format!("load the table of {name}"))?;
             let mut resume = DmIoctl::new(name)?;
-            call(&ctl, DM_DEV_SUSPEND, resume.as_mut_bytes()).with_context(|| format!("activate {name}"))?;
+            call(&ctl, DM_DEV_SUSPEND, resume.as_mut_bytes())
+                .with_context(|| format!("activate {name}"))?;
             wait_for(&node)
         })();
         match up {
@@ -281,7 +345,8 @@ mod sys {
 
     pub fn remove(name: &str) -> Result<()> {
         let mut io = DmIoctl::new(name)?;
-        call(&control()?, DM_DEV_REMOVE, io.as_mut_bytes()).with_context(|| format!("remove device-mapper device {name}"))
+        call(&control()?, DM_DEV_REMOVE, io.as_mut_bytes())
+            .with_context(|| format!("remove device-mapper device {name}"))
     }
 
     /// Give device `name`, which may be in use, `targets` as its table,
@@ -290,9 +355,11 @@ mod sys {
     pub fn reload(name: &str, targets: &[Target], readonly: bool) -> Result<()> {
         let ctl = control()?;
         let mut table = table_load(name, targets, readonly)?;
-        call(&ctl, DM_TABLE_LOAD, &mut table).with_context(|| format!("load a new table for {name}"))?;
+        call(&ctl, DM_TABLE_LOAD, &mut table)
+            .with_context(|| format!("load a new table for {name}"))?;
         let mut resume = DmIoctl::new(name)?;
-        call(&ctl, DM_DEV_SUSPEND, resume.as_mut_bytes()).with_context(|| format!("swap in the new table of {name}"))
+        call(&ctl, DM_DEV_SUSPEND, resume.as_mut_bytes())
+            .with_context(|| format!("swap in the new table of {name}"))
     }
 
     /// The (major, minor) of device `name`, or `None` when there is none.
@@ -308,7 +375,8 @@ mod sys {
     /// Whether device `name` is read-only.
     pub fn readonly(name: &str) -> Result<bool> {
         let mut io = DmIoctl::new(name)?;
-        call(&control()?, DM_DEV_STATUS, io.as_mut_bytes()).with_context(|| format!("look up device-mapper device {name}"))?;
+        call(&control()?, DM_DEV_STATUS, io.as_mut_bytes())
+            .with_context(|| format!("look up device-mapper device {name}"))?;
         Ok(io.flags & DM_READONLY_FLAG != 0)
     }
 
@@ -334,7 +402,8 @@ mod sys {
             let mut buf = io.as_bytes().to_vec();
             buf.resize(size, 0);
             call(&ctl, DM_TABLE_STATUS, &mut buf)?;
-            let (io, _) = DmIoctl::read_from_prefix(&buf).expect("the buffer starts with the header");
+            let (io, _) =
+                DmIoctl::read_from_prefix(&buf).expect("the buffer starts with the header");
             if io.flags & DM_BUFFER_FULL_FLAG == 0 {
                 return lines(&buf, &io);
             }
@@ -353,11 +422,18 @@ mod sys {
         io.data_start = size_of::<DmIoctl>() as u32;
         let mut buf = io.as_bytes().to_vec();
         buf.resize(size, 0);
-        call(&control()?, DM_LIST_VERSIONS, &mut buf).context("list the kernel's device-mapper targets")?;
+        call(&control()?, DM_LIST_VERSIONS, &mut buf)
+            .context("list the kernel's device-mapper targets")?;
         let (io, _) = DmIoctl::read_from_prefix(&buf).expect("the buffer starts with the header");
-        ensure!(io.flags & DM_BUFFER_FULL_FLAG == 0, "the kernel has more device-mapper targets than {size} bytes hold");
+        ensure!(
+            io.flags & DM_BUFFER_FULL_FLAG == 0,
+            "the kernel has more device-mapper targets than {size} bytes hold"
+        );
         let data = &buf[size_of::<DmIoctl>()..(io.data_size as usize).min(size)];
-        Ok(versions(data)?.into_iter().find(|(k, _)| k == kind).map(|(_, v)| v))
+        Ok(versions(data)?
+            .into_iter()
+            .find(|(k, _)| k == kind)
+            .map(|(_, v)| v))
     }
 
     fn decode(dev: u64) -> (u32, u32) {
@@ -369,7 +445,11 @@ mod sys {
         let start = Instant::now();
         while !node.exists() {
             if start.elapsed() > NODE_TIMEOUT {
-                bail!("ueventd made no {} within {:?}", node.display(), NODE_TIMEOUT);
+                bail!(
+                    "ueventd made no {} within {:?}",
+                    node.display(),
+                    NODE_TIMEOUT
+                );
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -431,13 +511,20 @@ mod tests {
     #[test]
     fn table_lists_targets_back_to_back() {
         let targets = [
-            Target::Linear { sectors: 4_078_120, device: (259, 29), offset: 2048 },
+            Target::Linear {
+                sectors: 4_078_120,
+                device: (259, 29),
+                offset: 2048,
+            },
             Target::Zero { sectors: 8 },
         ];
         let buf = table_load("odm_b", &targets, true).unwrap();
         let (io, rest) = DmIoctl::read_from_prefix(&buf).unwrap();
         assert_eq!(&io.name[..6], b"odm_b\0");
-        assert_eq!((io.data_start, io.data_size as usize, io.target_count), (312, buf.len(), 2));
+        assert_eq!(
+            (io.data_start, io.data_size as usize, io.target_count),
+            (312, buf.len(), 2)
+        );
         assert_eq!(io.flags, DM_READONLY_FLAG);
 
         let (first, params) = DmTargetSpec::read_from_prefix(rest).unwrap();
@@ -454,10 +541,28 @@ mod tests {
 
     #[test]
     fn a_snapshot_names_its_devices_and_how_it_keeps_its_changes() {
-        let plain = Target::Snapshot { sectors: 1_780_392, base: (253, 12), cow: (253, 14), merge: false, overflow: true };
-        assert_eq!((plain.kind(), plain.params().as_str()), ("snapshot", "253:12 253:14 PO 8"));
-        let merging = Target::Snapshot { sectors: 1_780_392, base: (253, 12), cow: (253, 14), merge: true, overflow: false };
-        assert_eq!((merging.kind(), merging.params().as_str()), ("snapshot-merge", "253:12 253:14 P 8"));
+        let plain = Target::Snapshot {
+            sectors: 1_780_392,
+            base: (253, 12),
+            cow: (253, 14),
+            merge: false,
+            overflow: true,
+        };
+        assert_eq!(
+            (plain.kind(), plain.params().as_str()),
+            ("snapshot", "253:12 253:14 PO 8")
+        );
+        let merging = Target::Snapshot {
+            sectors: 1_780_392,
+            base: (253, 12),
+            cow: (253, 14),
+            merge: true,
+            overflow: false,
+        };
+        assert_eq!(
+            (merging.kind(), merging.params().as_str()),
+            ("snapshot-merge", "253:12 253:14 P 8")
+        );
         assert_eq!(merging.sectors(), 1_780_392);
     }
 
@@ -489,28 +594,60 @@ mod tests {
         buf.extend_from_slice(&body);
         // What the kernel left of the buffer unfilled.
         buf.resize(buf.len() + 64, 0);
-        assert_eq!(lines(&buf, &io).unwrap(), [
-            Line { start: 0, sectors: 1_780_392, kind: "snapshot-merge".into(), text: "2048/233936 64".into() },
-            Line { start: 1_780_392, sectors: 8, kind: "linear".into(), text: "253:3 2048".into() },
-        ]);
+        assert_eq!(
+            lines(&buf, &io).unwrap(),
+            [
+                Line {
+                    start: 0,
+                    sectors: 1_780_392,
+                    kind: "snapshot-merge".into(),
+                    text: "2048/233936 64".into()
+                },
+                Line {
+                    start: 1_780_392,
+                    sectors: 8,
+                    kind: "linear".into(),
+                    text: "253:3 2048".into()
+                },
+            ]
+        );
         io.target_count = 3;
-        assert!(lines(&buf[..312 + body.len()], &io).is_err(), "a target past the end");
+        assert!(
+            lines(&buf[..312 + body.len()], &io).is_err(),
+            "a target past the end"
+        );
     }
 
     #[test]
     fn the_kernels_targets_are_listed_with_their_versions() {
         let mut data = Vec::new();
-        let kinds = [("snapshot", [1, 16, 0]), ("snapshot-merge", [1, 5, 0]), ("user", [1, 0, 0])];
+        let kinds = [
+            ("snapshot", [1, 16, 0]),
+            ("snapshot-merge", [1, 5, 0]),
+            ("user", [1, 0, 0]),
+        ];
         for (k, (name, version)) in kinds.iter().enumerate() {
             let at = data.len();
             let len = (size_of::<DmTargetVersions>() + name.len() + 1).next_multiple_of(8);
             let next = if k + 1 == kinds.len() { 0 } else { len as u32 };
-            data.extend_from_slice(DmTargetVersions { next, version: *version }.as_bytes());
+            data.extend_from_slice(
+                DmTargetVersions {
+                    next,
+                    version: *version,
+                }
+                .as_bytes(),
+            );
             data.extend_from_slice(name.as_bytes());
             data.resize(at + len, 0);
         }
         let listed = versions(&data).unwrap();
-        assert_eq!(listed.iter().map(|(n, v)| (n.as_str(), *v)).collect::<Vec<_>>(), kinds);
+        assert_eq!(
+            listed
+                .iter()
+                .map(|(n, v)| (n.as_str(), *v))
+                .collect::<Vec<_>>(),
+            kinds
+        );
         assert!(versions(&[]).unwrap().is_empty(), "a kernel with none");
     }
 }

@@ -32,7 +32,8 @@ pub fn add_key(mount: &Path, raw: &[u8], wrapped: bool) -> Result<[u8; NAME_BYTE
     arg[HEADER_BYTES..].copy_from_slice(raw);
     let dir = std::fs::File::open(mount).with_context(|| format!("open {}", mount.display()))?;
     if unsafe { libc::ioctl(dir.as_raw_fd(), ADD_KEY as libc::Ioctl, arg.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("let a key into {}", mount.display()));
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("let a key into {}", mount.display()));
     }
     let mut name = [0u8; NAME_BYTES];
     name.copy_from_slice(&arg[8..8 + NAME_BYTES]);
@@ -58,7 +59,14 @@ pub fn unlocked(dir: &Path) -> Result<bool> {
     let folder = std::fs::File::open(dir).with_context(|| format!("open {}", dir.display()))?;
     let mut policy = [0u8; 8 + POLICY_BYTES];
     policy[..8].copy_from_slice(&(POLICY_BYTES as u64).to_ne_bytes());
-    if unsafe { libc::ioctl(folder.as_raw_fd(), GET_POLICY as libc::Ioctl, policy.as_mut_ptr()) } != 0 {
+    if unsafe {
+        libc::ioctl(
+            folder.as_raw_fd(),
+            GET_POLICY as libc::Ioctl,
+            policy.as_mut_ptr(),
+        )
+    } != 0
+    {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ENODATA) {
             return Ok(true);
@@ -75,10 +83,21 @@ pub fn unlocked(dir: &Path) -> Result<bool> {
             status[..4].copy_from_slice(&BY_IDENTIFIER.to_ne_bytes());
             status[8..8 + NAME_BYTES].copy_from_slice(&policy[16..16 + NAME_BYTES]);
         }
-        other => bail!("{} is encrypted under a policy of version {other}, which is not known here", dir.display()),
+        other => bail!(
+            "{} is encrypted under a policy of version {other}, which is not known here",
+            dir.display()
+        ),
     }
-    if unsafe { libc::ioctl(folder.as_raw_fd(), GET_KEY_STATUS as libc::Ioctl, status.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("ask whether the key for {} is in", dir.display()));
+    if unsafe {
+        libc::ioctl(
+            folder.as_raw_fd(),
+            GET_KEY_STATUS as libc::Ioctl,
+            status.as_mut_ptr(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("ask whether the key for {} is in", dir.display()));
     }
     Ok(u32::from_ne_bytes(status[64..68].try_into().expect("four bytes")) == PRESENT)
 }
@@ -95,7 +114,11 @@ pub fn recorded_name(path: &Path) -> Result<[u8; NAME_BYTES]> {
     let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     match <[u8; NAME_BYTES]>::try_from(&raw[..]) {
         Ok(name) => Ok(name),
-        Err(_) => bail!("{} holds {} bytes, and a key's name is {NAME_BYTES}", path.display(), raw.len()),
+        Err(_) => bail!(
+            "{} holds {} bytes, and a key's name is {NAME_BYTES}",
+            path.display(),
+            raw.len()
+        ),
     }
 }
 
@@ -105,9 +128,13 @@ mod tests {
 
     #[test]
     fn a_phone_says_whether_the_hardware_holds_the_keys() {
-        assert!(hardware_wrapped("aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0"));
+        assert!(hardware_wrapped(
+            "aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0"
+        ));
         assert!(!hardware_wrapped("aes-256-xts:aes-256-cts:v2"));
-        assert!(!hardware_wrapped("aes-256-xts:aes-256-cts:v2+wrappedkey_v1"));
+        assert!(!hardware_wrapped(
+            "aes-256-xts:aes-256-cts:v2+wrappedkey_v1"
+        ));
     }
 
     #[test]

@@ -29,25 +29,37 @@ pub fn discard(device: &Path) -> Result<()> {
     const BLKSECDISCARD: libc::c_int = 0x127d;
     const BLKDISCARD: libc::c_int = 0x1277;
     let size = crate::size_bytes(device)?;
-    let f = OpenOptions::new().write(true).open(device).with_context(|| format!("open {}", device.display()))?;
+    let f = OpenOptions::new()
+        .write(true)
+        .open(device)
+        .with_context(|| format!("open {}", device.display()))?;
     let range = [0u64, size];
     // The secure kind leaves nothing behind in spare blocks either; not
     // all storage offers it.
     if unsafe { libc::ioctl(f.as_raw_fd(), BLKSECDISCARD, range.as_ptr()) } != 0 {
         let secure = std::io::Error::last_os_error();
         if unsafe { libc::ioctl(f.as_raw_fd(), BLKDISCARD, range.as_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("discard {}, after a secure discard failed with {secure}", device.display()));
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "discard {}, after a secure discard failed with {secure}",
+                    device.display()
+                )
+            });
         }
     }
     let zeros = vec![0u8; ZEROED.min(size) as usize];
-    f.write_all_at(&zeros, 0).with_context(|| format!("write zeros over the start of {}", device.display()))?;
-    f.sync_all().with_context(|| format!("sync {}", device.display()))
+    f.write_all_at(&zeros, 0)
+        .with_context(|| format!("write zeros over the start of {}", device.display()))?;
+    f.sync_all()
+        .with_context(|| format!("sync {}", device.display()))
 }
 
 #[cfg(not(target_os = "android"))]
 pub fn discard(device: &Path) -> Result<()> {
-    bail!("this host has no block device {} to discard", device.display())
+    bail!(
+        "this host has no block device {} to discard",
+        device.display()
+    )
 }
 
 /// The size of ext4's blocks and of f2fs's where make_f2fs is told no
@@ -69,7 +81,13 @@ pub fn make(device: &Path, filesystem: &str, extras: &[String], casefold: bool) 
     }
     let tool = tools::find(program)?;
     let ran = tool.run(&args)?;
-    ensure!(ran.status == 0, "{} ended with {}: {}", tool.describe(&args), ran.status, ran.said.trim());
+    ensure!(
+        ran.status == 0,
+        "{} ended with {}: {}",
+        tool.describe(&args),
+        ran.status,
+        ran.said.trim()
+    );
     Ok(())
 }
 
@@ -80,7 +98,13 @@ pub fn make(device: &Path, filesystem: &str, extras: &[String], casefold: bool) 
 /// wide enough for project quota, checksums over its metadata where the
 /// table asks for them, and laid along the storage's own blocks where the
 /// table gives their sizes.
-fn command(device: &Path, filesystem: &str, extras: &[String], casefold: bool, page: u64) -> Result<(&'static str, Vec<String>)> {
+fn command(
+    device: &Path,
+    filesystem: &str,
+    extras: &[String],
+    casefold: bool,
+    page: u64,
+) -> Result<(&'static str, Vec<String>)> {
     let has = |flag: &str| extras.iter().any(|e| e == flag);
     let mut args = Vec::new();
     match filesystem {
@@ -103,14 +127,19 @@ fn command(device: &Path, filesystem: &str, extras: &[String], casefold: bool, p
         "ext4" => {
             args.extend(["-F", "-t", "ext4", "-b", "4096", "-I", "512"].map(String::from));
             if has("metadata_csum") {
-                args.extend(["-O", "metadata_csum", "-O", "64bit", "-O", "extent"].map(String::from));
+                args.extend(
+                    ["-O", "metadata_csum", "-O", "64bit", "-O", "extent"].map(String::from),
+                );
             }
             if let Some(layout) = layout(extras)? {
                 args.extend(["-E".to_string(), layout]);
             }
             Ok((MAKE_EXT4, args))
         }
-        other => bail!("{} is to hold {other}, which the recovery cannot make", device.display()),
+        other => bail!(
+            "{} is to hold {other}, which the recovery cannot make",
+            device.display()
+        ),
     }
 }
 
@@ -120,13 +149,20 @@ fn command(device: &Path, filesystem: &str, extras: &[String], casefold: bool, p
 /// gives none, and the filesystem takes the whole partition; `size` gives
 /// the partition's own.
 fn length(extras: &[String], size: impl FnOnce() -> Result<u64>) -> Result<Option<u64>> {
-    let Some(given) = extras.iter().find_map(|e| e.strip_prefix("length=")) else { return Ok(None) };
-    let given: i64 = given.parse().with_context(|| format!("the table's length={given} is no number of bytes"))?;
+    let Some(given) = extras.iter().find_map(|e| e.strip_prefix("length=")) else {
+        return Ok(None);
+    };
+    let given: i64 = given
+        .parse()
+        .with_context(|| format!("the table's length={given} is no number of bytes"))?;
     if given >= 0 {
         return Ok((given > 0).then_some(given as u64));
     }
     let (size, kept) = (size()?, given.unsigned_abs());
-    ensure!(kept < size, "the table keeps back {kept} bytes of a partition of {size}");
+    ensure!(
+        kept < size,
+        "the table keeps back {kept} bytes of a partition of {size}"
+    );
     Ok(Some(size - kept))
 }
 
@@ -138,13 +174,24 @@ fn length(extras: &[String], size: impl FnOnce() -> Result<u64>) -> Result<Optio
 fn layout(extras: &[String]) -> Result<Option<String>> {
     let size = |name: &str| -> Result<Option<u64>> {
         let prefix = format!("{name}=");
-        let Some(given) = extras.iter().find_map(|e| e.strip_prefix(prefix.as_str())) else { return Ok(None) };
-        let n: u64 = given.parse().with_context(|| format!("the table's {name}={given} is no number of bytes"))?;
-        ensure!(n >= BLOCK && n.is_power_of_two(), "the table's {name}={given} is no power of two of at least {BLOCK}");
+        let Some(given) = extras.iter().find_map(|e| e.strip_prefix(prefix.as_str())) else {
+            return Ok(None);
+        };
+        let n: u64 = given
+            .parse()
+            .with_context(|| format!("the table's {name}={given} is no number of bytes"))?;
+        ensure!(
+            n >= BLOCK && n.is_power_of_two(),
+            "the table's {name}={given} is no power of two of at least {BLOCK}"
+        );
         Ok(Some(n))
     };
     Ok(match (size("logicalblk")?, size("eraseblk")?) {
-        (Some(written), Some(erased)) => Some(format!("stride={},stripe-width={}", written.max(8192) / BLOCK, erased / BLOCK)),
+        (Some(written), Some(erased)) => Some(format!(
+            "stride={},stripe-width={}",
+            written.max(8192) / BLOCK,
+            erased / BLOCK
+        )),
         _ => None,
     })
 }
@@ -164,14 +211,43 @@ mod tests {
 
     #[test]
     fn f2fs_is_made_with_androids_defaults_and_project_quota() {
-        let c = command(Path::new("/dev/block/by-name/metadata"), "f2fs", &[], false, 4096).unwrap();
-        assert_eq!(c, ("make_f2fs", extras(&["-g", "android", "-O", "project_quota,extra_attr"])));
+        let c = command(
+            Path::new("/dev/block/by-name/metadata"),
+            "f2fs",
+            &[],
+            false,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(
+            c,
+            (
+                "make_f2fs",
+                extras(&["-g", "android", "-O", "project_quota,extra_attr"])
+            )
+        );
     }
 
     #[test]
     fn f2fs_folds_case_where_asked_and_compresses_where_the_table_asks() {
-        let data = command(Path::new("/dev/x"), "f2fs", &extras(&["check", "fscompress"]), true, 4096).unwrap();
-        let wanted = ["-O", "casefold", "-C", "utf8", "-O", "compression", "-O", "extra_attr"];
+        let data = command(
+            Path::new("/dev/x"),
+            "f2fs",
+            &extras(&["check", "fscompress"]),
+            true,
+            4096,
+        )
+        .unwrap();
+        let wanted = [
+            "-O",
+            "casefold",
+            "-C",
+            "utf8",
+            "-O",
+            "compression",
+            "-O",
+            "extra_attr",
+        ];
         assert_eq!(&data.1[4..], extras(&wanted));
     }
 
@@ -184,20 +260,58 @@ mod tests {
     #[test]
     fn ext4_takes_metadata_checksums_where_the_table_asks() {
         let plain = command(Path::new("/dev/x"), "ext4", &extras(&["check"]), true, 4096).unwrap();
-        assert_eq!(plain, ("mke2fs", extras(&["-F", "-t", "ext4", "-b", "4096", "-I", "512"])), "case folding is f2fs's");
-        let summed = command(Path::new("/dev/x"), "ext4", &extras(&["metadata_csum"]), false, 4096).unwrap();
-        assert_eq!(&summed.1[7..], extras(&["-O", "metadata_csum", "-O", "64bit", "-O", "extent"]));
+        assert_eq!(
+            plain,
+            (
+                "mke2fs",
+                extras(&["-F", "-t", "ext4", "-b", "4096", "-I", "512"])
+            ),
+            "case folding is f2fs's"
+        );
+        let summed = command(
+            Path::new("/dev/x"),
+            "ext4",
+            &extras(&["metadata_csum"]),
+            false,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(
+            &summed.1[7..],
+            extras(&["-O", "metadata_csum", "-O", "64bit", "-O", "extent"])
+        );
     }
 
     #[test]
     fn ext4_is_laid_along_the_storages_blocks_where_the_table_gives_both_sizes() {
-        let laid = command(Path::new("/dev/x"), "ext4", &extras(&["logicalblk=4096", "eraseblk=524288"]), false, 4096).unwrap();
-        assert_eq!(&laid.1[7..], extras(&["-E", "stride=2,stripe-width=128"]), "a stride of 8 KiB at least");
+        let laid = command(
+            Path::new("/dev/x"),
+            "ext4",
+            &extras(&["logicalblk=4096", "eraseblk=524288"]),
+            false,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(
+            &laid.1[7..],
+            extras(&["-E", "stride=2,stripe-width=128"]),
+            "a stride of 8 KiB at least"
+        );
         let wide = layout(&extras(&["logicalblk=16384", "eraseblk=4194304"])).unwrap();
         assert_eq!(wide.as_deref(), Some("stride=4,stripe-width=1024"));
-        assert_eq!(layout(&extras(&["eraseblk=524288"])).unwrap(), None, "one size alone lays out nothing");
-        assert!(layout(&extras(&["logicalblk=4096", "eraseblk=6000"])).is_err(), "no power of two");
-        assert!(layout(&extras(&["logicalblk=2048", "eraseblk=524288"])).is_err(), "under 4 KiB");
+        assert_eq!(
+            layout(&extras(&["eraseblk=524288"])).unwrap(),
+            None,
+            "one size alone lays out nothing"
+        );
+        assert!(
+            layout(&extras(&["logicalblk=4096", "eraseblk=6000"])).is_err(),
+            "no power of two"
+        );
+        assert!(
+            layout(&extras(&["logicalblk=2048", "eraseblk=524288"])).is_err(),
+            "under 4 KiB"
+        );
     }
 
     #[test]
@@ -205,10 +319,22 @@ mod tests {
         let size = || Ok(1 << 30);
         assert_eq!(length(&extras(&["check"]), size).unwrap(), None);
         assert_eq!(length(&extras(&["length=0"]), size).unwrap(), None);
-        assert_eq!(length(&extras(&["length=268435456"]), size).unwrap(), Some(1 << 28));
-        assert_eq!(length(&extras(&["length=-16384"]), size).unwrap(), Some((1 << 30) - 16384));
-        assert!(length(&extras(&["length=-1073741824"]), size).is_err(), "nothing would be left");
-        assert!(length(&extras(&["length=16M"]), size).is_err(), "bytes are written as a number alone");
+        assert_eq!(
+            length(&extras(&["length=268435456"]), size).unwrap(),
+            Some(1 << 28)
+        );
+        assert_eq!(
+            length(&extras(&["length=-16384"]), size).unwrap(),
+            Some((1 << 30) - 16384)
+        );
+        assert!(
+            length(&extras(&["length=-1073741824"]), size).is_err(),
+            "nothing would be left"
+        );
+        assert!(
+            length(&extras(&["length=16M"]), size).is_err(),
+            "bytes are written as a number alone"
+        );
     }
 
     #[test]
@@ -221,21 +347,40 @@ mod tests {
     /// [`let_go`].
     #[cfg(target_os = "android")]
     fn partition(name: &str, mib: u64) -> (std::path::PathBuf, String) {
-        let image = std::env::temp_dir().join(format!("skyward-erase-{name}-{}.img", std::process::id()));
-        std::fs::File::create(&image).unwrap().set_len(mib << 20).unwrap();
+        let image =
+            std::env::temp_dir().join(format!("skyward-erase-{name}-{}.img", std::process::id()));
+        std::fs::File::create(&image)
+            .unwrap()
+            .set_len(mib << 20)
+            .unwrap();
         (image.clone(), attach(&image))
     }
 
     #[cfg(target_os = "android")]
     fn attach(image: &Path) -> String {
-        let out = std::process::Command::new("/system/bin/losetup").args(["-f", "--show"]).arg(image).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = std::process::Command::new("/system/bin/losetup")
+            .args(["-f", "--show"])
+            .arg(image)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8(out.stdout).unwrap().trim().to_string()
     }
 
     #[cfg(target_os = "android")]
     fn let_go(device: &str) {
-        assert!(std::process::Command::new("/system/bin/losetup").args(["-d", device]).status().unwrap().success(), "let {device} go");
+        assert!(
+            std::process::Command::new("/system/bin/losetup")
+                .args(["-d", device])
+                .status()
+                .unwrap()
+                .success(),
+            "let {device} go"
+        );
     }
 
     #[cfg(target_os = "android")]
@@ -245,7 +390,10 @@ mod tests {
         let (image, device) = partition("f2fs", 128);
         let dev = Path::new(&device);
         make(dev, "f2fs", &[], false).unwrap();
-        assert_eq!(crate::probe::filesystem(dev).unwrap().as_deref(), Some("f2fs"));
+        assert_eq!(
+            crate::probe::filesystem(dev).unwrap().as_deref(),
+            Some("f2fs")
+        );
         let (fixed, ran) = fsck::repair(dev, "f2fs").unwrap();
         assert_eq!(fixed, Fixed::Clean, "{}", ran.said);
         let_go(&device);
@@ -259,7 +407,10 @@ mod tests {
         let (image, device) = partition("ext4", 64);
         let dev = Path::new(&device);
         make(dev, "ext4", &["metadata_csum".into()], false).unwrap();
-        assert_eq!(crate::probe::filesystem(dev).unwrap().as_deref(), Some("ext4"));
+        assert_eq!(
+            crate::probe::filesystem(dev).unwrap().as_deref(),
+            Some("ext4")
+        );
         let (fixed, ran) = fsck::repair(dev, "ext4").unwrap();
         assert_eq!(fixed, Fixed::Clean, "{}", ran.said);
         let e2fsck = crate::tools::find(fsck::E2FSCK).unwrap();
@@ -273,12 +424,28 @@ mod tests {
     #[test]
     fn on_the_phone_f2fs_folds_case_where_asked_and_takes_the_tables_length() {
         let (image, device) = partition("casefold", 128);
-        make(Path::new(&device), "f2fs", &["length=-16777216".into()], true).unwrap();
-        let args = ["--dry-run".to_string(), "--no-kernel-check".into(), device.clone()];
+        make(
+            Path::new(&device),
+            "f2fs",
+            &["length=-16777216".into()],
+            true,
+        )
+        .unwrap();
+        let args = [
+            "--dry-run".to_string(),
+            "--no-kernel-check".into(),
+            device.clone(),
+        ];
         let said = tools::find("fsck.f2fs").unwrap().run(&args).unwrap().said;
-        let features = said.lines().find(|l| l.contains("superblock features")).unwrap_or_default();
+        let features = said
+            .lines()
+            .find(|l| l.contains("superblock features"))
+            .unwrap_or_default();
         assert!(features.contains("casefold"), "{said}");
-        assert!(said.contains("total FS sectors = 229376 (112 MB)"), "16 MiB kept back at the end: {said}");
+        assert!(
+            said.contains("total FS sectors = 229376 (112 MB)"),
+            "16 MiB kept back at the end: {said}"
+        );
         let_go(&device);
         std::fs::remove_file(&image).unwrap();
     }
@@ -287,10 +454,23 @@ mod tests {
     #[test]
     fn on_the_phone_ext4_takes_the_tables_length() {
         let (image, device) = partition("length", 64);
-        make(Path::new(&device), "ext4", &["length=-8388608".into()], false).unwrap();
+        make(
+            Path::new(&device),
+            "ext4",
+            &["length=-8388608".into()],
+            false,
+        )
+        .unwrap();
         let args = ["-f".to_string(), "-n".into(), device.clone()];
-        let said = tools::find(crate::fsck::E2FSCK).unwrap().run(&args).unwrap().said;
-        assert!(said.contains("/14336 blocks"), "8 MiB kept back at the end: {said}");
+        let said = tools::find(crate::fsck::E2FSCK)
+            .unwrap()
+            .run(&args)
+            .unwrap()
+            .said;
+        assert!(
+            said.contains("/14336 blocks"),
+            "8 MiB kept back at the end: {said}"
+        );
         let_go(&device);
         std::fs::remove_file(&image).unwrap();
     }
@@ -318,7 +498,10 @@ mod tests {
         // Both copies of the table's first block written over, as storage
         // that went bad would leave them.
         let_go(&device);
-        let file = std::fs::OpenOptions::new().write(true).open(&image).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&image)
+            .unwrap();
         for block in NAT {
             file.write_all_at(&[0x5a; 4096], block * 4096).unwrap();
         }
@@ -326,7 +509,11 @@ mod tests {
         let device = attach(&image);
         let (fixed, ran) = fsck::repair(Path::new(&device), "f2fs").unwrap();
         assert_eq!(fixed, Fixed::Fixed, "{}", ran.said);
-        assert!(ran.said.contains("[Fail]"), "it says which checks failed: {}", ran.said);
+        assert!(
+            ran.said.contains("[Fail]"),
+            "it says which checks failed: {}",
+            ran.said
+        );
         let_go(&device);
         std::fs::remove_file(&image).unwrap();
     }
@@ -344,15 +531,31 @@ mod tests {
     #[test]
     fn on_the_phone_erofs_is_told_though_blkid_does_not_know_it() {
         let tmp = std::env::temp_dir();
-        let (image, source) = (tmp.join(format!("skyward-erase-erofs-{}.img", std::process::id())), tmp.join(format!("skyward-erase-erofs-{}", std::process::id())));
+        let (image, source) = (
+            tmp.join(format!("skyward-erase-erofs-{}.img", std::process::id())),
+            tmp.join(format!("skyward-erase-erofs-{}", std::process::id())),
+        );
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("build.prop"), b"ro.product.device=ishtar\n").unwrap();
         // The ramdisk's mkfs.erofs makes an image file, not a filesystem on
         // a device.
-        let made = std::process::Command::new("/system/bin/mkfs.erofs").arg(&image).arg(&source).output().unwrap();
-        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let made = std::process::Command::new("/system/bin/mkfs.erofs")
+            .arg(&image)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
         let device = attach(&image);
-        assert_eq!(crate::probe::filesystem(Path::new(&device)).unwrap().as_deref(), Some("erofs"));
+        assert_eq!(
+            crate::probe::filesystem(Path::new(&device))
+                .unwrap()
+                .as_deref(),
+            Some("erofs")
+        );
         let_go(&device);
         std::fs::remove_dir_all(&source).unwrap();
         std::fs::remove_file(&image).unwrap();

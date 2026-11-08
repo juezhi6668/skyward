@@ -52,11 +52,19 @@ pub struct Bands {
 impl Bands {
     /// The band of a channel of `mhz`.
     pub fn of(mhz: u32) -> Bands {
-        Bands { ghz2: (2400..2500).contains(&mhz), ghz5: (4900..5925).contains(&mhz), ghz6: (5925..7125).contains(&mhz) }
+        Bands {
+            ghz2: (2400..2500).contains(&mhz),
+            ghz5: (4900..5925).contains(&mhz),
+            ghz6: (5925..7125).contains(&mhz),
+        }
     }
 
     fn join(self, other: Bands) -> Bands {
-        Bands { ghz2: self.ghz2 || other.ghz2, ghz5: self.ghz5 || other.ghz5, ghz6: self.ghz6 || other.ghz6 }
+        Bands {
+            ghz2: self.ghz2 || other.ghz2,
+            ghz5: self.ghz5 || other.ghz5,
+            ghz6: self.ghz6 || other.ghz6,
+        }
     }
 }
 
@@ -116,7 +124,11 @@ impl Link {
             frequency: 0,
             speed: None,
             generation: None,
-            mac: mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":"),
+            mac: mac
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(":"),
             reach: None,
         }
     }
@@ -133,7 +145,10 @@ pub struct Traffic {
 /// The networks the access points found make, strongest first.
 pub fn networks(found: &[Bss]) -> Vec<Network> {
     let mut out: Vec<Network> = Vec::new();
-    for bss in found.iter().filter(|b| !b.ssid.is_empty() && b.ssid.iter().any(|&c| c != 0)) {
+    for bss in found
+        .iter()
+        .filter(|b| !b.ssid.is_empty() && b.ssid.iter().any(|&c| c != 0))
+    {
         match out.iter_mut().find(|n| n.ssid == bss.ssid) {
             Some(n) => {
                 n.bands = n.bands.join(Bands::of(bss.frequency));
@@ -176,13 +191,23 @@ impl Joined {
             // Said again of a network joined, as the supplicant does on
             // moving to another of its access points, it changes nothing:
             // the address asked for or had still holds.
-            Event::Connected if matches!(self.stage, Stage::Addressing | Stage::Connected(_) | Stage::NoAddress(_)) => Next::Show,
+            Event::Connected
+                if matches!(
+                    self.stage,
+                    Stage::Addressing | Stage::Connected(_) | Stage::NoAddress(_)
+                ) =>
+            {
+                Next::Show
+            }
             Event::Connected => {
                 self.stage = Stage::Addressing;
                 Next::Address
             }
             Event::Disconnected => {
-                let had = matches!(self.stage, Stage::Addressing | Stage::Connected(_) | Stage::NoAddress(_));
+                let had = matches!(
+                    self.stage,
+                    Stage::Addressing | Stage::Connected(_) | Stage::NoAddress(_)
+                );
                 // A refused password goes on showing after the leaving it
                 // brings.
                 if self.stage != Stage::WrongPassword {
@@ -198,7 +223,9 @@ impl Joined {
                 self.stage = Stage::WrongPassword;
                 Next::Forget
             }
-            Event::TemporarilyDisabled { .. } | Event::Rejected if !matches!(self.stage, Stage::Connected(_)) => {
+            Event::TemporarilyDisabled { .. } | Event::Rejected
+                if !matches!(self.stage, Stage::Connected(_)) =>
+            {
                 self.stage = Stage::Failed;
                 Next::Show
             }
@@ -216,7 +243,14 @@ mod tests {
     use super::*;
 
     fn bss(id: u32, ssid: &[u8], signal: i32, frequency: u32) -> Bss {
-        Bss { id, bssid: format!("00:00:00:00:00:{id:02x}"), frequency, signal, security: Security::Psk, ssid: ssid.to_vec() }
+        Bss {
+            id,
+            bssid: format!("00:00:00:00:00:{id:02x}"),
+            frequency,
+            signal,
+            security: Security::Psk,
+            ssid: ssid.to_vec(),
+        }
     }
 
     #[test]
@@ -231,16 +265,50 @@ mod tests {
         ];
         let n = networks(&found);
         let names: Vec<&str> = n.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, ["Skyward", "Skyward客厅", "\u{fffd}\u{fffd}"], "the strongest first, nameless ones left out");
+        assert_eq!(
+            names,
+            ["Skyward", "Skyward客厅", "\u{fffd}\u{fffd}"],
+            "the strongest first, nameless ones left out"
+        );
         assert_eq!((n[0].signal, n[0].frequency), (-34, 5805));
-        assert_eq!(n[0].bands, Bands { ghz2: true, ghz5: true, ghz6: false }, "both its access points' bands");
-        assert_eq!(n[1].bands, Bands { ghz2: false, ghz5: true, ghz6: false });
-        assert_eq!(Bands::of(5955), Bands { ghz2: false, ghz5: false, ghz6: true });
-        assert_eq!(n[2].ssid, b"\xff\xfe", "a name that is not UTF-8 is joined as it is");
+        assert_eq!(
+            n[0].bands,
+            Bands {
+                ghz2: true,
+                ghz5: true,
+                ghz6: false
+            },
+            "both its access points' bands"
+        );
+        assert_eq!(
+            n[1].bands,
+            Bands {
+                ghz2: false,
+                ghz5: true,
+                ghz6: false
+            }
+        );
+        assert_eq!(
+            Bands::of(5955),
+            Bands {
+                ghz2: false,
+                ghz5: false,
+                ghz6: true
+            }
+        );
+        assert_eq!(
+            n[2].ssid, b"\xff\xfe",
+            "a name that is not UTF-8 is joined as it is"
+        );
     }
 
     fn joining() -> Joined {
-        Joined { ssid: b"Skyward".to_vec(), name: "Skyward".into(), security: Security::Psk, stage: Stage::Joining }
+        Joined {
+            ssid: b"Skyward".to_vec(),
+            name: "Skyward".into(),
+            security: Security::Psk,
+            stage: Stage::Joining,
+        }
     }
 
     #[test]
@@ -248,14 +316,34 @@ mod tests {
         let mut j = joining();
         assert_eq!(j.on(&Event::Connected), Next::Address);
         assert_eq!(j.stage, Stage::Addressing);
-        assert_eq!(j.on(&Event::Connected), Next::Show, "said again, the address is asked for once");
+        assert_eq!(
+            j.on(&Event::Connected),
+            Next::Show,
+            "said again, the address is asked for once"
+        );
         j.stage = Stage::NoAddress("no DHCP server offered an address".into());
-        assert_eq!(j.on(&Event::Connected), Next::Show, "an address not given is asked for again in time");
+        assert_eq!(
+            j.on(&Event::Connected),
+            Next::Show,
+            "an address not given is asked for again in time"
+        );
         j.stage = Stage::Addressing;
         assert_eq!(j.on(&Event::ScanResults), Next::Show);
-        assert_eq!(j.on(&Event::Disconnected), Next::Unaddress, "an address asked for or had goes with the network");
-        assert_eq!(j.stage, Stage::Joining, "the supplicant joins it again by itself");
-        assert_eq!(j.on(&Event::Disconnected), Next::Show, "no address to give back");
+        assert_eq!(
+            j.on(&Event::Disconnected),
+            Next::Unaddress,
+            "an address asked for or had goes with the network"
+        );
+        assert_eq!(
+            j.stage,
+            Stage::Joining,
+            "the supplicant joins it again by itself"
+        );
+        assert_eq!(
+            j.on(&Event::Disconnected),
+            Next::Show,
+            "no address to give back"
+        );
         assert_eq!(j.on(&Event::NotFound), Next::Show);
         assert_eq!(j.stage, Stage::NotFound);
         assert_eq!(j.on(&Event::Connected), Next::Address);
@@ -270,19 +358,33 @@ mod tests {
             rebind: 75600,
         };
         j.stage = Stage::Connected(Link::new(&lease, [0; 6]));
-        assert_eq!(j.on(&Event::Connected), Next::Show, "moved to another access point, the address is kept");
+        assert_eq!(
+            j.on(&Event::Connected),
+            Next::Show,
+            "moved to another access point, the address is kept"
+        );
         assert!(matches!(j.stage, Stage::Connected(_)));
     }
 
     #[test]
     fn a_refused_password_stops_the_trying() {
         let mut j = joining();
-        assert_eq!(j.on(&Event::TemporarilyDisabled { reason: "WRONG_KEY".into() }), Next::Forget);
+        assert_eq!(
+            j.on(&Event::TemporarilyDisabled {
+                reason: "WRONG_KEY".into()
+            }),
+            Next::Forget
+        );
         assert_eq!(j.stage, Stage::WrongPassword);
         assert_eq!(j.on(&Event::Disconnected), Next::Show);
         assert_eq!(j.stage, Stage::WrongPassword, "what was wrong stays said");
         let mut j = joining();
-        assert_eq!(j.on(&Event::TemporarilyDisabled { reason: "CONN_FAILED".into() }), Next::Show);
+        assert_eq!(
+            j.on(&Event::TemporarilyDisabled {
+                reason: "CONN_FAILED".into()
+            }),
+            Next::Show
+        );
         assert_eq!(j.stage, Stage::Failed);
     }
 

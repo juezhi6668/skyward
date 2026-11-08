@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use evdev::raw_stream::RawDevice;
 use evdev::{AbsoluteAxisCode, EventSummary, InputEvent, KeyCode, PropType, SynchronizationCode};
 use skyward_config::Write;
+use skyward_sys::sleep::Wakeful;
 use skyward_ui::app::{Key, Touch};
 use std::collections::HashSet;
 use std::ffi::CString;
@@ -20,7 +21,10 @@ pub enum Event {
 /// Milliseconds on the monotonic clock, which the touch panel stamps its
 /// events with.
 pub fn monotonic_ms() -> u64 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     assert_eq!(rc, 0, "read the monotonic clock");
     ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
@@ -34,7 +38,12 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-const KEYS: [KeyCode; 4] = [KeyCode::KEY_POWER, KeyCode::KEY_VOLUMEUP, KeyCode::KEY_VOLUMEDOWN, KeyCode::KEY_BACK];
+const KEYS: [KeyCode; 4] = [
+    KeyCode::KEY_POWER,
+    KeyCode::KEY_VOLUMEUP,
+    KeyCode::KEY_VOLUMEDOWN,
+    KeyCode::KEY_BACK,
+];
 
 fn key_of(code: KeyCode) -> Option<Key> {
     match code {
@@ -65,6 +74,35 @@ fn slot0_value(dev: &RawDevice, axis: AbsoluteAxisCode, slots: usize) -> io::Res
     Ok(buf[1])
 }
 
+/// Whether the panel reports `key` at all, from the driver's own EV_KEY bit
+/// mask: the kernel answers what the device can say, not what it has said.
+fn has_key(dev: &RawDevice, key: KeyCode) -> bool {
+    let mut bits = [0u8; 128];
+    // _IOC(_IOC_READ, 'E', 0x20 + EV_KEY, size)
+    let request = (2u32 << 30) | ((bits.len() as u32) << 16) | (u32::from(b'E') << 8) | (0x20 + 1);
+    if unsafe { libc::ioctl(dev.as_raw_fd(), request as _, bits.as_mut_ptr()) } < 0 {
+        return false;
+    }
+    let code = usize::from(key.0);
+    bits[code / 8] >> (code % 8) & 1 == 1
+}
+
+/// Whether `key` is held right now, from the kernel's own key state. A panel
+/// that reports its touches through the global axes without ever writing the
+/// multitouch slot array leaves [`slot0_value`] reading the zero the array
+/// started with, which reads as a finger that arrived before the recovery and
+/// never lifts; the key state is the one place that cannot say that.
+fn key_held(dev: &RawDevice, key: KeyCode) -> Option<bool> {
+    let mut bits = [0u8; 128];
+    // _IOC(_IOC_READ, 'E', 0x18, size)
+    let request = (2u32 << 30) | ((bits.len() as u32) << 16) | (u32::from(b'E') << 8) | 0x18;
+    if unsafe { libc::ioctl(dev.as_raw_fd(), request as _, bits.as_mut_ptr()) } < 0 {
+        return None;
+    }
+    let code = usize::from(key.0);
+    Some(bits[code / 8] >> (code % 8) & 1 == 1)
+}
+
 /// The direct-touch panel. Only the first finger is followed (multitouch
 /// protocol B, slot 0).
 struct Panel {
@@ -74,6 +112,9 @@ struct Panel {
     y_range: (i32, i32),
     slots: usize,
     slot: i32,
+    /// What the panel says about a finger being down at start: the key state
+    /// where it reports one, the slot array where it does not.
+    key_down: bool,
     down: bool,
     was_down: bool,
     raw: (i32, i32),
@@ -90,8 +131,12 @@ impl Panel {
         let mut slots = 1;
         for (axis, info) in dev.get_absinfo().context("read touch axis ranges")? {
             match axis {
-                AbsoluteAxisCode::ABS_MT_POSITION_X => x_range = Some((info.minimum(), info.maximum())),
-                AbsoluteAxisCode::ABS_MT_POSITION_Y => y_range = Some((info.minimum(), info.maximum())),
+                AbsoluteAxisCode::ABS_MT_POSITION_X => {
+                    x_range = Some((info.minimum(), info.maximum()))
+                }
+                AbsoluteAxisCode::ABS_MT_POSITION_Y => {
+                    y_range = Some((info.minimum(), info.maximum()))
+                }
                 AbsoluteAxisCode::ABS_MT_SLOT => slots = info.maximum() as usize + 1,
                 _ => {}
             }
@@ -104,23 +149,66 @@ impl Panel {
         let request = (1u32 << 30) | (4u32 << 16) | (u32::from(b'E') << 8) | 0xa0;
         let clock: libc::c_int = libc::CLOCK_MONOTONIC;
         if unsafe { libc::ioctl(dev.as_raw_fd(), request as _, &clock) } < 0 {
-            return Err(io::Error::last_os_error()).context("stamp touch events with the monotonic clock");
+            return Err(io::Error::last_os_error())
+                .context("stamp touch events with the monotonic clock");
         }
         set_nonblocking(dev.as_raw_fd()).context("make touch non-blocking")?;
-        let mut panel =
-            Panel { dev, path, x_range, y_range, slots, slot: 0, down: false, was_down: false, raw: (0, 0), moved: false, dropped: false };
+        // Whether the panel can be asked, from the kernel, if a finger is down now.
+        let key_down = has_key(&dev, KeyCode::BTN_TOUCH);
+        let mut panel = Panel {
+            dev,
+            path,
+            x_range,
+            y_range,
+            slots,
+            slot: 0,
+            key_down,
+            down: false,
+            was_down: false,
+            raw: (0, 0),
+            moved: false,
+            dropped: false,
+        };
         // The kernel drops a position equal to the one a slot already holds,
         // so a touch landing where the last one lifted carries no position;
         // start from what the panel holds now.
-        panel.resync().context("read the touch state")?;
-        eprintln!("touch {:?}: x {:?} y {:?}, {slots} slots, slot 0 at {:?}", panel.dev.name().unwrap_or("?"), x_range, y_range, panel.raw);
+        panel.resync(true).context("read the touch state")?;
+        eprintln!(
+            "touch {:?}: x {:?} y {:?}, {slots} slots, slot 0 at {:?}",
+            panel.dev.name().unwrap_or("?"),
+            x_range,
+            y_range,
+            panel.raw
+        );
         Ok(panel)
     }
 
     /// Read the current slot and slot 0's finger back from the panel.
-    fn resync(&mut self) -> io::Result<()> {
+    ///
+    /// `at_open` is when this process has seen no events yet: what the kernel
+    /// has kept cannot then be a finger this recovery is holding, and on a
+    /// panel that never writes its multitouch slot array the kept value says
+    /// one is down forever - which reads as a drag that began before anything
+    /// was drawn, so every press after it arrives as a move of that one
+    /// impossible finger rather than as a touch of its own.
+    fn resync(&mut self, at_open: bool) -> io::Result<()> {
         self.slot = self.dev.get_abs_state()?[usize::from(AbsoluteAxisCode::ABS_MT_SLOT.0)].value;
-        self.down = slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_TRACKING_ID, self.slots)? >= 0;
+        self.down = if at_open {
+            false
+        } else {
+            match (self.key_down, key_held(&self.dev, KeyCode::BTN_TOUCH)) {
+                (true, Some(held)) => held,
+                _ => slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_TRACKING_ID, self.slots)? >= 0,
+            }
+        };
+        self.was_down = self.down;
+        eprintln!(
+            "touch state read at {}: down={}, key_down={}, held={:?}",
+            if at_open { "open" } else { "a drop" },
+            self.down,
+            self.key_down,
+            key_held(&self.dev, KeyCode::BTN_TOUCH)
+        );
         self.raw = (
             slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_X, self.slots)?,
             slot0_value(&self.dev, AbsoluteAxisCode::ABS_MT_POSITION_Y, self.slots)?,
@@ -138,10 +226,12 @@ impl Panel {
         for e in events {
             match e.destructure() {
                 // Skip to the next report and read the state back there.
-                EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _) => self.dropped = true,
+                EventSummary::Synchronization(_, SynchronizationCode::SYN_DROPPED, _) => {
+                    self.dropped = true
+                }
                 EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _) => {
                     if std::mem::take(&mut self.dropped) {
-                        self.resync()?;
+                        self.resync(false)?;
                     }
                     let time = e.as_ref().time;
                     let at = time.tv_sec as u64 * 1000 + time.tv_usec as u64 / 1000;
@@ -159,12 +249,20 @@ impl Panel {
                 }
                 _ if self.dropped => {}
                 EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_SLOT, v) => self.slot = v,
-                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_TRACKING_ID, v) if self.slot == 0 => self.down = v >= 0,
-                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v) if self.slot == 0 => {
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_TRACKING_ID, v)
+                    if self.slot == 0 =>
+                {
+                    self.down = v >= 0
+                }
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_X, v)
+                    if self.slot == 0 =>
+                {
                     self.raw.0 = v;
                     self.moved = true;
                 }
-                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v) if self.slot == 0 => {
+                EventSummary::AbsoluteAxis(_, AbsoluteAxisCode::ABS_MT_POSITION_Y, v)
+                    if self.slot == 0 =>
+                {
                     self.raw.1 = v;
                     self.moved = true;
                 }
@@ -180,6 +278,9 @@ impl Panel {
 /// loads after the UI starts, is picked up when it appears.
 pub struct Inputs {
     watch: OwnedFd,
+    /// The watch and every device taken in: a touch or a key press keeps
+    /// the phone awake until it is read.
+    wakeful: Wakeful,
     panel: Option<Panel>,
     buttons: Vec<(PathBuf, RawDevice)>,
     seen: HashSet<PathBuf>,
@@ -199,11 +300,23 @@ impl Inputs {
         let dir = CString::new("/dev/input")?;
         // IN_ATTRIB too: ueventd sets a node's owner and mode right after
         // creating it, and the node may only open once that is done.
-        if unsafe { libc::inotify_add_watch(fd, dir.as_ptr(), libc::IN_CREATE | libc::IN_ATTRIB) } < 0 {
+        if unsafe { libc::inotify_add_watch(fd, dir.as_ptr(), libc::IN_CREATE | libc::IN_ATTRIB) }
+            < 0
+        {
             return Err(io::Error::last_os_error()).context("watch /dev/input");
         }
-        let mut inputs =
-            Inputs { watch, panel: None, buttons: Vec::new(), seen: HashSet::new(), touch_writes, w: w as f32, h: h as f32 };
+        let wakeful = Wakeful::new()?;
+        wakeful.add(fd)?;
+        let mut inputs = Inputs {
+            watch,
+            wakeful,
+            panel: None,
+            buttons: Vec::new(),
+            seen: HashSet::new(),
+            touch_writes,
+            w: w as f32,
+            h: h as f32,
+        };
         inputs.scan()?;
         if inputs.panel.is_none() {
             eprintln!("no touch panel yet; waiting for one to appear under /dev/input");
@@ -221,19 +334,32 @@ impl Inputs {
                 continue;
             }
             let direct = dev.properties().contains(PropType::DIRECT);
-            let mt = dev
-                .supported_absolute_axes()
-                .is_some_and(|a| a.contains(AbsoluteAxisCode::ABS_MT_POSITION_X) && a.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y));
-            let keys = dev.supported_keys().is_some_and(|k| KEYS.iter().any(|c| k.contains(*c)));
-            eprintln!("input {}: {:?} direct={direct} multitouch={mt} keys={keys}", path.display(), dev.name().unwrap_or("?"));
+            let mt = dev.supported_absolute_axes().is_some_and(|a| {
+                a.contains(AbsoluteAxisCode::ABS_MT_POSITION_X)
+                    && a.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y)
+            });
+            let keys = dev
+                .supported_keys()
+                .is_some_and(|k| KEYS.iter().any(|c| k.contains(*c)));
+            eprintln!(
+                "input {}: {:?} direct={direct} multitouch={mt} keys={keys}",
+                path.display(),
+                dev.name().unwrap_or("?")
+            );
             if direct && mt && self.panel.is_none() {
+                self.wakeful.add(dev.as_raw_fd())?;
                 self.panel = Some(Panel::new(path, dev)?);
                 for w in &self.touch_writes {
-                    fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
-                    skyward_sys::kmsg(&format!("wrote {} to {} for the touchscreen", w.value, w.path))?;
+                    fs::write(&w.path, &w.value)
+                        .with_context(|| format!("write {} to {}", w.value, w.path))?;
+                    skyward_sys::kmsg(&format!(
+                        "wrote {} to {} for the touchscreen",
+                        w.value, w.path
+                    ))?;
                 }
             } else if keys {
                 set_nonblocking(dev.as_raw_fd()).context("make buttons non-blocking")?;
+                self.wakeful.add(dev.as_raw_fd())?;
                 self.buttons.push((path, dev));
             }
         }
@@ -245,7 +371,8 @@ impl Inputs {
         let mut buf = [0u8; 4096];
         let mut any = false;
         loop {
-            let n = unsafe { libc::read(self.watch.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
+            let n =
+                unsafe { libc::read(self.watch.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
             if n >= 0 {
                 any = true;
                 continue;
@@ -264,11 +391,9 @@ impl Inputs {
         self.panel.is_some()
     }
 
-    pub fn fds(&self) -> Vec<RawFd> {
-        let mut fds = vec![self.watch.as_raw_fd()];
-        fds.extend(self.panel.iter().map(|p| p.dev.as_raw_fd()));
-        fds.extend(self.buttons.iter().map(|(_, b)| b.as_raw_fd()));
-        fds
+    /// Readable while a device has something queued, or /dev/input changed.
+    pub fn fd(&self) -> RawFd {
+        self.wakeful.fd()
     }
 
     /// Everything the devices have queued, as touches and key presses.

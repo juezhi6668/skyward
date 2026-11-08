@@ -17,17 +17,21 @@ const KEY_BLOB: i64 = 0;
 pub fn key_blob(database: &Path, alias: &str) -> Result<Vec<u8>> {
     let at = format!("file:{}?immutable=1", database.display());
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-    let db = rusqlite::Connection::open_with_flags(&at, flags).with_context(|| format!("open {}", database.display()))?;
+    let db = rusqlite::Connection::open_with_flags(&at, flags)
+        .with_context(|| format!("open {}", database.display()))?;
     let mut query = db
         .prepare(
             "SELECT b.blob FROM blobentry b JOIN keyentry k ON b.keyentryid = k.id
              WHERE k.alias = ?1 AND b.subcomponent_type = ?2 ORDER BY b.id DESC LIMIT 1",
         )
         .context("ask the key service's store for a key")?;
-    let mut rows = query.query((alias, KEY_BLOB)).context("ask the key service's store for a key")?;
+    let mut rows = query
+        .query((alias, KEY_BLOB))
+        .context("ask the key service's store for a key")?;
     let row = rows
         .next()
         .with_context(|| format!("read what {} says about {alias}", database.display()))?
         .with_context(|| format!("{} holds no key named {alias}", database.display()))?;
-    row.get(0).with_context(|| format!("read the key named {alias}"))
+    row.get(0)
+        .with_context(|| format!("read the key named {alias}"))
 }

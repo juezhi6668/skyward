@@ -41,18 +41,26 @@ impl Control {
     /// The socket init handed this process, listening; none when the
     /// process was not started by init as the recovery service.
     pub fn open() -> Result<Option<Control>> {
-        let Ok(var) = std::env::var(SOCKET_ENV) else { return Ok(None) };
-        let fd: RawFd = var.parse().with_context(|| format!("{SOCKET_ENV} is {var:?}"))?;
+        let Ok(var) = std::env::var(SOCKET_ENV) else {
+            return Ok(None);
+        };
+        let fd: RawFd = var
+            .parse()
+            .with_context(|| format!("{SOCKET_ENV} is {var:?}"))?;
         // init binds the socket and leaves the listening to the service; the
         // phone's own programs the recovery starts are not to inherit it.
-        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 || unsafe { libc::listen(fd, 4) } < 0 {
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+            || unsafe { libc::listen(fd, 4) } < 0
+        {
             return Err(io::Error::last_os_error()).context("listen on the recovery socket");
         }
         Control::over(unsafe { UnixListener::from_raw_fd(fd) }).map(Some)
     }
 
     fn over(listener: UnixListener) -> Result<Control> {
-        listener.set_nonblocking(true).context("stop the recovery socket from blocking")?;
+        listener
+            .set_nonblocking(true)
+            .context("stop the recovery socket from blocking")?;
         Ok(Control { listener })
     }
 
@@ -71,15 +79,29 @@ impl Control {
                 Err(e) => return Err(e).context("accept on the recovery socket"),
             };
             // Some systems hand on the listener's non-blocking mode.
-            stream.set_nonblocking(false).context("let the recovery socket's connection block")?;
-            let mut ready = libc::pollfd { fd: stream.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            stream
+                .set_nonblocking(false)
+                .context("let the recovery socket's connection block")?;
+            let mut ready = libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
             match unsafe { libc::poll(&mut ready, 1, READ_TIMEOUT.as_millis() as i32) } {
-                n if n < 0 => return Err(io::Error::last_os_error()).context("wait on the recovery socket's connection"),
-                0 => bail!("a program connected to the recovery socket and sent nothing for {} ms", READ_TIMEOUT.as_millis()),
+                n if n < 0 => {
+                    return Err(io::Error::last_os_error())
+                        .context("wait on the recovery socket's connection")
+                }
+                0 => bail!(
+                    "a program connected to the recovery socket and sent nothing for {} ms",
+                    READ_TIMEOUT.as_millis()
+                ),
                 _ => {}
             }
             let mut byte = [0u8; 1];
-            stream.read_exact(&mut byte).context("read what was asked on the recovery socket")?;
+            stream
+                .read_exact(&mut byte)
+                .context("read what was asked on the recovery socket")?;
             out.push(Request::parse(byte[0])?);
         }
     }
@@ -102,11 +124,20 @@ mod tests {
     fn each_program_that_connects_asks_one_thing() {
         let path = socket("asks");
         let control = Control::over(UnixListener::bind(&path).unwrap()).unwrap();
-        assert!(control.requests().unwrap().is_empty(), "no one has connected");
+        assert!(
+            control.requests().unwrap().is_empty(),
+            "no one has connected"
+        );
         for byte in *b"fr" {
-            UnixStream::connect(&path).unwrap().write_all(&[byte]).unwrap();
+            UnixStream::connect(&path)
+                .unwrap()
+                .write_all(&[byte])
+                .unwrap();
         }
-        assert_eq!(control.requests().unwrap(), vec![Request::Fastboot, Request::Recovery]);
+        assert_eq!(
+            control.requests().unwrap(),
+            vec![Request::Fastboot, Request::Recovery]
+        );
         assert!(control.requests().unwrap().is_empty(), "each is taken once");
         std::fs::remove_file(&path).unwrap();
     }

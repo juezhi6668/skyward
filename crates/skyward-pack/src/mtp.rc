@@ -1,22 +1,32 @@
-# File transfer: an MTP function beside adb. Skyward serves the function
-# itself; once it has written the descriptors it sets sys.usb.ffs.mtp.ready,
-# and with adbd ready too, init binds the two together.
-on fs && property:sys.usb.configfs=1
+# File transfer: an MTP function beside adb, for a recovery that serves the
+# function itself. The function is made once at boot, next to the adb one
+# the base already sets up, and the functionfs is mounted only once the
+# function behind it exists -- the kernel refuses it the other way round.
+# The port is re-bound for file transfer only once this program has written
+# the descriptors (sys.usb.ffs.mtp.ready) and adbd has its own function
+# ready too (sys.usb.ffs.ready), which is what the base's adb rules wait for
+# as well.
+on boot
     mkdir /config/usb_gadget/g1/functions/ffs.mtp
+    mkdir /dev/usb-ffs 0770 shell shell
     mkdir /dev/usb-ffs/mtp 0770 root root
     mount functionfs mtp /dev/usb-ffs/mtp rmode=0770,fmode=0660,uid=0,gid=0
 
-on property:sys.usb.config=mtp,adb && property:sys.usb.config_disable=0
+on property:sys.usb.config=mtp,adb
     start adbd
 
-on property:sys.usb.config=mtp,adb && property:sys.usb.ffs.ready=1 && property:sys.usb.ffs.mtp.ready=1 && property:sys.usb.configfs=1
-    write /config/usb_gadget/g1/idProduct 0x4EE2
+on property:sys.usb.ffs.ready=1 && property:sys.usb.config=mtp,adb && property:sys.usb.ffs.mtp.ready=1
+    # The ids this computer already takes for MTP with adb on this phone:
+    # the base's own. Windows binds by VID:PID, and Google's single-function
+    # ids each cost one of the two -- 0x4EE2 gives the ADB interface its
+    # bootloader driver, 0x4EE7 claims the composite as one ADB device and
+    # never enumerates the picture-transfer interface at all.
+    write /config/usb_gadget/g1/idVendor 0x2717
+    write /config/usb_gadget/g1/idProduct 0xFF48
     write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "mtp_adb"
+    rm /config/usb_gadget/g1/configs/b.1/f1
+    rm /config/usb_gadget/g1/configs/b.1/f2
     symlink /config/usb_gadget/g1/functions/ffs.mtp /config/usb_gadget/g1/configs/b.1/f1
     symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f2
     write /config/usb_gadget/g1/UDC ${sys.usb.controller}
     setprop sys.usb.state ${sys.usb.config}
-
-# The stock rules take the first function off; this takes the second.
-on property:sys.usb.config=none && property:sys.usb.configfs=1
-    rm /config/usb_gadget/g1/configs/b.1/f2

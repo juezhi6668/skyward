@@ -39,12 +39,50 @@ pub struct Ramdisk {
     pub entries: Vec<Entry>,
 }
 
+/// How a boot image's ramdisk is compressed. The kernel reads whichever
+/// format its own build allows, so a recovery is packed as the base it is
+/// built on already is: gzip where a 4.4 or 4.19 Qualcomm kernel is built
+/// with RD_GZIP, LZ4 where the newer ones ship RD_LZ4.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Gzip,
+    Lz4,
+}
+
+impl Format {
+    /// The format `bytes` are compressed with. The kernel's initramfs
+    /// unpacker reads no LZ4 framing besides the frames themselves, so a
+    /// legacy-block stream is named in the error rather than guessed at.
+    pub fn of(bytes: &[u8]) -> Result<Format> {
+        match bytes {
+            [0x1f, 0x8b, ..] => Ok(Format::Gzip),
+            [0x04, b'"', b'M', 0x18, ..] => Ok(Format::Lz4),
+            other => bail!(
+                "ramdisk starts with {}, which is neither gzip nor an LZ4 frame",
+                other
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        }
+    }
+}
+
 impl Ramdisk {
-    /// Unpack an LZ4 (legacy framing) compressed newc archive, as Android
-    /// boot images carry.
+    /// Unpack a compressed newc archive, as Android boot images carry it.
     pub fn decode(compressed: &[u8]) -> Result<Self> {
         let mut cpio = Vec::new();
-        lz4_flex::frame::FrameDecoder::new(compressed).read_to_end(&mut cpio).context("lz4 decode")?;
+        match Format::of(compressed)? {
+            Format::Gzip => std::io::copy(&mut flate2::read::GzDecoder::new(compressed), &mut cpio)
+                .context("gzip decode")?,
+            Format::Lz4 => std::io::copy(
+                &mut lz4_flex::frame::FrameDecoder::new(compressed),
+                &mut cpio,
+            )
+            .context("lz4 decode")?,
+        };
         let mut entries = Vec::new();
         let mut rest = Cursor::new(cpio.as_slice());
         loop {
@@ -64,20 +102,22 @@ impl Ramdisk {
                 rdev: (e.rdev_major(), e.rdev_minor()),
                 data: Vec::with_capacity(e.file_size() as usize),
             };
-            r.read_to_end(&mut entry.data).with_context(|| format!("cpio data of {}", entry.name))?;
+            r.read_to_end(&mut entry.data)
+                .with_context(|| format!("cpio data of {}", entry.name))?;
             entries.push(entry);
             rest = r.finish().context("cpio entry end")?;
         }
         Ok(Ramdisk { entries })
     }
 
-    /// Pack as a newc archive compressed the way AOSP packs boot ramdisks,
-    /// with the reference `lz4` tool in legacy framing (the kernel's initramfs
-    /// unpacker reads no other LZ4 framing).
-    pub fn encode(&self) -> Result<Vec<u8>> {
+    /// Pack as a newc archive compressed the way the base image was: gzip in
+    /// process, or LZ4 in the legacy framing the kernel's initramfs unpacker
+    /// reads, which the reference `lz4` tool writes.
+    pub fn encode(&self, format: Format) -> Result<Vec<u8>> {
         let mut cpio = Vec::new();
         for (ino, e) in self.entries.iter().enumerate() {
-            let size = u32::try_from(e.data.len()).with_context(|| format!("{} is too large", e.name))?;
+            let size =
+                u32::try_from(e.data.len()).with_context(|| format!("{} is too large", e.name))?;
             let mut w = NewcBuilder::new(&e.name)
                 .ino(300_000 + ino as u32)
                 .mode(e.mode)
@@ -94,7 +134,27 @@ impl Ramdisk {
             w.finish()?;
         }
         cpio::newc::trailer(&mut cpio)?;
-        lz4_legacy(&cpio)
+        match format {
+            Format::Gzip => {
+                let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(9));
+                gz.write_all(&cpio).context("gzip encode")?;
+                gz.finish().context("gzip encode")
+            }
+            Format::Lz4 => lz4_legacy(&cpio),
+        }
+    }
+
+    /// Take out `at`, whether one file or a whole folder with everything
+    /// under it, and report how many entries went with it. A base built by
+    /// someone else carries the resources of the recovery it came from, which
+    /// a packed image has no reason to keep: they are the room the new
+    /// recovery would rather have for itself.
+    pub fn drop_at(&mut self, at: &str) -> usize {
+        let under = format!("{at}/");
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| e.name != at && !e.name.starts_with(&under));
+        before - self.entries.len()
     }
 
     pub fn find(&self, name: &str) -> Option<&Entry> {
@@ -146,7 +206,9 @@ impl Ramdisk {
             match self.find(&parent) {
                 Some(e) if e.is_dir() => {}
                 Some(_) => bail!("{parent} is not a directory"),
-                None => self.entries.push(root_entry(&parent, S_IFDIR | 0o755, Vec::new())),
+                None => self
+                    .entries
+                    .push(root_entry(&parent, S_IFDIR | 0o755, Vec::new())),
             }
         }
         self.entries.push(root_entry(name, mode, data));
@@ -156,7 +218,17 @@ impl Ramdisk {
 
 fn root_entry(name: &str, mode: u32, data: Vec<u8>) -> Entry {
     let nlink = if mode & S_IFMT == S_IFDIR { 2 } else { 1 };
-    Entry { name: name.to_string(), mode, uid: 0, gid: 0, mtime: 0, nlink, dev: (0, 0), rdev: (0, 0), data }
+    Entry {
+        name: name.to_string(),
+        mode,
+        uid: 0,
+        gid: 0,
+        mtime: 0,
+        nlink,
+        dev: (0, 0),
+        rdev: (0, 0),
+        data,
+    }
 }
 
 fn lz4_legacy(input: &[u8]) -> Result<Vec<u8>> {
@@ -170,7 +242,10 @@ fn lz4_legacy(input: &[u8]) -> Result<Vec<u8>> {
     let input = input.to_vec();
     let writer = std::thread::spawn(move || stdin.write_all(&input));
     let out = child.wait_with_output().context("lz4")?;
-    writer.join().expect("lz4 writer thread").context("feed lz4")?;
+    writer
+        .join()
+        .expect("lz4 writer thread")
+        .context("feed lz4")?;
     if !out.status.success() {
         bail!("lz4 exited with {}", out.status);
     }
@@ -183,8 +258,11 @@ mod tests {
 
     #[test]
     fn round_trip_keeps_metadata() {
-        let mut rd = Ramdisk { entries: Vec::new() };
-        rd.add("system/bin/recovery", 0o750, b"binary".to_vec()).unwrap();
+        let mut rd = Ramdisk {
+            entries: Vec::new(),
+        };
+        rd.add("system/bin/recovery", 0o750, b"binary".to_vec())
+            .unwrap();
         rd.entries.push(Entry {
             name: "dev/console".into(),
             mode: 0o020600,
@@ -196,34 +274,58 @@ mod tests {
             rdev: (5, 1),
             data: Vec::new(),
         });
-        let back = Ramdisk::decode(&rd.encode().unwrap()).unwrap();
+        let back = Ramdisk::decode(&rd.encode(Format::Gzip).unwrap()).unwrap();
         let names: Vec<&str> = back.entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["system", "system/bin", "system/bin/recovery", "dev/console"]);
+        assert_eq!(
+            names,
+            ["system", "system/bin", "system/bin/recovery", "dev/console"]
+        );
         let bin = back.find("system/bin/recovery").unwrap();
-        assert_eq!((bin.mode, bin.data.as_slice()), (S_IFREG | 0o750, b"binary".as_slice()));
+        assert_eq!(
+            (bin.mode, bin.data.as_slice()),
+            (S_IFREG | 0o750, b"binary".as_slice())
+        );
         assert_eq!(back.find("dev/console").unwrap().rdev, (5, 1));
         assert!(rd.add("system/bin/recovery", 0o644, Vec::new()).is_err());
     }
 
     #[test]
     fn a_link_is_kept_as_a_link_to_its_target() {
-        let mut rd = Ramdisk { entries: Vec::new() };
-        rd.add("system/bin/recovery", 0o750, b"binary".to_vec()).unwrap();
+        let mut rd = Ramdisk {
+            entries: Vec::new(),
+        };
+        rd.add("system/bin/recovery", 0o750, b"binary".to_vec())
+            .unwrap();
         rd.link("system/bin/zstd", "recovery").unwrap();
         rd.link("sbin/sh", "/system/bin/sh").unwrap();
-        let back = Ramdisk::decode(&rd.encode().unwrap()).unwrap();
+        let back = Ramdisk::decode(&rd.encode(Format::Gzip).unwrap()).unwrap();
         let zstd = back.find("system/bin/zstd").unwrap();
-        assert_eq!((zstd.mode, zstd.data.as_slice()), (S_IFLNK | LINK_MODE, b"recovery".as_slice()));
+        assert_eq!(
+            (zstd.mode, zstd.data.as_slice()),
+            (S_IFLNK | LINK_MODE, b"recovery".as_slice())
+        );
         assert_eq!((zstd.uid, zstd.gid, zstd.nlink), (0, 0, 1));
-        assert!(back.find("sbin").is_some_and(Entry::is_dir), "a missing folder is made");
-        assert!(rd.link("system/bin/recovery", "zstd").is_err(), "a file is no link to point anew");
-        assert!(rd.link("system/bin/recovery/7za", "recovery").is_err(), "a file holds no links");
+        assert!(
+            back.find("sbin").is_some_and(Entry::is_dir),
+            "a missing folder is made"
+        );
+        assert!(
+            rd.link("system/bin/recovery", "zstd").is_err(),
+            "a file is no link to point anew"
+        );
+        assert!(
+            rd.link("system/bin/recovery/7za", "recovery").is_err(),
+            "a file holds no links"
+        );
     }
 
     #[test]
     fn a_link_already_there_is_pointed_anew_keeping_the_rest_of_its_entry() {
-        let mut rd = Ramdisk { entries: Vec::new() };
-        rd.add("system/bin/ziptool", 0o755, b"binary".to_vec()).unwrap();
+        let mut rd = Ramdisk {
+            entries: Vec::new(),
+        };
+        rd.add("system/bin/ziptool", 0o755, b"binary".to_vec())
+            .unwrap();
         rd.entries.push(Entry {
             name: "system/bin/unzip".into(),
             mode: S_IFLNK | 0o755,
@@ -237,10 +339,16 @@ mod tests {
         });
         let count = rd.entries.len();
         rd.link("system/bin/unzip", "recovery").unwrap();
-        let back = Ramdisk::decode(&rd.encode().unwrap()).unwrap();
+        let back = Ramdisk::decode(&rd.encode(Format::Gzip).unwrap()).unwrap();
         let unzip = back.find("system/bin/unzip").unwrap();
-        assert_eq!((unzip.data.as_slice(), unzip.mode, unzip.gid), (b"recovery".as_slice(), S_IFLNK | 0o755, 2000));
+        assert_eq!(
+            (unzip.data.as_slice(), unzip.mode, unzip.gid),
+            (b"recovery".as_slice(), S_IFLNK | 0o755, 2000)
+        );
         assert_eq!(back.entries.len(), count, "no second entry of the name");
-        assert!(back.find("system/bin/ziptool").is_some(), "what it pointed to stays");
+        assert!(
+            back.find("system/bin/ziptool").is_some(),
+            "what it pointed to stays"
+        );
     }
 }

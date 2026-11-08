@@ -62,7 +62,14 @@ pub struct Store {
 
 impl Store {
     pub fn new(top: PathBuf) -> io::Result<Store> {
-        Ok(Store { top, entries: HashMap::new(), root: Folder::default(), next: 1, watch: Watch::new()?, found: Vec::new() })
+        Ok(Store {
+            top,
+            entries: HashMap::new(),
+            root: Folder::default(),
+            next: 1,
+            watch: Watch::new()?,
+            found: Vec::new(),
+        })
     }
 
     pub fn top(&self) -> &Path {
@@ -95,7 +102,11 @@ impl Store {
     /// The path from the top of the storage, as the persistent ID takes it.
     pub fn relative(&self, h: u32) -> Option<PathBuf> {
         let path = self.path(h)?;
-        Some(path.strip_prefix(&self.top).expect("every path starts at the top").to_path_buf())
+        Some(
+            path.strip_prefix(&self.top)
+                .expect("every path starts at the top")
+                .to_path_buf(),
+        )
     }
 
     pub fn name(&self, h: u32) -> Option<&OsStr> {
@@ -120,14 +131,24 @@ impl Store {
         if h == TOP {
             return Ok(&self.root);
         }
-        self.entries.get(&h).ok_or(Error::Unknown)?.folder.as_ref().ok_or(Error::NotFolder)
+        self.entries
+            .get(&h)
+            .ok_or(Error::Unknown)?
+            .folder
+            .as_ref()
+            .ok_or(Error::NotFolder)
     }
 
     fn folder_mut(&mut self, h: u32) -> Result<&mut Folder, Error> {
         if h == TOP {
             return Ok(&mut self.root);
         }
-        self.entries.get_mut(&h).ok_or(Error::Unknown)?.folder.as_mut().ok_or(Error::NotFolder)
+        self.entries
+            .get_mut(&h)
+            .ok_or(Error::Unknown)?
+            .folder
+            .as_mut()
+            .ok_or(Error::NotFolder)
     }
 
     /// The handles of a folder's entries.
@@ -169,7 +190,12 @@ impl Store {
             let entry = entry.map_err(Error::Io)?;
             on_disk.insert(entry.file_name(), is_dir(&entry.path()));
         }
-        let known: Vec<(OsString, u32)> = self.folder(folder)?.entries.iter().map(|(n, &h)| (n.clone(), h)).collect();
+        let known: Vec<(OsString, u32)> = self
+            .folder(folder)?
+            .entries
+            .iter()
+            .map(|(n, &h)| (n.clone(), h))
+            .collect();
         for (name, h) in known {
             if on_disk.get(&name) != Some(&self.is_folder(h)) {
                 self.remove(h);
@@ -194,15 +220,30 @@ impl Store {
             self.remove(old);
         }
         let h = self.next;
-        self.next = self.next.checked_add(1).expect("a session names fewer than four billion entries");
-        self.folder_mut(folder).expect("entries go into a known folder").entries.insert(name.clone(), h);
-        self.entries.insert(h, Entry { parent: folder, name, folder: is_folder.then(Folder::default) });
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("a session names fewer than four billion entries");
+        self.folder_mut(folder)
+            .expect("entries go into a known folder")
+            .entries
+            .insert(name.clone(), h);
+        self.entries.insert(
+            h,
+            Entry {
+                parent: folder,
+                name,
+                folder: is_folder.then(Folder::default),
+            },
+        );
         h
     }
 
     /// Forget an entry, and everything in it.
     pub fn remove(&mut self, h: u32) {
-        let Some(entry) = self.entries.remove(&h) else { return };
+        let Some(entry) = self.entries.remove(&h) else {
+            return;
+        };
         if let Ok(parent) = self.folder_mut(entry.parent) {
             parent.entries.remove(&entry.name);
         }
@@ -216,7 +257,11 @@ impl Store {
             self.watch.remove(wd);
         }
         for h in folder.entries.into_values() {
-            if let Some(Entry { folder: Some(inner), .. }) = self.entries.remove(&h) {
+            if let Some(Entry {
+                folder: Some(inner),
+                ..
+            }) = self.entries.remove(&h)
+            {
                 self.forget(inner);
             }
         }
@@ -235,12 +280,18 @@ impl Store {
             self.remove(old);
         }
         let entry = self.entries.get_mut(&h).expect("a known entry is moved");
-        let (from, old) = (entry.parent, std::mem::replace(&mut entry.name, name.clone()));
+        let (from, old) = (
+            entry.parent,
+            std::mem::replace(&mut entry.name, name.clone()),
+        );
         entry.parent = folder;
         if let Ok(parent) = self.folder_mut(from) {
             parent.entries.remove(&old);
         }
-        self.folder_mut(folder).expect("entries go into a known folder").entries.insert(name, h);
+        self.folder_mut(folder)
+            .expect("entries go into a known folder")
+            .entries
+            .insert(name, h);
     }
 
     /// What other programs changed in the folders followed since last
@@ -257,7 +308,12 @@ impl Store {
             // The system lost changes: every folder followed is read again.
             Raw::Overflow => {
                 let followed: Vec<u32> = std::iter::once(TOP)
-                    .chain(self.entries.iter().filter(|(_, e)| e.folder.as_ref().is_some_and(|f| f.read)).map(|(&h, _)| h))
+                    .chain(
+                        self.entries
+                            .iter()
+                            .filter(|(_, e)| e.folder.as_ref().is_some_and(|f| f.read))
+                            .map(|(&h, _)| h),
+                    )
                     .collect();
                 for folder in followed {
                     if self.folder(folder).is_ok_and(|f| f.read) {
@@ -275,11 +331,15 @@ impl Store {
                 }
             }
             Raw::Appeared(wd, name) => {
-                let Some(folder) = self.watch.folder(wd) else { return };
+                let Some(folder) = self.watch.folder(wd) else {
+                    return;
+                };
                 if self.child(folder, &name).is_some() {
                     return;
                 }
-                let Some(path) = self.path(folder) else { return };
+                let Some(path) = self.path(folder) else {
+                    return;
+                };
                 let path = path.join(&name);
                 if fs::symlink_metadata(&path).is_ok() {
                     let h = self.add(folder, name, is_dir(&path));
@@ -287,8 +347,12 @@ impl Store {
                 }
             }
             Raw::Vanished(wd, name) => {
-                let Some(folder) = self.watch.folder(wd) else { return };
-                let Some(h) = self.child(folder, &name) else { return };
+                let Some(folder) = self.watch.folder(wd) else {
+                    return;
+                };
+                let Some(h) = self.child(folder, &name) else {
+                    return;
+                };
                 let path = self.path(h).expect("a known entry has a path");
                 if fs::symlink_metadata(&path).is_err() {
                     self.remove(h);
@@ -296,7 +360,11 @@ impl Store {
                 }
             }
             Raw::Written(wd, name) => {
-                if let Some(h) = self.watch.folder(wd).and_then(|folder| self.child(folder, &name)) {
+                if let Some(h) = self
+                    .watch
+                    .folder(wd)
+                    .and_then(|folder| self.child(folder, &name))
+                {
                     self.found.push(Change::Written(h));
                 }
             }
@@ -332,7 +400,12 @@ struct Watch {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 impl Watch {
-    const MASK: u32 = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_CLOSE_WRITE | libc::IN_ONLYDIR;
+    const MASK: u32 = libc::IN_CREATE
+        | libc::IN_MOVED_TO
+        | libc::IN_DELETE
+        | libc::IN_MOVED_FROM
+        | libc::IN_CLOSE_WRITE
+        | libc::IN_ONLYDIR;
 
     fn new() -> io::Result<Watch> {
         use std::os::fd::FromRawFd;
@@ -340,7 +413,10 @@ impl Watch {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Watch { fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }, folders: HashMap::new() })
+        Ok(Watch {
+            fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) },
+            folders: HashMap::new(),
+        })
     }
 
     fn fd(&self) -> Option<RawFd> {
@@ -394,7 +470,8 @@ impl Watch {
             while let Ok((event, rest)) = InotifyEvent::read_from_prefix(at) {
                 let (name, rest) = rest.split_at(event.len as usize);
                 at = rest;
-                let name = OsString::from_vec(name.iter().copied().take_while(|&b| b != 0).collect());
+                let name =
+                    OsString::from_vec(name.iter().copied().take_while(|&b| b != 0).collect());
                 let (wd, mask) = (event.wd, event.mask);
                 // What happens to a folder itself comes without a name; only
                 // its going away matters, which IN_IGNORED tells.
@@ -479,7 +556,10 @@ mod tests {
     }
 
     fn names(store: &Store, handles: &[u32]) -> Vec<String> {
-        let mut out: Vec<String> = handles.iter().map(|&h| store.name(h).unwrap().to_string_lossy().into_owned()).collect();
+        let mut out: Vec<String> = handles
+            .iter()
+            .map(|&h| store.name(h).unwrap().to_string_lossy().into_owned())
+            .collect();
         out.sort();
         out
     }
@@ -493,19 +573,32 @@ mod tests {
         let mut store = Store::new(at.clone()).unwrap();
         let top = store.children(TOP).unwrap();
         assert_eq!(names(&store, &top), ["DCIM", "notes.txt"]);
-        assert_eq!(store.children(TOP).unwrap(), top, "the same handles each time");
+        assert_eq!(
+            store.children(TOP).unwrap(),
+            top,
+            "the same handles each time"
+        );
         let dcim = store.child(TOP, OsStr::new("DCIM")).unwrap();
-        assert!(store.is_folder(dcim) && !store.is_folder(store.child(TOP, OsStr::new("notes.txt")).unwrap()));
+        assert!(
+            store.is_folder(dcim)
+                && !store.is_folder(store.child(TOP, OsStr::new("notes.txt")).unwrap())
+        );
         let camera = store.children(dcim).unwrap()[0];
         let photo = store.children(camera).unwrap()[0];
         assert_eq!(store.path(photo).unwrap(), at.join("DCIM/Camera/IMG_1.jpg"));
-        assert_eq!(store.relative(photo).unwrap(), Path::new("DCIM/Camera/IMG_1.jpg"));
+        assert_eq!(
+            store.relative(photo).unwrap(),
+            Path::new("DCIM/Camera/IMG_1.jpg")
+        );
         assert_eq!(store.parent(photo), Some(camera));
         assert_eq!(store.parent(dcim), Some(TOP));
         assert!(matches!(store.children(photo), Err(Error::NotFolder)));
         assert!(matches!(store.children(9999), Err(Error::Unknown)));
         let all = store.descendants(TOP).unwrap();
-        assert_eq!(names(&store, &all), ["Camera", "DCIM", "IMG_1.jpg", "notes.txt"]);
+        assert_eq!(
+            names(&store, &all),
+            ["Camera", "DCIM", "IMG_1.jpg", "notes.txt"]
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -517,7 +610,10 @@ mod tests {
         fs::write(at.join("a/x.txt"), b"x").unwrap();
         let mut store = Store::new(at.clone()).unwrap();
         store.children(TOP).unwrap();
-        let (a, b) = (store.child(TOP, OsStr::new("a")).unwrap(), store.child(TOP, OsStr::new("b")).unwrap());
+        let (a, b) = (
+            store.child(TOP, OsStr::new("a")).unwrap(),
+            store.child(TOP, OsStr::new("b")).unwrap(),
+        );
         let x = store.children(a).unwrap()[0];
         fs::rename(at.join("a/x.txt"), at.join("a/y.txt")).unwrap();
         store.rename(x, "y.txt".into());
@@ -525,14 +621,24 @@ mod tests {
         fs::rename(at.join("a/y.txt"), at.join("b/y.txt")).unwrap();
         store.relocate(x, b, "y.txt".into());
         assert_eq!(store.path(x).unwrap(), at.join("b/y.txt"));
-        assert_eq!(store.children(b).unwrap(), [x], "a folder read after an entry moved in keeps its handle");
+        assert_eq!(
+            store.children(b).unwrap(),
+            [x],
+            "a folder read after an entry moved in keeps its handle"
+        );
         assert!(store.children(a).unwrap().is_empty());
-        assert!(store.changes().is_empty(), "nothing changed but what the session did");
+        assert!(
+            store.changes().is_empty(),
+            "nothing changed but what the session did"
+        );
         let made = store.add(a, "new".into(), true);
         fs::create_dir(at.join("a/new")).unwrap();
         assert!(store.children(made).unwrap().is_empty());
         store.remove(a);
-        assert!(!store.contains(a) && !store.contains(made), "an entry goes with everything in it");
+        assert!(
+            !store.contains(a) && !store.contains(made),
+            "an entry goes with everything in it"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -552,7 +658,10 @@ mod tests {
         assert!(!store.contains(a));
         let changes = store.changes();
         assert!(changes.contains(&Change::Removed(a)), "{changes:?}");
-        assert!(!changes.iter().any(|c| matches!(c, Change::Added(_))), "whoever asked learns of b.txt from the list: {changes:?}");
+        assert!(
+            !changes.iter().any(|c| matches!(c, Change::Added(_))),
+            "whoever asked learns of b.txt from the list: {changes:?}"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 
@@ -568,7 +677,9 @@ mod tests {
         let sub = store.child(TOP, OsStr::new("sub")).unwrap();
         fs::write(at.join("made.txt"), b"m").unwrap();
         let changes = store.changes();
-        let made = store.child(TOP, OsStr::new("made.txt")).expect("a file another program made is known");
+        let made = store
+            .child(TOP, OsStr::new("made.txt"))
+            .expect("a file another program made is known");
         assert_eq!(changes, [Change::Added(made), Change::Written(made)]);
         fs::remove_file(at.join("made.txt")).unwrap();
         assert_eq!(store.changes(), [Change::Removed(made)]);
@@ -579,7 +690,11 @@ mod tests {
         // What the session does itself it records first.
         let own = store.add(TOP, "own.txt".into(), false);
         fs::write(at.join("own.txt"), b"o").unwrap();
-        assert_eq!(store.changes(), [Change::Written(own)], "only that it was written");
+        assert_eq!(
+            store.changes(),
+            [Change::Written(own)],
+            "only that it was written"
+        );
         fs::remove_file(at.join("own.txt")).unwrap();
         store.remove(own);
         assert!(store.changes().is_empty());

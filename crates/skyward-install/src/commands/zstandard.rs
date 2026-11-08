@@ -52,7 +52,13 @@ pub(super) fn run(args: &[OsString], io: &mut Io) -> i32 {
         Ok(Asked::Decompress(request)) => request,
         Ok(Asked::Version) => {
             let library = zstd::zstd_safe::version_string();
-            return say(io, &format!("zstd of Skyward {}, decompressing with libzstd {library}\n", env!("CARGO_PKG_VERSION")));
+            return say(
+                io,
+                &format!(
+                    "zstd of Skyward {}, decompressing with libzstd {library}\n",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            );
         }
         Ok(Asked::Help) => return say(io, HELP),
         Err(e) => {
@@ -80,7 +86,11 @@ pub(super) fn run(args: &[OsString], io: &mut Io) -> i32 {
 }
 
 fn say(io: &mut Io, text: &str) -> i32 {
-    match io.output.write_all(text.as_bytes()).and_then(|()| io.output.flush()) {
+    match io
+        .output
+        .write_all(text.as_bytes())
+        .and_then(|()| io.output.flush())
+    {
         Ok(()) => DONE,
         Err(_) => FAILED,
     }
@@ -133,14 +143,21 @@ enum To {
 /// Read the command line as zstd reads it: options grouped behind one dash
 /// or spelled out behind two, and the inputs, until a `--`.
 fn parse(args: &[OsString]) -> Result<Asked, String> {
-    let (mut decompress, mut test, mut stdout, mut force, mut remove) = (false, false, false, false, false);
+    let (mut decompress, mut test, mut stdout, mut force, mut remove) =
+        (false, false, false, false, false);
     let (mut output, mut memory, mut long, mut pass_through) = (None, None, None, None);
     let (mut verbosity, mut inputs, mut options) = (2, Vec::new(), true);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        let text = arg.to_str().filter(|text| options && text.len() > 1 && text.starts_with('-'));
+        let text = arg
+            .to_str()
+            .filter(|text| options && text.len() > 1 && text.starts_with('-'));
         let Some(text) = text else {
-            inputs.push(if arg == "-" { Input::Standard } else { Input::File(arg.into()) });
+            inputs.push(if arg == "-" {
+                Input::Standard
+            } else {
+                Input::File(arg.into())
+            });
             continue;
         };
         if let Some(word) = text.strip_prefix("--") {
@@ -164,9 +181,12 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
                 "sparse" | "no-sparse" | "no-progress" | "progress" | "format=zstd" => {}
                 _ => match word.split_once('=') {
                     Some(("long", log)) => long = Some(window_log(log)?),
-                    Some(("memory" | "memlimit" | "memlimit-decompress", size)) => memory = Some(bytes(size)?),
+                    Some(("memory" | "memlimit" | "memlimit-decompress", size)) => {
+                        memory = Some(bytes(size)?)
+                    }
                     // Decompressing takes one thread whatever is asked.
-                    Some(("threads", n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {}
+                    Some(("threads", n))
+                        if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {}
                     _ => return Err(format!("unsupported option --{word}")),
                 },
             }
@@ -200,8 +220,14 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
                     break;
                 }
                 // The file is the next argument.
-                'o' if at + 1 == flags.len() => output = Some(PathBuf::from(args.next().ok_or("-o names no file")?)),
-                'o' => return Err(format!("-o ends a group of options, before the file it names, not as in {text}")),
+                'o' if at + 1 == flags.len() => {
+                    output = Some(PathBuf::from(args.next().ok_or("-o names no file")?))
+                }
+                'o' => {
+                    return Err(format!(
+                        "-o ends a group of options, before the file it names, not as in {text}"
+                    ))
+                }
                 other => return Err(format!("unsupported option -{other}")),
             }
             at += 1;
@@ -225,7 +251,11 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
     let window_log = match (memory, long) {
         // A limit between two powers of two allows the larger, as no frame
         // zstd itself would decompress under it is refused.
-        (Some(bytes), _) => bytes.clamp(1, 1 << WINDOW_LOG_MAX).next_power_of_two().trailing_zeros().max(WINDOW_LOG_MIN),
+        (Some(bytes), _) => bytes
+            .clamp(1, 1 << WINDOW_LOG_MAX)
+            .next_power_of_two()
+            .trailing_zeros()
+            .max(WINDOW_LOG_MIN),
         (None, Some(log)) => log,
         (None, None) => WINDOW_LOG,
     };
@@ -252,7 +282,9 @@ fn window_log(text: &str) -> Result<u32, String> {
 /// kibibytes, mebibytes or gibibytes, written as K, KB or KiB.
 fn bytes(text: &str) -> Result<u64, String> {
     let digits = text.bytes().take_while(u8::is_ascii_digit).count();
-    let number: u64 = text[..digits].parse().map_err(|_| format!("{text:?} is not a size"))?;
+    let number: u64 = text[..digits]
+        .parse()
+        .map_err(|_| format!("{text:?} is not a size"))?;
     let shift = match &text[digits..] {
         "" => 0,
         "K" | "KB" | "KiB" => 10,
@@ -260,7 +292,9 @@ fn bytes(text: &str) -> Result<u64, String> {
         "G" | "GB" | "GiB" => 30,
         _ => return Err(format!("{text:?} is not a size")),
     };
-    number.checked_mul(1 << shift).ok_or_else(|| format!("{text:?} is too large"))
+    number
+        .checked_mul(1 << shift)
+        .ok_or_else(|| format!("{text:?} is too large"))
 }
 
 /// Decompress one input where the request sends it.
@@ -285,18 +319,21 @@ fn decompress(request: &Request, input: &Input, io: &mut Io) -> Result<(), Strin
     let into = match (&request.to, input) {
         (To::Nowhere, _) => None,
         (To::Output, _) | (To::Own, Input::Standard) => {
-            return decode(from, io.output, request.window_log, request.pass_through).map(drop).map_err(|e| match e {
-                Failed::Reading(e) => format!("{name}: {e}"),
-                Failed::Writing(e) => format!("standard output: {e}"),
-            });
+            return decode(from, io.output, request.window_log, request.pass_through)
+                .map(drop)
+                .map_err(|e| match e {
+                    Failed::Reading(e) => format!("{name}: {e}"),
+                    Failed::Writing(e) => format!("standard output: {e}"),
+                });
         }
         (To::File(path), _) => Some(path.clone()),
         (To::Own, Input::File(path)) => Some(own_name(path)?),
     };
     let Some(into) = into else {
-        let decompressed = decode(from, &mut io::sink(), request.window_log, false).map_err(|e| match e {
-            Failed::Reading(e) | Failed::Writing(e) => format!("{name}: {e}"),
-        })?;
+        let decompressed =
+            decode(from, &mut io::sink(), request.window_log, false).map_err(|e| match e {
+                Failed::Reading(e) | Failed::Writing(e) => format!("{name}: {e}"),
+            })?;
         tell(request, io, &name, decompressed);
         return Ok(());
     };
@@ -340,7 +377,12 @@ fn own_name(path: &Path) -> Result<PathBuf, String> {
     let plain = match (name.strip_suffix(b".zst"), name.strip_suffix(b".tzst")) {
         (Some(stem), _) if !stem.is_empty() => stem.to_vec(),
         (_, Some(stem)) if !stem.is_empty() => [stem, &b".tar"[..]].concat(),
-        _ => return Err(format!("{}: unknown suffix (.zst or .tzst expected); give the output with -o", path.display())),
+        _ => {
+            return Err(format!(
+                "{}: unknown suffix (.zst or .tzst expected); give the output with -o",
+                path.display()
+            ))
+        }
     };
     Ok(path.with_file_name(OsString::from_vec(plain)))
 }
@@ -353,12 +395,17 @@ fn create(path: &Path, force: bool, input: Option<&Path>) -> Result<(File, bool)
     let shown = path.display();
     match fs::metadata(path) {
         Ok(there) => {
-            let same = |input: &Path| fs::metadata(input).is_ok_and(|i| (i.dev(), i.ino()) == (there.dev(), there.ino()));
+            let same = |input: &Path| {
+                fs::metadata(input).is_ok_and(|i| (i.dev(), i.ino()) == (there.dev(), there.ino()))
+            };
             if input.is_some_and(same) {
                 return Err(format!("{shown} is the input itself"));
             }
             if !there.is_file() {
-                let file = OpenOptions::new().write(true).open(path).map_err(|e| format!("{shown}: {e}"))?;
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .map_err(|e| format!("{shown}: {e}"))?;
                 return Ok((file, false));
             }
             if !force {
@@ -369,14 +416,23 @@ fn create(path: &Path, force: bool, input: Option<&Path>) -> Result<(File, bool)
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("{shown}: {e}")),
     }
-    let file = OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| format!("{shown}: {e}"))?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!("{shown}: {e}"))?;
     Ok((file, true))
 }
 
 /// Decompress the frames `input` holds into `output`, allowing windows of
 /// up to 2^`window_log` bytes, and give how much they held. With
 /// `pass_through`, an input that does not start as zstd goes out as it is.
-fn decode(input: &mut dyn Read, output: &mut dyn Write, window_log: u32, pass_through: bool) -> Result<u64, Failed> {
+fn decode(
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    window_log: u32,
+    pass_through: bool,
+) -> Result<u64, Failed> {
     let mut head = [0; 4];
     let mut held = 0;
     while held < head.len() {
@@ -388,20 +444,29 @@ fn decode(input: &mut dyn Read, output: &mut dyn Write, window_log: u32, pass_th
         }
     }
     if held == 0 {
-        return Err(Failed::Reading(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected end of file")));
+        return Err(Failed::Reading(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "unexpected end of file",
+        )));
     }
     let mut whole = (&head[..held]).chain(input);
     if pass_through && !is_zstd(&head[..held]) {
         return copy(&mut whole, output);
     }
-    let mut decoder = zstd::stream::read::Decoder::with_buffer(BufReader::with_capacity(CHUNK, whole)).map_err(Failed::Reading)?;
-    decoder.window_log_max(window_log).map_err(Failed::Reading)?;
+    let mut decoder =
+        zstd::stream::read::Decoder::with_buffer(BufReader::with_capacity(CHUNK, whole))
+            .map_err(Failed::Reading)?;
+    decoder
+        .window_log_max(window_log)
+        .map_err(Failed::Reading)?;
     copy(&mut decoder, output)
 }
 
 /// Whether `head`, the first bytes of an input, starts a frame.
 fn is_zstd(head: &[u8]) -> bool {
-    let Ok(magic) = <[u8; 4]>::try_from(head).map(u32::from_le_bytes) else { return false };
+    let Ok(magic) = <[u8; 4]>::try_from(head).map(u32::from_le_bytes) else {
+        return false;
+    };
     magic == FRAME || magic & !0xf == SKIPPABLE
 }
 
@@ -432,7 +497,14 @@ mod tests {
     fn ran(args: &[&str], input: &[u8]) -> (i32, Vec<u8>, String) {
         let args: Vec<OsString> = args.iter().map(OsString::from).collect();
         let (mut output, mut errors) = (Vec::new(), Vec::new());
-        let code = run(&args, &mut Io { input: &mut Cursor::new(input), output: &mut output, errors: &mut errors });
+        let code = run(
+            &args,
+            &mut Io {
+                input: &mut Cursor::new(input),
+                output: &mut output,
+                errors: &mut errors,
+            },
+        );
         (code, output, String::from_utf8(errors).unwrap())
     }
 
@@ -469,7 +541,10 @@ mod tests {
         let mut frames = compressed(b"first ");
         frames.extend_from_slice(&[0x5e, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3]);
         frames.extend(compressed(b"second"));
-        assert_eq!(ran(&["-dc"], &frames), (DONE, b"first second".to_vec(), String::new()));
+        assert_eq!(
+            ran(&["-dc"], &frames),
+            (DONE, b"first second".to_vec(), String::new())
+        );
     }
 
     #[test]
@@ -481,7 +556,10 @@ mod tests {
         assert!(errors.contains("stdin: unexpected end of file"), "{errors}");
         let (code, output, _) = ran(&["-dc"], &frame[..frame.len() / 2]);
         assert_eq!(code, FAILED);
-        assert!(output.len() < data.len() && data.starts_with(&output), "what came before the cut is written");
+        assert!(
+            output.len() < data.len() && data.starts_with(&output),
+            "what came before the cut is written"
+        );
         assert_eq!(ran(&["-dc"], b"hello\n").0, FAILED);
         let mut trailed = frame.clone();
         trailed.extend_from_slice(b"junk\n");
@@ -508,10 +586,18 @@ mod tests {
     fn with_c_and_f_what_is_not_zstd_passes_through_as_it_is() {
         let plain = b"no zstd here\n".repeat(1000);
         assert_eq!(ran(&["-dcf"], &plain), (DONE, plain.clone(), String::new()));
-        assert_eq!(ran(&["-d", "-c", "-f", "--pass-through"], b"ab"), (DONE, b"ab".to_vec(), String::new()), "however short");
+        assert_eq!(
+            ran(&["-d", "-c", "-f", "--pass-through"], b"ab"),
+            (DONE, b"ab".to_vec(), String::new()),
+            "however short"
+        );
         assert_eq!(ran(&["-dc"], &plain).0, FAILED);
         assert_eq!(ran(&["-dcf", "--no-pass-through"], &plain).0, FAILED);
-        assert_eq!(ran(&["-dcf"], &compressed(b"zstd")).1, b"zstd", "zstd still decompresses");
+        assert_eq!(
+            ran(&["-dcf"], &compressed(b"zstd")).1,
+            b"zstd",
+            "zstd still decompresses"
+        );
     }
 
     #[test]
@@ -527,7 +613,10 @@ mod tests {
         assert!(errors.contains(": 5000 bytes"), "{errors}");
         let tar = dir.path().join("system.tzst");
         fs::write(&tar, compressed(b"tar")).unwrap();
-        assert_eq!(ran(&["-d", "-q", &path(&tar)], b""), (DONE, Vec::new(), String::new()));
+        assert_eq!(
+            ran(&["-d", "-q", &path(&tar)], b""),
+            (DONE, Vec::new(), String::new())
+        );
         assert_eq!(fs::read(dir.path().join("system.tar")).unwrap(), b"tar");
         let odd = dir.path().join("super.img.zstd");
         fs::write(&odd, compressed(b"odd")).unwrap();
@@ -560,7 +649,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("vbmeta.img.zst");
         fs::write(&input, compressed(b"vbmeta")).unwrap();
-        assert_eq!(ran(&["-d", "-q", "-o", "/dev/null", &path(&input)], b"").0, DONE, "as a partition is");
+        assert_eq!(
+            ran(&["-d", "-q", "-o", "/dev/null", &path(&input)], b"").0,
+            DONE,
+            "as a partition is"
+        );
     }
 
     #[test]
@@ -582,12 +675,21 @@ mod tests {
         fs::write(&a, compressed(b"a")).unwrap();
         fs::write(&b, compressed(b"b")).unwrap();
         let out = dir.path().join("out.img");
-        assert_eq!(ran(&["-q", "-d", "-o", &path(&out), &path(&a)], b"").0, DONE);
+        assert_eq!(
+            ran(&["-q", "-d", "-o", &path(&out), &path(&a)], b"").0,
+            DONE
+        );
         assert_eq!(fs::read(&out).unwrap(), b"a");
         let other = dir.path().join("other.img");
-        assert_eq!(ran(&["-d", "-o", &path(&other), &path(&a), &path(&b)], b"").0, FAILED);
+        assert_eq!(
+            ran(&["-d", "-o", &path(&other), &path(&a), &path(&b)], b"").0,
+            FAILED
+        );
         assert!(!other.exists());
-        assert_eq!(ran(&["-qdo", &path(&other), "-"], &compressed(b"from stdin")).0, DONE);
+        assert_eq!(
+            ran(&["-qdo", &path(&other), "-"], &compressed(b"from stdin")).0,
+            DONE
+        );
         assert_eq!(fs::read(&other).unwrap(), b"from stdin");
     }
 
@@ -609,13 +711,20 @@ mod tests {
         let (code, output, errors) = ran(&["-dc", &path(&missing), &path(&good)], b"");
         assert_eq!((code, output.as_slice()), (FAILED, b"good".as_slice()));
         assert!(errors.contains("missing.zst"), "{errors}");
-        assert_eq!(ran(&["-dc", &path(dir.path())], b"").0, FAILED, "a folder is no input");
+        assert_eq!(
+            ran(&["-dc", &path(dir.path())], b"").0,
+            FAILED,
+            "a folder is no input"
+        );
     }
 
     #[test]
     fn t_checks_each_input_and_writes_nothing() {
         let frame = compressed(b"checked");
-        assert_eq!(ran(&["-t", "-q"], &frame), (DONE, Vec::new(), String::new()));
+        assert_eq!(
+            ran(&["-t", "-q"], &frame),
+            (DONE, Vec::new(), String::new())
+        );
         assert_eq!(ran(&["-dt"], &frame[..frame.len() - 2]).0, FAILED);
     }
 
@@ -634,8 +743,18 @@ mod tests {
         assert_eq!(code, FAILED);
         assert!(errors.contains("memory"), "{errors}");
         assert_eq!(ran(&["-dc", "--long"], &frame).0, FAILED);
-        for args in [&["-dc", "--long=28"][..], &["-dc", "-M256MB"], &["-dcM256M"], &["-dc", "--memory=256MiB"], &["-dc", "--memory=200MB"]] {
-            assert_eq!(ran(args, &frame), (DONE, data.clone(), String::new()), "{args:?}");
+        for args in [
+            &["-dc", "--long=28"][..],
+            &["-dc", "-M256MB"],
+            &["-dcM256M"],
+            &["-dc", "--memory=256MiB"],
+            &["-dc", "--memory=200MB"],
+        ] {
+            assert_eq!(
+                ran(args, &frame),
+                (DONE, data.clone(), String::new()),
+                "{args:?}"
+            );
         }
         assert_eq!(ran(&["-dc", "--memory=128MB"], &frame).0, FAILED);
     }
@@ -673,14 +792,24 @@ mod tests {
         assert!(String::from_utf8(output).unwrap().contains("libzstd 1."));
         let (code, output, _) = ran(&["--help"], b"");
         assert_eq!(code, DONE);
-        assert!(String::from_utf8(output).unwrap().starts_with("Usage: zstd -d"));
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .starts_with("Usage: zstd -d"));
     }
 
     #[test]
     fn after_two_dashes_a_dash_starts_a_file_name() {
-        let args: Vec<OsString> = ["-d", "--", "-q.zst", "--"].iter().map(OsString::from).collect();
-        let Ok(Asked::Decompress(request)) = parse(&args) else { panic!("{args:?} asks to decompress") };
-        assert_eq!(request.inputs, [Input::File("-q.zst".into()), Input::File("--".into())]);
+        let args: Vec<OsString> = ["-d", "--", "-q.zst", "--"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        let Ok(Asked::Decompress(request)) = parse(&args) else {
+            panic!("{args:?} asks to decompress")
+        };
+        assert_eq!(
+            request.inputs,
+            [Input::File("-q.zst".into()), Input::File("--".into())]
+        );
         assert_eq!(request.verbosity, 2, "-q names a file there");
     }
 }

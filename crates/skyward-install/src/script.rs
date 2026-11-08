@@ -30,10 +30,17 @@ pub enum Request {
 pub fn parse(line: &str) -> Option<Request> {
     let line = line.trim_end_matches(['\r', '\n']);
     let (command, args) = line.split_once(' ').unwrap_or((line, ""));
-    let numbers = || args.split_whitespace().map(|n| n.parse::<f32>().ok()).collect::<Option<Vec<f32>>>();
+    let numbers = || {
+        args.split_whitespace()
+            .map(|n| n.parse::<f32>().ok())
+            .collect::<Option<Vec<f32>>>()
+    };
     match command {
         "progress" => match numbers()?.as_slice() {
-            [share, seconds] => Some(Request::Progress { share: *share, seconds: *seconds }),
+            [share, seconds] => Some(Request::Progress {
+                share: *share,
+                seconds: *seconds,
+            }),
             _ => None,
         },
         "set_progress" => match numbers()?.as_slice() {
@@ -45,7 +52,9 @@ pub fn parse(line: &str) -> Option<Request> {
         "ui_print" => Some(Request::Print(args.to_string())),
         "wipe_cache" => Some(Request::WipeCache),
         "log" => Some(Request::Log(args.trim().to_string())),
-        "clear_display" | "enable_reboot" | "retry_update" => Some(Request::Other(command.to_string())),
+        "clear_display" | "enable_reboot" | "retry_update" => {
+            Some(Request::Other(command.to_string()))
+        }
         _ => None,
     }
 }
@@ -80,7 +89,9 @@ impl Bar {
                 self.began = at;
                 self.stepped = true;
             }
-            Request::SetProgress(fraction) if self.stepped => self.fraction = self.fraction.max(fraction.clamp(0.0, 1.0)),
+            Request::SetProgress(fraction) if self.stepped => {
+                self.fraction = self.fraction.max(fraction.clamp(0.0, 1.0))
+            }
             Request::SetProgress(fraction) => self.loose = Some(fraction.clamp(0.0, 1.0)),
             _ => {}
         }
@@ -106,15 +117,38 @@ mod tests {
 
     #[test]
     fn requests_read_as_android_s_recovery_reads_them() {
-        assert_eq!(parse("progress 0.5 10\n"), Some(Request::Progress { share: 0.5, seconds: 10.0 }));
+        assert_eq!(
+            parse("progress 0.5 10\n"),
+            Some(Request::Progress {
+                share: 0.5,
+                seconds: 10.0
+            })
+        );
         assert_eq!(parse("set_progress 0.25"), Some(Request::SetProgress(0.25)));
-        assert_eq!(parse("ui_print - Installing"), Some(Request::Print("- Installing".into())));
-        assert_eq!(parse("ui_print   *  Magisk  *\r\n"), Some(Request::Print("  *  Magisk  *".into())), "leading spaces stay");
-        assert_eq!(parse("ui_print"), Some(Request::Print(String::new())), "an empty one");
+        assert_eq!(
+            parse("ui_print - Installing"),
+            Some(Request::Print("- Installing".into()))
+        );
+        assert_eq!(
+            parse("ui_print   *  Magisk  *\r\n"),
+            Some(Request::Print("  *  Magisk  *".into())),
+            "leading spaces stay"
+        );
+        assert_eq!(
+            parse("ui_print"),
+            Some(Request::Print(String::new())),
+            "an empty one"
+        );
         assert_eq!(parse("ui_print "), Some(Request::Print(String::new())));
         assert_eq!(parse("wipe_cache"), Some(Request::WipeCache));
-        assert_eq!(parse("log E1001: Failed to update system image."), Some(Request::Log("E1001: Failed to update system image.".into())));
-        assert_eq!(parse("enable_reboot"), Some(Request::Other("enable_reboot".into())));
+        assert_eq!(
+            parse("log E1001: Failed to update system image."),
+            Some(Request::Log("E1001: Failed to update system image.".into()))
+        );
+        assert_eq!(
+            parse("enable_reboot"),
+            Some(Request::Other("enable_reboot".into()))
+        );
     }
 
     #[test]
@@ -135,28 +169,68 @@ mod tests {
     fn steps_follow_one_another_and_go_forward_only() {
         let mut bar = Bar::default();
         assert_eq!(bar.share(at(0)), None, "nothing until the script moves it");
-        bar.hear(&Request::Progress { share: 0.5, seconds: 0.0 }, at(0));
+        bar.hear(
+            &Request::Progress {
+                share: 0.5,
+                seconds: 0.0,
+            },
+            at(0),
+        );
         assert_eq!(bar.share(at(0)), Some(0.0));
         bar.hear(&Request::SetProgress(0.5), at(10));
         assert_eq!(bar.share(at(10)), Some(0.25));
         bar.hear(&Request::SetProgress(0.2), at(20));
         assert_eq!(bar.share(at(20)), Some(0.25), "it does not go back");
-        bar.hear(&Request::Progress { share: 0.25, seconds: 0.0 }, at(30));
+        bar.hear(
+            &Request::Progress {
+                share: 0.25,
+                seconds: 0.0,
+            },
+            at(30),
+        );
         bar.hear(&Request::SetProgress(1.0), at(40));
-        assert_eq!(bar.share(at(40)), Some(0.75), "the second step begins where the first one's share ends");
-        bar.hear(&Request::Progress { share: 0.25, seconds: 0.0 }, at(50));
+        assert_eq!(
+            bar.share(at(40)),
+            Some(0.75),
+            "the second step begins where the first one's share ends"
+        );
+        bar.hear(
+            &Request::Progress {
+                share: 0.25,
+                seconds: 0.0,
+            },
+            at(50),
+        );
         bar.hear(&Request::SetProgress(2.0), at(60));
-        assert_eq!(bar.share(at(60)), Some(1.0), "a fraction past the end stops at it");
+        assert_eq!(
+            bar.share(at(60)),
+            Some(1.0),
+            "a fraction past the end stops at it"
+        );
     }
 
     #[test]
     fn a_step_with_a_time_fills_by_itself() {
         let mut bar = Bar::default();
-        bar.hear(&Request::Progress { share: 0.4, seconds: 10.0 }, at(1_000));
+        bar.hear(
+            &Request::Progress {
+                share: 0.4,
+                seconds: 10.0,
+            },
+            at(1_000),
+        );
         assert_eq!(bar.share(at(6_000)), Some(0.2));
         bar.hear(&Request::SetProgress(0.75), at(6_000));
-        assert_eq!(bar.share(at(6_000)), Some(0.3), "set further than the time has filled it");
-        assert_eq!(bar.share(at(30_000)), Some(0.4), "filled, it waits at the step's end");
+        assert_eq!(
+            bar.share(at(6_000)),
+            Some(0.3),
+            "set further than the time has filled it"
+        );
+        assert_eq!(
+            bar.share(at(30_000)),
+            Some(0.4),
+            "filled, it waits at the step's end"
+        );
     }
 
     #[test]

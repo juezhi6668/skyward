@@ -16,12 +16,26 @@ use std::time::{Duration, Instant};
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 
 pub enum Task {
-    Copy { from: PathBuf, into: PathBuf, clash: Clash, ownership: Ownership },
-    Move { from: PathBuf, into: PathBuf, clash: Clash, ownership: Ownership },
-    Delete { path: PathBuf },
+    Copy {
+        from: PathBuf,
+        into: PathBuf,
+        clash: Clash,
+        ownership: Ownership,
+    },
+    Move {
+        from: PathBuf,
+        into: PathBuf,
+        clash: Clash,
+        ownership: Ownership,
+    },
+    Delete {
+        path: PathBuf,
+    },
     /// Give the data partition's files the labels the rules in `rules`
     /// give them.
-    Relabel { rules: Vec<PathBuf> },
+    Relabel {
+        rules: Vec<PathBuf>,
+    },
 }
 
 #[derive(Clone)]
@@ -51,9 +65,11 @@ impl Worker {
     pub fn start(task: Task) -> Result<Worker> {
         let mut fds = [0; 2];
         if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("make the file worker's wake pipe");
+            return Err(std::io::Error::last_os_error())
+                .context("make the file worker's wake pipe");
         }
-        let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let (wake, signal) =
+            unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
         let (tx, events) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
@@ -77,14 +93,31 @@ impl Worker {
                 };
                 let mut progress = |p: Progress| report(Event::Progress(p));
                 let ended = match task {
-                    Task::Copy { from, into, clash, ownership } => {
+                    Task::Copy {
+                        from,
+                        into,
+                        clash,
+                        ownership,
+                    } => {
                         skyward_files::copy(&[from], &into, clash, ownership, &stop, &mut progress)
                     }
-                    Task::Move { from, into, clash, ownership } => {
-                        skyward_files::move_into(&[from], &into, clash, ownership, &stop, &mut progress)
-                    }
+                    Task::Move {
+                        from,
+                        into,
+                        clash,
+                        ownership,
+                    } => skyward_files::move_into(
+                        &[from],
+                        &into,
+                        clash,
+                        ownership,
+                        &stop,
+                        &mut progress,
+                    ),
                     Task::Delete { path } => skyward_files::delete(&[path], &stop, &mut progress),
-                    Task::Relabel { rules } => relabel::run(&rules, &stop, &mut |r| report(Event::Relabeling(r))),
+                    Task::Relabel { rules } => {
+                        relabel::run(&rules, &stop, &mut |r| report(Event::Relabeling(r)))
+                    }
                 };
                 // Work that stops or fails shows how far it came in the end.
                 if let Some(event) = last {
@@ -97,7 +130,12 @@ impl Worker {
                 }));
             })
             .context("start the file worker")?;
-        Ok(Worker { events, wake, cancel, thread: Some(thread) })
+        Ok(Worker {
+            events,
+            wake,
+            cancel,
+            thread: Some(thread),
+        })
     }
 
     pub fn fd(&self) -> RawFd {
@@ -107,7 +145,14 @@ impl Worker {
     /// The events since the last call.
     pub fn events(&self) -> Vec<Event> {
         let mut drain = [0u8; 64];
-        while unsafe { libc::read(self.wake.as_raw_fd(), drain.as_mut_ptr().cast(), drain.len()) } > 0 {}
+        while unsafe {
+            libc::read(
+                self.wake.as_raw_fd(),
+                drain.as_mut_ptr().cast(),
+                drain.len(),
+            )
+        } > 0
+        {}
         self.events.try_iter().collect()
     }
 

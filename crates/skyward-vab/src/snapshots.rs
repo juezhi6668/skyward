@@ -5,7 +5,10 @@
 //! served by snapuserd, as compressed updates make them, are not read here.
 
 use crate::partitions::targets;
-use crate::{read_status, state_of, FailureCode, MergePhase, MergeStatus, Slot, UpdateState, UpdateStatus, OTA_DIR, SOURCE, STATE};
+use crate::{
+    read_status, state_of, FailureCode, MergePhase, MergeStatus, Slot, UpdateState, UpdateStatus,
+    OTA_DIR, SOURCE, STATE,
+};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use prost::Message;
 use skyward_block::{devnum, dm, BY_NAME};
@@ -144,14 +147,26 @@ impl Snapshots {
     /// to change it; `None` where no update was ever applied.
     pub fn lock(exclusive: bool) -> Result<Option<Snapshots>> {
         match Snapshots::lock_in(Path::new(OTA_DIR), exclusive) {
-            Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == ErrorKind::NotFound) => Ok(None),
+            Err(e)
+                if e.downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == ErrorKind::NotFound) =>
+            {
+                Ok(None)
+            }
             other => other.map(Some),
         }
     }
 
     fn lock_in(dir: &Path, exclusive: bool) -> Result<Snapshots> {
-        let lock = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(dir)?;
-        let how = if exclusive { libc::LOCK_EX } else { libc::LOCK_SH };
+        let lock = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(dir)?;
+        let how = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
         loop {
             if unsafe { libc::flock(lock.as_raw_fd(), how) } == 0 {
                 break;
@@ -161,7 +176,11 @@ impl Snapshots {
                 return Err(e).with_context(|| format!("lock {}", dir.display()));
             }
         }
-        Ok(Snapshots { dir: dir.into(), exclusive, _lock: lock })
+        Ok(Snapshots {
+            dir: dir.into(),
+            exclusive,
+            _lock: lock,
+        })
     }
 
     /// The update's whole status.
@@ -176,8 +195,15 @@ impl Snapshots {
     /// Write the update's status. The bootloader is told where the update
     /// stands as libsnapshot tells it: before a state that keeps it from
     /// erasing is written, and after one that lets it.
-    fn write_update(&self, status: &UpdateStatus, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Result<()> {
-        ensure!(self.exclusive, "the update's state is written only under an exclusive lock");
+    fn write_update(
+        &self,
+        status: &UpdateStatus,
+        tell: &dyn Fn(MergeStatus) -> Result<()>,
+    ) -> Result<()> {
+        ensure!(
+            self.exclusive,
+            "the update's state is written only under an exclusive lock"
+        );
         let merge = merge_status(state_of(status)?);
         let first = told_first(merge);
         if first {
@@ -192,8 +218,16 @@ impl Snapshots {
 
     /// Move the update to `state`, keeping what describes the update itself
     /// between the states of one update, as libsnapshot does.
-    fn set_state(&self, state: UpdateState, failure: FailureCode, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Result<()> {
-        let mut status = UpdateStatus { state: state as i32, ..UpdateStatus::default() };
+    fn set_state(
+        &self,
+        state: UpdateState,
+        failure: FailureCode,
+        tell: &dyn Fn(MergeStatus) -> Result<()>,
+    ) -> Result<()> {
+        let mut status = UpdateStatus {
+            state: state as i32,
+            ..UpdateStatus::default()
+        };
         if state == UpdateState::MergeFailed {
             status.merge_failure_code = failure as i32;
         }
@@ -222,8 +256,14 @@ impl Snapshots {
             if !entry.file_type()?.is_file() {
                 continue;
             }
-            let name = entry.file_name().into_string().map_err(|n| anyhow!("snapshot {n:?} is not named in text"))?;
-            if matches!(name.as_str(), "system_a" | "system_b" | "product_a" | "product_b") {
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|n| anyhow!("snapshot {n:?} is not named in text"))?;
+            if matches!(
+                name.as_str(),
+                "system_a" | "system_b" | "product_a" | "product_b"
+            ) {
                 names.insert(0, name);
             } else {
                 names.push(name);
@@ -235,14 +275,21 @@ impl Snapshots {
     pub fn status(&self, name: &str) -> Result<SnapshotStatus> {
         let path = self.dir.join(SNAPSHOTS).join(name);
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let mut status = SnapshotStatus::decode(&bytes[..]).with_context(|| format!("read {}", path.display()))?;
+        let mut status = SnapshotStatus::decode(&bytes[..])
+            .with_context(|| format!("read {}", path.display()))?;
         status.name = name.into();
         Ok(status)
     }
 
     fn write_status(&self, status: &SnapshotStatus) -> Result<()> {
-        ensure!(self.exclusive, "a snapshot's status is written only under an exclusive lock");
-        write_atomic(&self.dir.join(SNAPSHOTS).join(&status.name), &status.encode_to_vec())
+        ensure!(
+            self.exclusive,
+            "a snapshot's status is written only under an exclusive lock"
+        );
+        write_atomic(
+            &self.dir.join(SNAPSHOTS).join(&status.name),
+            &status.encode_to_vec(),
+        )
     }
 
     /// The slot the update was applied from, once its partitions are
@@ -250,7 +297,9 @@ impl Snapshots {
     pub fn source(&self) -> Result<Option<Slot>> {
         let path = self.dir.join(SOURCE);
         match fs::read_to_string(&path) {
-            Ok(suffix) => Ok(Some(Slot::from_suffix(suffix.trim()).with_context(|| format!("{} names the slot {suffix:?}", path.display()))?)),
+            Ok(suffix) => Ok(Some(Slot::from_suffix(suffix.trim()).with_context(
+                || format!("{} names the slot {suffix:?}", path.display()),
+            )?)),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
         }
@@ -278,7 +327,10 @@ impl Snapshots {
         if self.side(current)? != Side::Target {
             return Ok(false);
         }
-        Ok(matches!(self.state()?, UpdateState::Unverified | UpdateState::Merging | UpdateState::MergeFailed))
+        Ok(matches!(
+            self.state()?,
+            UpdateState::Unverified | UpdateState::Merging | UpdateState::MergeFailed
+        ))
     }
 
     /// The snapshot partition `p` reads through, where it has one: made of
@@ -326,7 +378,10 @@ impl Snapshots {
 /// nowhere it need keep from erasing.
 fn merge_status(state: UpdateState) -> MergeStatus {
     match state {
-        UpdateState::None | UpdateState::MergeNeedsReboot | UpdateState::MergeCompleted | UpdateState::Initiated => MergeStatus::None,
+        UpdateState::None
+        | UpdateState::MergeNeedsReboot
+        | UpdateState::MergeCompleted
+        | UpdateState::Initiated => MergeStatus::None,
         UpdateState::Unverified => MergeStatus::Snapshotted,
         UpdateState::Merging | UpdateState::MergeFailed => MergeStatus::Merging,
         UpdateState::Cancelled => MergeStatus::Unknown,
@@ -344,12 +399,25 @@ fn told_first(status: MergeStatus) -> bool {
 /// synced, then put in its place, and the folder synced.
 fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
-    let mut file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).with_context(|| format!("open {}", tmp.display()))?;
-    file.write_all(data).with_context(|| format!("write {}", tmp.display()))?;
-    file.sync_all().with_context(|| format!("sync {}", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("put {} in place of {}", tmp.display(), path.display()))?;
-    let dir = path.parent().context("a file kept for an update is in a folder")?;
-    File::open(dir).and_then(|d| d.sync_all()).with_context(|| format!("sync {}", dir.display()))
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .with_context(|| format!("open {}", tmp.display()))?;
+    file.write_all(data)
+        .with_context(|| format!("write {}", tmp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("sync {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("put {} in place of {}", tmp.display(), path.display()))?;
+    let dir = path
+        .parent()
+        .context("a file kept for an update is in a folder")?;
+    File::open(dir)
+        .and_then(|d| d.sync_all())
+        .with_context(|| format!("sync {}", dir.display()))
 }
 
 /// What a kernel snapshot says of itself: the sectors its copy-on-write
@@ -368,7 +436,11 @@ fn parse_usage(text: &str) -> Result<Usage, String> {
     let parsed = (|| {
         let (counts, metadata) = text.split_once(' ')?;
         let (allocated, total) = counts.split_once('/')?;
-        Some(Usage { allocated: allocated.parse().ok()?, total: total.parse().ok()?, metadata: metadata.trim().parse().ok()? })
+        Some(Usage {
+            allocated: allocated.parse().ok()?,
+            total: total.parse().ok()?,
+            metadata: metadata.trim().parse().ok()?,
+        })
     })();
     match parsed {
         Some(u) => Ok(u),
@@ -399,7 +471,9 @@ fn snapshot_target(name: &str) -> Result<Option<(bool, Result<Usage, String>)>> 
         return Ok(None);
     }
     let lines = dm::table_status(name)?;
-    let [line] = lines.as_slice() else { return Ok(None) };
+    let [line] = lines.as_slice() else {
+        return Ok(None);
+    };
     let merging = match line.kind.as_str() {
         "snapshot" => false,
         "snapshot-merge" => true,
@@ -410,14 +484,23 @@ fn snapshot_target(name: &str) -> Result<Option<(bool, Result<Usage, String>)>> 
 
 /// A device as a device-mapper table names it, `major:minor`.
 fn parse_device(text: &str) -> Result<(u32, u32)> {
-    let (major, minor) = text.split_once(':').with_context(|| format!("device {text:?}"))?;
-    Ok((major.parse().with_context(|| format!("device {text:?}"))?, minor.parse().with_context(|| format!("device {text:?}"))?))
+    let (major, minor) = text
+        .split_once(':')
+        .with_context(|| format!("device {text:?}"))?;
+    Ok((
+        major.parse().with_context(|| format!("device {text:?}"))?,
+        minor.parse().with_context(|| format!("device {text:?}"))?,
+    ))
 }
 
 /// Whether the kernel's target `kind` says when its copy-on-write space
 /// runs out: snapshot from 1.15, snapshot-merge from 1.4.
 fn reports_overflow(kind: &str) -> Result<bool> {
-    let least = if kind == "snapshot-merge" { [1, 4, 0] } else { [1, 15, 0] };
+    let least = if kind == "snapshot-merge" {
+        [1, 4, 0]
+    } else {
+        [1, 15, 0]
+    };
     Ok(dm::target_version(kind)?.is_some_and(|v| v >= least))
 }
 
@@ -433,8 +516,14 @@ fn remove_if_mapped(name: &str) -> Result<()> {
 /// the data partition.
 fn map_image(name: &str) -> Result<PathBuf> {
     let md = skyward_lp::read_image(Path::new(IMAGES))?;
-    let devices = md.block_devices.iter().map(|d| devnum(Path::new(BY_NAME).join(&d.partition_name))).collect::<Result<Vec<_>>>()?;
-    let image = md.partition(name).with_context(|| format!("{IMAGES} records no {name}"))?;
+    let devices = md
+        .block_devices
+        .iter()
+        .map(|d| devnum(Path::new(BY_NAME).join(&d.partition_name)))
+        .collect::<Result<Vec<_>>>()?;
+    let image = md
+        .partition(name)
+        .with_context(|| format!("{IMAGES} records no {name}"))?;
     dm::create(name, &targets(image, &devices), false)
 }
 
@@ -446,7 +535,13 @@ pub fn is_snapshot(name: &str) -> Result<bool> {
 /// Undo [`map_snapshot`] where it was done: take away partition `name`'s
 /// snapshot, its copy-on-write devices and its base, those that are there.
 pub fn unmap_snapshot(name: &str) -> Result<()> {
-    for dev in [name.to_string(), format!("{name}-cow"), format!("{name}-cow-img"), format!("{name}-base"), format!("{name}-src")] {
+    for dev in [
+        name.to_string(),
+        format!("{name}-cow"),
+        format!("{name}-cow-img"),
+        format!("{name}-base"),
+        format!("{name}-src"),
+    ] {
         remove_if_mapped(&dev)?;
     }
     Ok(())
@@ -467,7 +562,13 @@ fn delete_snapshot(name: &str) -> Result<()> {
 /// `md` is the slot's metadata, and `devices` super's block devices in the
 /// order it lists them. Returns the snapshot's device; what was mapped on
 /// the way is taken away again if it does not come up.
-pub fn map_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p: &Partition, status: &SnapshotStatus) -> Result<PathBuf> {
+pub fn map_snapshot(
+    snaps: &Snapshots,
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    p: &Partition,
+    status: &SnapshotStatus,
+) -> Result<PathBuf> {
     let update = snaps.update()?;
     ensure!(
         !status.using_snapuserd && !update.using_snapuserd,
@@ -475,7 +576,12 @@ pub fn map_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p:
         p.name
     );
     let sector = SECTOR_SIZE;
-    ensure!(status.device_size.is_multiple_of(sector), "{} is {} bytes, not whole sectors", p.name, status.device_size);
+    ensure!(
+        status.device_size.is_multiple_of(sector),
+        "{} is {} bytes, not whole sectors",
+        p.name,
+        status.device_size
+    );
     ensure!(
         status.snapshot_size.is_multiple_of(sector) && status.snapshot_size == status.device_size,
         "{}'s snapshot is {} bytes of the partition's {}",
@@ -483,12 +589,26 @@ pub fn map_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p:
         status.snapshot_size,
         status.device_size
     );
-    ensure!(p.bytes() == status.device_size, "{} is {} bytes in super, and {} to its snapshot", p.name, p.bytes(), status.device_size);
+    ensure!(
+        p.bytes() == status.device_size,
+        "{} is {} bytes in super, and {} to its snapshot",
+        p.name,
+        p.bytes(),
+        status.device_size
+    );
     let state = status.part_state()?;
-    ensure!(!matches!(state, PartState::None | PartState::MergeCompleted), "{}'s snapshot is {state:?}", p.name);
+    ensure!(
+        !matches!(state, PartState::None | PartState::MergeCompleted),
+        "{}'s snapshot is {state:?}",
+        p.name
+    );
     let merge = match state_of(&update)? {
-        UpdateState::MergeCompleted | UpdateState::MergeNeedsReboot => bail!("{}'s snapshot is merged already", p.name),
-        UpdateState::Merging | UpdateState::MergeFailed => status.phase() as i32 == update.merge_phase || state == PartState::Merging,
+        UpdateState::MergeCompleted | UpdateState::MergeNeedsReboot => {
+            bail!("{}'s snapshot is merged already", p.name)
+        }
+        UpdateState::Merging | UpdateState::MergeFailed => {
+            status.phase() as i32 == update.merge_phase || state == PartState::Merging
+        }
         _ => state == PartState::Merging,
     };
 
@@ -509,11 +629,20 @@ pub fn map_snapshot(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], p:
             (0, Some(dev)) => dev,
             (_, image_dev) => {
                 let name = format!("{}-cow", p.name);
-                let part = md.partition(&name).with_context(|| format!("super holds no {name}"))?;
-                ensure!(md.groups[part.group].name == COW_GROUP, "{name} is not in super's {COW_GROUP} group");
+                let part = md
+                    .partition(&name)
+                    .with_context(|| format!("super holds no {name}"))?;
+                ensure!(
+                    md.groups[part.group].name == COW_GROUP,
+                    "{name} is not in super's {COW_GROUP} group"
+                );
                 let mut table = targets(part, devices);
                 if let Some(dev) = image_dev {
-                    table.push(dm::Target::Linear { sectors: status.cow_file_size / sector, device: devnum(&dev)?, offset: 0 });
+                    table.push(dm::Target::Linear {
+                        sectors: status.cow_file_size / sector,
+                        device: devnum(&dev)?,
+                        offset: 0,
+                    });
                 }
                 let dev = dm::create(&name, &table, false)?;
                 made.push(name);
@@ -562,14 +691,28 @@ pub enum Merge {
 /// partition it snapshots. From here there is no going back to the slot the
 /// update came from. Snapshots of partitions flashed over since are left
 /// out, and their copy-on-write devices taken away.
-pub fn initiate(snaps: &Snapshots, current: Slot, md: &Metadata, tell: &dyn Fn(MergeStatus) -> Result<()>) -> Result<()> {
+pub fn initiate(
+    snaps: &Snapshots,
+    current: Slot,
+    md: &Metadata,
+    tell: &dyn Fn(MergeStatus) -> Result<()>,
+) -> Result<()> {
     let mut update = snaps.update()?;
-    ensure!(state_of(&update)? == UpdateState::Unverified, "the update has not been written all the way, or is merging already");
-    ensure!(snaps.side(current)? == Side::Target, "the phone runs from the slot the update came from, not the one it went to");
+    ensure!(
+        state_of(&update)? == UpdateState::Unverified,
+        "the update has not been written all the way, or is merging already"
+    );
+    ensure!(
+        snaps.side(current)? == Side::Target,
+        "the phone runs from the slot the update came from, not the one it went to"
+    );
     ensure!(!update.using_snapuserd, "the update's snapshots are compressed and served by snapuserd, which this recovery does not run");
     let mut names = snaps.list()?;
     for name in names.iter().filter(|n| n.ends_with(current.suffix())) {
-        ensure!(dm::status(name)?.is_some(), "{name} is not mapped, and everything has to merge at once");
+        ensure!(
+            dm::status(name)?.is_some(),
+            "{name} is not mapped, and everything has to merge at once"
+        );
     }
     let mut kept = Vec::new();
     for name in names.drain(..) {
@@ -581,7 +724,8 @@ pub fn initiate(snaps: &Snapshots, current: Slot, md: &Metadata, tell: &dyn Fn(M
     let mut initial = Usage::default();
     let mut first = Vec::new();
     for name in &kept {
-        let (_, usage) = snapshot_target(name)?.with_context(|| format!("{name} is not a snapshot"))?;
+        let (_, usage) =
+            snapshot_target(name)?.with_context(|| format!("{name} is not a snapshot"))?;
         let usage = usage.map_err(|why| anyhow!("{name}: {why}"))?;
         initial.allocated += usage.allocated;
         initial.total += usage.total;
@@ -624,15 +768,28 @@ pub fn initiate(snaps: &Snapshots, current: Slot, md: &Metadata, tell: &dyn Fn(M
 fn switch_to_merge(snaps: &Snapshots, name: &str) -> Result<(), FailureCode> {
     let mut status = snaps.status(name).map_err(|_| FailureCode::ReadStatus)?;
     let lines = dm::table(name).map_err(|_| FailureCode::GetTableInfo)?;
-    let [line] = lines.as_slice() else { return Err(FailureCode::UnknownTable) };
+    let [line] = lines.as_slice() else {
+        return Err(FailureCode::UnknownTable);
+    };
     if line.kind != "snapshot" {
         return Err(FailureCode::UnknownTable);
     }
     let mut params = line.text.split(' ');
-    let (Some(base), Some(cow)) = (params.next(), params.next()) else { return Err(FailureCode::GetTableParams) };
-    let (base, cow) = (parse_device(base).map_err(|_| FailureCode::GetTableParams)?, parse_device(cow).map_err(|_| FailureCode::GetTableParams)?);
+    let (Some(base), Some(cow)) = (params.next(), params.next()) else {
+        return Err(FailureCode::GetTableParams);
+    };
+    let (base, cow) = (
+        parse_device(base).map_err(|_| FailureCode::GetTableParams)?,
+        parse_device(cow).map_err(|_| FailureCode::GetTableParams)?,
+    );
     let overflow = reports_overflow("snapshot-merge").map_err(|_| FailureCode::ActivateNewTable)?;
-    let merging = dm::Target::Snapshot { sectors: line.sectors, base, cow, merge: true, overflow };
+    let merging = dm::Target::Snapshot {
+        sectors: line.sectors,
+        base,
+        cow,
+        merge: true,
+        overflow,
+    };
     dm::reload(name, &[merging], false).map_err(|_| FailureCode::ActivateNewTable)?;
     status.state = PartState::Merging as i32;
     if let Ok(Some((_, Ok(usage)))) = snapshot_target(name) {
@@ -651,7 +808,13 @@ fn switch_to_merge(snaps: &Snapshots, name: &str) -> Result<(), FailureCode> {
 /// marks it, for the system to clean up when it next starts; a merge that
 /// fails is marked failed, and goes on when the snapshots are next mapped.
 /// `devices` are super's block devices in the order `md` lists them.
-pub fn check(snaps: &Snapshots, current: Slot, md: &Metadata, devices: &[(u32, u32)], tell: &dyn Fn(MergeStatus) -> Result<()>) -> Result<Merge> {
+pub fn check(
+    snaps: &Snapshots,
+    current: Slot,
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    tell: &dyn Fn(MergeStatus) -> Result<()>,
+) -> Result<Merge> {
     let update = snaps.update()?;
     let state = state_of(&update)?;
     match state {
@@ -663,9 +826,14 @@ pub fn check(snaps: &Snapshots, current: Slot, md: &Metadata, devices: &[(u32, u
         other => return Ok(Merge::Idle(other)),
     }
     ensure!(!update.using_snapuserd, "the update's snapshots are compressed and served by snapuserd, which this recovery does not run");
-    let (mut merging, mut needs_reboot, mut wrong_phase, mut cancelled) = (false, false, false, false);
+    let (mut merging, mut needs_reboot, mut wrong_phase, mut cancelled) =
+        (false, false, false, false);
     let mut failure = FailureCode::Ok;
-    for name in snaps.list()?.iter().filter(|n| n.ends_with(current.suffix())) {
+    for name in snaps
+        .list()?
+        .iter()
+        .filter(|n| n.ends_with(current.suffix()))
+    {
         match check_target(snaps, md, devices, name, &update)? {
             Target::Merging => merging = true,
             Target::Failed(code) => {
@@ -721,8 +889,16 @@ enum Target {
 }
 
 /// Look at snapshot `name`'s merge, as libsnapshot looks at each one.
-fn check_target(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], name: &str, update: &UpdateStatus) -> Result<Target> {
-    let Ok(mut status) = snaps.status(name) else { return Ok(Target::Failed(FailureCode::ReadStatus)) };
+fn check_target(
+    snaps: &Snapshots,
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    name: &str,
+    update: &UpdateStatus,
+) -> Result<Target> {
+    let Ok(mut status) = snaps.status(name) else {
+        return Ok(Target::Failed(FailureCode::ReadStatus));
+    };
     let state = status.part_state()?;
     let Some((merging, usage)) = snapshot_target(name)? else {
         if placed(md, name) != Placed::Updated {
@@ -737,8 +913,13 @@ fn check_target(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], name: 
         }
         return Ok(Target::Failed(FailureCode::UnknownTargetType));
     };
-    let Ok(usage) = usage else { return Ok(Target::Failed(FailureCode::QuerySnapshotStatus)) };
-    if !merging && status.phase() == MergePhase::SecondPhase && update.merge_phase == MergePhase::FirstPhase as i32 {
+    let Ok(usage) = usage else {
+        return Ok(Target::Failed(FailureCode::QuerySnapshotStatus));
+    };
+    if !merging
+        && status.phase() == MergePhase::SecondPhase
+        && update.merge_phase == MergePhase::FirstPhase as i32
+    {
         return Ok(Target::WrongPhase);
     }
     if !merging {
@@ -765,11 +946,19 @@ fn check_target(snaps: &Snapshots, md: &Metadata, devices: &[(u32, u32)], name: 
 /// Clean up after snapshot `name` merged all the way: its device is mapped
 /// straight over super again, and its base and copy-on-write devices taken
 /// away.
-fn merged(md: &Metadata, devices: &[(u32, u32)], name: &str, status: &SnapshotStatus) -> Result<()> {
+fn merged(
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    name: &str,
+    status: &SnapshotStatus,
+) -> Result<()> {
     if let Some((merging, usage)) = snapshot_target(name)? {
         ensure!(merging, "{name} is a snapshot that is not merging");
         let usage = usage.map_err(|why| anyhow!("{name}: {why}"))?;
-        ensure!(usage.allocated == usage.metadata, "{name} has more to merge");
+        ensure!(
+            usage.allocated == usage.metadata,
+            "{name} has more to merge"
+        );
         collapse(md, devices, name, status)?;
     }
     delete_snapshot(name)
@@ -777,9 +966,20 @@ fn merged(md: &Metadata, devices: &[(u32, u32)], name: &str, status: &SnapshotSt
 
 /// Map the merged snapshot `name` straight over its partition's extents in
 /// super, in place, and take its base device away.
-fn collapse(md: &Metadata, devices: &[(u32, u32)], name: &str, status: &SnapshotStatus) -> Result<()> {
-    ensure!(status.snapshot_size.is_multiple_of(SECTOR_SIZE), "{name}'s snapshot is {} bytes, not whole sectors", status.snapshot_size);
-    let p = md.partition(name).with_context(|| format!("super holds no {name}"))?;
+fn collapse(
+    md: &Metadata,
+    devices: &[(u32, u32)],
+    name: &str,
+    status: &SnapshotStatus,
+) -> Result<()> {
+    ensure!(
+        status.snapshot_size.is_multiple_of(SECTOR_SIZE),
+        "{name}'s snapshot is {} bytes, not whole sectors",
+        status.snapshot_size
+    );
+    let p = md
+        .partition(name)
+        .with_context(|| format!("super holds no {name}"))?;
     dm::reload(name, &targets(p, devices), true)?;
     remove_if_mapped(&format!("{name}-base"))?;
     remove_if_mapped(&format!("{name}-src"))
@@ -788,17 +988,23 @@ fn collapse(md: &Metadata, devices: &[(u32, u32)], name: &str, status: &Snapshot
 /// Go on to merge the snapshots of the second phase, those of the first all
 /// merged.
 fn merge_second_phase(snaps: &Snapshots, current: Slot) -> FailureCode {
-    let Ok(mut update) = snaps.update() else { return FailureCode::ReadStatus };
+    let Ok(mut update) = snaps.update() else {
+        return FailureCode::ReadStatus;
+    };
     update.state = UpdateState::Merging as i32;
     update.merge_phase = MergePhase::SecondPhase as i32;
     // The phase is the update's own; the bootloader hears nothing new.
     if write_atomic(&snaps.dir.join(STATE), &update.encode_to_vec()).is_err() {
         return FailureCode::WriteStatus;
     }
-    let Ok(names) = snaps.list() else { return FailureCode::ListSnapshots };
+    let Ok(names) = snaps.list() else {
+        return FailureCode::ListSnapshots;
+    };
     let mut result = FailureCode::Ok;
     for name in names.iter().filter(|n| n.ends_with(current.suffix())) {
-        let Ok(status) = snaps.status(name) else { return FailureCode::ReadStatus };
+        let Ok(status) = snaps.status(name) else {
+            return FailureCode::ReadStatus;
+        };
         if status.phase() != MergePhase::SecondPhase {
             continue;
         }
@@ -817,7 +1023,14 @@ mod tests {
 
     #[test]
     fn a_snapshots_status_line_is_read_as_the_kernel_writes_it() {
-        assert_eq!(parse_usage("2048/233936 64"), Ok(Usage { allocated: 2048, total: 233_936, metadata: 64 }));
+        assert_eq!(
+            parse_usage("2048/233936 64"),
+            Ok(Usage {
+                allocated: 2048,
+                total: 233_936,
+                metadata: 64
+            })
+        );
         assert_eq!(parse_usage("Invalid"), Err("Invalid".into()));
         assert_eq!(parse_usage("Overflow"), Err("Overflow".into()));
         assert_eq!(parse_usage("Merge failed"), Err("Merge failed".into()));
@@ -827,23 +1040,66 @@ mod tests {
     #[test]
     fn a_merge_is_measured_from_what_was_allocated_as_it_began() {
         let started = 10_000;
-        let at = |allocated| merge_percent(Usage { allocated, total: 200_000, metadata: 2_000 }, started);
+        let at = |allocated| {
+            merge_percent(
+                Usage {
+                    allocated,
+                    total: 200_000,
+                    metadata: 2_000,
+                },
+                started,
+            )
+        };
         assert_eq!(at(started), 0.0, "nothing written back yet");
-        assert!((at(6_000) - 50.0).abs() < 1e-9, "half of what there was to write back");
+        assert!(
+            (at(6_000) - 50.0).abs() < 1e-9,
+            "half of what there was to write back"
+        );
         assert_eq!(at(2_000), 100.0, "only its own bookkeeping left");
-        assert_eq!(merge_percent(Usage { allocated: 0, total: 0, metadata: 0 }, 0), 0.0, "no snapshots");
-        assert_eq!(merge_percent(Usage { allocated: 4_000, total: 200_000, metadata: 2_000 }, 0), 100.0 / 198_000.0 * 196_000.0, "with no start kept, from the whole space");
+        assert_eq!(
+            merge_percent(
+                Usage {
+                    allocated: 0,
+                    total: 0,
+                    metadata: 0
+                },
+                0
+            ),
+            0.0,
+            "no snapshots"
+        );
+        assert_eq!(
+            merge_percent(
+                Usage {
+                    allocated: 4_000,
+                    total: 200_000,
+                    metadata: 2_000
+                },
+                0
+            ),
+            100.0 / 198_000.0 * 196_000.0,
+            "with no start kept, from the whole space"
+        );
     }
 
     #[test]
     fn the_bootloader_hears_of_a_state_that_keeps_it_from_erasing_before_it_is_written() {
         assert_eq!(merge_status(UpdateState::Merging), MergeStatus::Merging);
         assert_eq!(merge_status(UpdateState::MergeFailed), MergeStatus::Merging);
-        assert_eq!(merge_status(UpdateState::Unverified), MergeStatus::Snapshotted);
+        assert_eq!(
+            merge_status(UpdateState::Unverified),
+            MergeStatus::Snapshotted
+        );
         assert_eq!(merge_status(UpdateState::MergeCompleted), MergeStatus::None);
-        assert_eq!(merge_status(UpdateState::MergeNeedsReboot), MergeStatus::None);
+        assert_eq!(
+            merge_status(UpdateState::MergeNeedsReboot),
+            MergeStatus::None
+        );
         assert!(told_first(MergeStatus::Merging) && told_first(MergeStatus::Snapshotted));
-        assert!(!told_first(MergeStatus::None), "the bootloader is let erase once the state says so");
+        assert!(
+            !told_first(MergeStatus::None),
+            "the bootloader is let erase once the state says so"
+        );
     }
 
     #[test]
@@ -856,7 +1112,11 @@ mod tests {
         };
         assert_eq!(status(true, 100, 200).phase(), MergePhase::FirstPhase);
         assert_eq!(status(true, 200, 100).phase(), MergePhase::SecondPhase);
-        assert_eq!(status(false, 100, 200).phase(), MergePhase::SecondPhase, "the kernel merges all at once");
+        assert_eq!(
+            status(false, 100, 200).phase(),
+            MergePhase::SecondPhase,
+            "the kernel merges all at once"
+        );
     }
 
     #[test]
@@ -866,14 +1126,20 @@ mod tests {
     }
 
     fn scratch(test: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("skyward-snapshots-{test}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("skyward-snapshots-{test}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join(SNAPSHOTS)).unwrap();
         dir
     }
 
     fn partition(name: &str, attributes: u32) -> Partition {
-        Partition { name: name.into(), attributes, group: 0, extents: vec![skyward_lp::Extent::Zero { sectors: 8 }] }
+        Partition {
+            name: name.into(),
+            attributes,
+            group: 0,
+            extents: vec![skyward_lp::Extent::Zero { sectors: 8 }],
+        }
     }
 
     #[test]
@@ -891,12 +1157,36 @@ mod tests {
         snaps.write_status(&written).unwrap();
         let updated = partition("vendor_a", skyward_lp::ATTR_READONLY | ATTR_UPDATED);
         assert_eq!(snaps.live(&updated).unwrap(), Some(written.clone()));
-        assert_eq!(snaps.live(&partition("vendor_a", skyward_lp::ATTR_READONLY)).unwrap(), None, "flashed over since");
-        assert_eq!(snaps.live(&partition("odm_a", ATTR_UPDATED)).unwrap(), None, "the update made no snapshot of it");
-        snaps.write_status(&SnapshotStatus { state: PartState::MergeCompleted as i32, ..written.clone() }).unwrap();
+        assert_eq!(
+            snaps
+                .live(&partition("vendor_a", skyward_lp::ATTR_READONLY))
+                .unwrap(),
+            None,
+            "flashed over since"
+        );
+        assert_eq!(
+            snaps.live(&partition("odm_a", ATTR_UPDATED)).unwrap(),
+            None,
+            "the update made no snapshot of it"
+        );
+        snaps
+            .write_status(&SnapshotStatus {
+                state: PartState::MergeCompleted as i32,
+                ..written.clone()
+            })
+            .unwrap();
         assert_eq!(snaps.live(&updated).unwrap(), None, "merged");
-        snaps.write_status(&SnapshotStatus { cow_partition_size: 0, ..written }).unwrap();
-        assert_eq!(snaps.live(&updated).unwrap(), None, "a snapshot with nowhere to keep its changes is not one");
+        snaps
+            .write_status(&SnapshotStatus {
+                cow_partition_size: 0,
+                ..written
+            })
+            .unwrap();
+        assert_eq!(
+            snaps.live(&updated).unwrap(),
+            None,
+            "a snapshot with nowhere to keep its changes is not one"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -907,7 +1197,17 @@ mod tests {
         assert_eq!(snaps.side(Slot::A).unwrap(), Side::Unknown);
         assert!(!snaps.needed(Slot::A).unwrap(), "no update written");
         fs::write(dir.join(SOURCE), "_b").unwrap();
-        let state = |s: UpdateState| fs::write(dir.join(STATE), UpdateStatus { state: s as i32, ..UpdateStatus::default() }.encode_to_vec()).unwrap();
+        let state = |s: UpdateState| {
+            fs::write(
+                dir.join(STATE),
+                UpdateStatus {
+                    state: s as i32,
+                    ..UpdateStatus::default()
+                }
+                .encode_to_vec(),
+            )
+            .unwrap()
+        };
         for (s, needed) in [
             (UpdateState::Unverified, true),
             (UpdateState::Merging, true),
@@ -917,12 +1217,25 @@ mod tests {
             (UpdateState::Initiated, false),
         ] {
             state(s);
-            assert_eq!(snaps.needed(Slot::A).unwrap(), needed, "{s:?} on the slot the update went to");
-            assert!(!snaps.needed(Slot::B).unwrap(), "{s:?} on the slot it came from");
+            assert_eq!(
+                snaps.needed(Slot::A).unwrap(),
+                needed,
+                "{s:?} on the slot the update went to"
+            );
+            assert!(
+                !snaps.needed(Slot::B).unwrap(),
+                "{s:?} on the slot it came from"
+            );
         }
-        assert_eq!((snaps.side(Slot::A).unwrap(), snaps.side(Slot::B).unwrap()), (Side::Target, Side::Source));
+        assert_eq!(
+            (snaps.side(Slot::A).unwrap(), snaps.side(Slot::B).unwrap()),
+            (Side::Target, Side::Source)
+        );
         fs::write(dir.join(WITHOUT_SLOT_SWITCH), "").unwrap();
-        assert!(snaps.needed(Slot::B).unwrap(), "applied without switching slots, the slot it came from starts through it");
+        assert!(
+            snaps.needed(Slot::B).unwrap(),
+            "applied without switching slots, the slot it came from starts through it"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -934,26 +1247,51 @@ mod tests {
             state: UpdateState::Merging as i32,
             sectors_allocated: 4_210_688,
             merge_phase: MergePhase::SecondPhase as i32,
-            source_build_fingerprint: "Xiaomi/ishtar/ishtar:13/TKQ1.221114.001/OS3.0.305.0.WMACNXM:user/release-keys".into(),
+            source_build_fingerprint:
+                "Xiaomi/ishtar/ishtar:13/TKQ1.221114.001/OS3.0.305.0.WMACNXM:user/release-keys"
+                    .into(),
             ..UpdateStatus::default()
         };
         let told = std::cell::RefCell::new(Vec::new());
         let tell = |s: MergeStatus| {
-            told.borrow_mut().push((s, fs::read(dir.join(STATE)).unwrap_or_default()));
+            told.borrow_mut()
+                .push((s, fs::read(dir.join(STATE)).unwrap_or_default()));
             Ok(())
         };
         snaps.write_update(&begun, &tell).unwrap();
-        assert_eq!(told.borrow()[0], (MergeStatus::Merging, Vec::new()), "told before the state was written");
-        snaps.set_state(UpdateState::MergeCompleted, FailureCode::Ok, &tell).unwrap();
+        assert_eq!(
+            told.borrow()[0],
+            (MergeStatus::Merging, Vec::new()),
+            "told before the state was written"
+        );
+        snaps
+            .set_state(UpdateState::MergeCompleted, FailureCode::Ok, &tell)
+            .unwrap();
         let done = snaps.update().unwrap();
         assert_eq!(state_of(&done).unwrap(), UpdateState::MergeCompleted);
-        assert_eq!((done.merge_phase, done.source_build_fingerprint.as_str()), (begun.merge_phase, begun.source_build_fingerprint.as_str()));
-        assert_eq!(done.sectors_allocated, 0, "how far the merge came is not kept past it");
-        assert_eq!(told.borrow()[1], (MergeStatus::None, done.encode_to_vec()), "told after the state was written");
-        assert!(!dir.join(format!("{STATE}.tmp")).exists(), "nothing left beside it");
+        assert_eq!(
+            (done.merge_phase, done.source_build_fingerprint.as_str()),
+            (begun.merge_phase, begun.source_build_fingerprint.as_str())
+        );
+        assert_eq!(
+            done.sectors_allocated, 0,
+            "how far the merge came is not kept past it"
+        );
+        assert_eq!(
+            told.borrow()[1],
+            (MergeStatus::None, done.encode_to_vec()),
+            "told after the state was written"
+        );
+        assert!(
+            !dir.join(format!("{STATE}.tmp")).exists(),
+            "nothing left beside it"
+        );
         drop(snaps);
         let shared = Snapshots::lock_in(&dir, false).expect("the lock is let go with the handle");
-        assert!(shared.write_update(&begun, &tell).is_err(), "a shared lock writes nothing");
+        assert!(
+            shared.write_update(&begun, &tell).is_err(),
+            "a shared lock writes nothing"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

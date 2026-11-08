@@ -31,14 +31,18 @@ const RTF_GATEWAY: libc::c_ushort = 0x2;
 fn socket() -> Result<OwnedFd> {
     let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
-        return Err(std::io::Error::last_os_error()).context("make a socket to set an interface with");
+        return Err(std::io::Error::last_os_error())
+            .context("make a socket to set an interface with");
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn request(interface: &str) -> Result<libc::ifreq> {
     let mut r: libc::ifreq = unsafe { std::mem::zeroed() };
-    anyhow::ensure!(interface.len() < r.ifr_name.len(), "{interface} is too long a name for an interface");
+    anyhow::ensure!(
+        interface.len() < r.ifr_name.len(),
+        "{interface} is too long a name for an interface"
+    );
     for (to, from) in r.ifr_name.iter_mut().zip(interface.bytes()) {
         *to = from as libc::c_char;
     }
@@ -56,7 +60,9 @@ fn sockaddr(address: Ipv4Addr) -> libc::sockaddr {
     let inet = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
         sin_port: 0,
-        sin_addr: libc::in_addr { s_addr: u32::from_ne_bytes(address.octets()) },
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes(address.octets()),
+        },
         sin_zero: [0; 8],
     };
     unsafe { std::mem::transmute::<libc::sockaddr_in, libc::sockaddr>(inet) }
@@ -66,7 +72,12 @@ fn sockaddr(address: Ipv4Addr) -> libc::sockaddr {
 pub fn hardware_address(interface: &str) -> Result<[u8; 6]> {
     let fd = socket()?;
     let mut r = request(interface)?;
-    ioctl(&fd, libc::SIOCGIFHWADDR as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &format!("read the hardware address of {interface}"))?;
+    ioctl(
+        &fd,
+        libc::SIOCGIFHWADDR as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &format!("read the hardware address of {interface}"),
+    )?;
     let data = unsafe { r.ifr_ifru.ifru_hwaddr.sa_data };
     let mut mac = [0u8; 6];
     // A C char is signed on some phones and not on others.
@@ -80,7 +91,12 @@ pub fn hardware_address(interface: &str) -> Result<[u8; 6]> {
 pub fn set_up(interface: &str, up: bool) -> Result<()> {
     let fd = socket()?;
     let mut r = request(interface)?;
-    ioctl(&fd, libc::SIOCGIFFLAGS as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &format!("read how {interface} stands"))?;
+    ioctl(
+        &fd,
+        libc::SIOCGIFFLAGS as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &format!("read how {interface} stands"),
+    )?;
     unsafe {
         if up {
             r.ifr_ifru.ifru_flags |= libc::IFF_UP as libc::c_short;
@@ -88,21 +104,49 @@ pub fn set_up(interface: &str, up: bool) -> Result<()> {
             r.ifr_ifru.ifru_flags &= !(libc::IFF_UP as libc::c_short);
         }
     }
-    let doing = if up { format!("bring {interface} up") } else { format!("take {interface} down") };
-    ioctl(&fd, libc::SIOCSIFFLAGS as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &doing)
+    let doing = if up {
+        format!("bring {interface} up")
+    } else {
+        format!("take {interface} down")
+    };
+    ioctl(
+        &fd,
+        libc::SIOCSIFFLAGS as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &doing,
+    )
 }
 
 /// Give the interface `address` in a network of `mask`; what is sent to
 /// any other goes through `router`.
-pub fn configure(interface: &str, address: Ipv4Addr, mask: Ipv4Addr, router: Option<Ipv4Addr>) -> Result<()> {
+pub fn configure(
+    interface: &str,
+    address: Ipv4Addr,
+    mask: Ipv4Addr,
+    router: Option<Ipv4Addr>,
+) -> Result<()> {
     let fd = socket()?;
     let mut r = request(interface)?;
     r.ifr_ifru.ifru_addr = sockaddr(address);
-    ioctl(&fd, libc::SIOCSIFADDR as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &format!("give {interface} the address {address}"))?;
+    ioctl(
+        &fd,
+        libc::SIOCSIFADDR as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &format!("give {interface} the address {address}"),
+    )?;
     r.ifr_ifru.ifru_netmask = sockaddr(mask);
-    ioctl(&fd, libc::SIOCSIFNETMASK as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &format!("give {interface} the mask {mask}"))?;
+    ioctl(
+        &fd,
+        libc::SIOCSIFNETMASK as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &format!("give {interface} the mask {mask}"),
+    )?;
     let Some(router) = router else { return Ok(()) };
-    let mut name: Vec<libc::c_char> = interface.bytes().map(|b| b as libc::c_char).chain([0]).collect();
+    let mut name: Vec<libc::c_char> = interface
+        .bytes()
+        .map(|b| b as libc::c_char)
+        .chain([0])
+        .collect();
     let mut route = Route {
         pad1: 0,
         dst: sockaddr(Ipv4Addr::UNSPECIFIED),
@@ -120,13 +164,26 @@ pub fn configure(interface: &str, address: Ipv4Addr, mask: Ipv4Addr, router: Opt
     };
     // A default route left from an earlier address goes first; the kernel
     // keeps only one.
-    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::SIOCDELRT as libc::c_int, (&mut route as *mut Route).cast::<libc::c_void>()) } != 0 {
+    if unsafe {
+        libc::ioctl(
+            fd.as_raw_fd(),
+            libc::SIOCDELRT as libc::c_int,
+            (&mut route as *mut Route).cast::<libc::c_void>(),
+        )
+    } != 0
+    {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() != Some(libc::ESRCH) {
-            return Err(e).with_context(|| format!("take away the default route through {interface}"));
+            return Err(e)
+                .with_context(|| format!("take away the default route through {interface}"));
         }
     }
-    ioctl(&fd, libc::SIOCADDRT as libc::c_int, (&mut route as *mut Route).cast(), &format!("route through {router} on {interface}"))
+    ioctl(
+        &fd,
+        libc::SIOCADDRT as libc::c_int,
+        (&mut route as *mut Route).cast(),
+        &format!("route through {router} on {interface}"),
+    )
 }
 
 /// Take the interface's address away, and the routes through it with it.
@@ -134,5 +191,10 @@ pub fn unconfigure(interface: &str) -> Result<()> {
     let fd = socket()?;
     let mut r = request(interface)?;
     r.ifr_ifru.ifru_addr = sockaddr(Ipv4Addr::UNSPECIFIED);
-    ioctl(&fd, libc::SIOCSIFADDR as libc::c_int, (&mut r as *mut libc::ifreq).cast(), &format!("take the address of {interface} away"))
+    ioctl(
+        &fd,
+        libc::SIOCSIFADDR as libc::c_int,
+        (&mut r as *mut libc::ifreq).cast(),
+        &format!("take the address of {interface} away"),
+    )
 }

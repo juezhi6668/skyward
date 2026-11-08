@@ -213,11 +213,21 @@ fn endpoint(address: u8, max_packet_size: u16) -> EndpointDesc {
 }
 
 fn function(max_packet_size: u16) -> Function {
-    Function { interface: interface(), source: endpoint(1, max_packet_size), sink: endpoint(2 | DIR_IN, max_packet_size) }
+    Function {
+        interface: interface(),
+        source: endpoint(1, max_packet_size),
+        sink: endpoint(2 | DIR_IN, max_packet_size),
+    }
 }
 
 fn companion() -> SsCompanionDesc {
-    SsCompanionDesc { length: 6, descriptor_type: DT_SS_ENDPOINT_COMP, max_burst: 4, attributes: 0, bytes_per_interval: U16::new(0) }
+    SsCompanionDesc {
+        length: 6,
+        descriptor_type: DT_SS_ENDPOINT_COMP,
+        max_burst: 4,
+        attributes: 0,
+        bytes_per_interval: U16::new(0),
+    }
 }
 
 fn descriptors() -> Descriptors {
@@ -305,7 +315,9 @@ struct State {
 
 impl Shared {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().expect("the USB state lock is never poisoned")
+        self.state
+            .lock()
+            .expect("the USB state lock is never poisoned")
     }
 
     fn set(&self, f: impl FnOnce(&mut State)) {
@@ -347,14 +359,19 @@ impl Shared {
             if !s.accepting {
                 return Err(io::Error::from(ErrorKind::ConnectionAborted));
             }
-            s = self.changed.wait(s).expect("the USB state lock is never poisoned");
+            s = self
+                .changed
+                .wait(s)
+                .expect("the USB state lock is never poisoned");
         }
     }
 
     /// The function went away before the control thread heard of it: give
     /// it a moment to.
     fn settle(&self) {
-        let _ = self.changed.wait_timeout(self.lock(), Duration::from_millis(10));
+        let _ = self
+            .changed
+            .wait_timeout(self.lock(), Duration::from_millis(10));
     }
 }
 
@@ -422,9 +439,18 @@ impl Usb {
     }
 
     fn take(shared: Arc<Shared>) -> Result<(Usb, Endpoints)> {
-        let ep0 = OpenOptions::new().read(true).write(true).custom_flags(libc::O_CLOEXEC).open(EP0).context("open ep0")?;
-        (&ep0).write_all(descriptors().as_bytes()).context("write the USB descriptors")?;
-        (&ep0).write_all(strings().as_bytes()).context("write the USB strings")?;
+        let ep0 = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(EP0)
+            .context("open ep0")?;
+        (&ep0)
+            .write_all(descriptors().as_bytes())
+            .context("write the USB descriptors")?;
+        (&ep0)
+            .write_all(strings().as_bytes())
+            .context("write the USB strings")?;
         let out = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -440,13 +466,17 @@ impl Usb {
         if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
             return Err(io::Error::last_os_error()).context("make the control thread's stop pipe");
         }
-        let (stop_read, stop) = unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
+        let (stop_read, stop) =
+            unsafe { (OwnedFd::from_raw_fd(pipe[0]), OwnedFd::from_raw_fd(pipe[1])) };
         let answering = shared.clone();
         let control = thread::Builder::new()
             .name("sideload-usb".into())
             .spawn(move || answer(&ep0, &stop_read, &answering))
             .context("start the USB control thread")?;
-        let usb = Usb { stop: Some(stop), control: Some(control) };
+        let usb = Usb {
+            stop: Some(stop),
+            control: Some(control),
+        };
 
         set_prop("sys.usb.ffs.ready", "1")?;
         set("sideload", SWITCH)?;
@@ -469,7 +499,9 @@ impl Usb {
     fn stop_control(&mut self) -> Result<()> {
         drop(self.stop.take());
         match self.control.take() {
-            Some(control) => control.join().expect("the USB control thread does not panic"),
+            Some(control) => control
+                .join()
+                .expect("the USB control thread does not panic"),
             None => Ok(()),
         }
     }
@@ -487,8 +519,16 @@ fn answer(ep0: &File, stop: &OwnedFd, shared: &Shared) -> Result<()> {
     let mut event = [0u8; size_of::<Event>()];
     loop {
         let mut fds = [
-            libc::pollfd { fd: ep0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: stop.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+            libc::pollfd {
+                fd: ep0.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stop.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
         if unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) } < 0 {
             let e = io::Error::last_os_error();
@@ -503,7 +543,9 @@ fn answer(ep0: &File, stop: &OwnedFd, shared: &Shared) -> Result<()> {
         if fds[0].revents & libc::POLLIN == 0 {
             bail!("ep0 reported {:#x}", fds[0].revents);
         }
-        let n = { ep0 }.read(&mut event).context("read a USB control event")?;
+        let n = { ep0 }
+            .read(&mut event)
+            .context("read a USB control event")?;
         ensure!(n == event.len(), "a USB control event of {n} bytes");
         let ev = Event::read_from_bytes(&event).expect("the buffer is one event");
         match ev.kind {
@@ -511,11 +553,15 @@ fn answer(ep0: &File, stop: &OwnedFd, shared: &Shared) -> Result<()> {
             DISABLE | UNBIND => shared.set(|s| s.enabled = false),
             SETUP if ev.request_type & DIR_IN != 0 => {
                 // Nothing to send: an empty answer acknowledges it.
-                { ep0 }.write(&[]).context("acknowledge a control request")?;
+                { ep0 }
+                    .write(&[])
+                    .context("acknowledge a control request")?;
             }
             SETUP => {
                 let mut data = vec![0u8; usize::from(ev.length.get())];
-                { ep0 }.read_exact(&mut data).context("read a control request's data")?;
+                { ep0 }
+                    .read_exact(&mut data)
+                    .context("read a control request's data")?;
             }
             BIND | SUSPEND | RESUME => {}
             other => bail!("unknown USB control event {other}"),

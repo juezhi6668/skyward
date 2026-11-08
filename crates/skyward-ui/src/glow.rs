@@ -41,7 +41,12 @@ pub struct Ink {
 }
 
 /// Disc centres shared by both themes.
-const DISCS: [(f32, f32, f32); 4] = [(0.8, 0.2, 1.0), (0.8, 0.9, 1.0), (0.2, 0.9, 1.0), (0.2, 0.2, 1.0)];
+const DISCS: [(f32, f32, f32); 4] = [
+    (0.8, 0.2, 1.0),
+    (0.8, 0.9, 1.0),
+    (0.2, 0.9, 1.0),
+    (0.2, 0.2, 1.0),
+];
 
 pub const LIGHT: Glow = Glow {
     discs: DISCS,
@@ -53,11 +58,32 @@ pub const LIGHT: Glow = Glow {
     rush: 1.6,
     pace: 1.05,
     colors: [
-        [[1.0, 0.9, 0.94, 1.0], [1.0, 0.84, 0.89, 1.0], [0.97, 0.73, 0.82, 1.0], [0.64, 0.65, 0.98, 1.0]],
-        [[0.58, 0.74, 1.0, 1.0], [1.0, 0.9, 0.93, 1.0], [0.74, 0.76, 1.0, 1.0], [0.97, 0.77, 0.84, 1.0]],
-        [[0.98, 0.86, 0.9, 1.0], [0.6, 0.73, 0.98, 1.0], [0.92, 0.93, 1.0, 1.0], [0.56, 0.69, 1.0, 1.0]],
+        [
+            [1.0, 0.9, 0.94, 1.0],
+            [1.0, 0.84, 0.89, 1.0],
+            [0.97, 0.73, 0.82, 1.0],
+            [0.64, 0.65, 0.98, 1.0],
+        ],
+        [
+            [0.58, 0.74, 1.0, 1.0],
+            [1.0, 0.9, 0.93, 1.0],
+            [0.74, 0.76, 1.0, 1.0],
+            [0.97, 0.77, 0.84, 1.0],
+        ],
+        [
+            [0.98, 0.86, 0.9, 1.0],
+            [0.6, 0.73, 0.98, 1.0],
+            [0.92, 0.93, 1.0, 1.0],
+            [0.56, 0.69, 1.0, 1.0],
+        ],
     ],
-    ink: Ink { tone: (74.0 / 255.0, 0.8), dodge: false, linear_light: (79.0 / 255.0, 1.0), floor: 59.0, rise: 0.18 },
+    ink: Ink {
+        tone: (74.0 / 255.0, 0.8),
+        dodge: false,
+        linear_light: (79.0 / 255.0, 1.0),
+        floor: 59.0,
+        rise: 0.18,
+    },
 };
 
 pub const DARK: Glow = Glow {
@@ -70,11 +96,32 @@ pub const DARK: Glow = Glow {
     rush: 1.0,
     pace: 1.0,
     colors: [
-        [[0.2, 0.06, 0.88, 0.4], [0.3, 0.14, 0.55, 0.5], [0.0, 0.64, 0.96, 0.5], [0.11, 0.16, 0.83, 0.4]],
-        [[0.07, 0.15, 0.79, 0.5], [0.62, 0.21, 0.67, 0.5], [0.06, 0.25, 0.84, 0.5], [0.0, 0.2, 0.78, 0.5]],
-        [[0.58, 0.3, 0.74, 0.4], [0.27, 0.18, 0.6, 0.5], [0.66, 0.26, 0.62, 0.5], [0.12, 0.16, 0.7, 0.6]],
+        [
+            [0.2, 0.06, 0.88, 0.4],
+            [0.3, 0.14, 0.55, 0.5],
+            [0.0, 0.64, 0.96, 0.5],
+            [0.11, 0.16, 0.83, 0.4],
+        ],
+        [
+            [0.07, 0.15, 0.79, 0.5],
+            [0.62, 0.21, 0.67, 0.5],
+            [0.06, 0.25, 0.84, 0.5],
+            [0.0, 0.2, 0.78, 0.5],
+        ],
+        [
+            [0.58, 0.3, 0.74, 0.4],
+            [0.27, 0.18, 0.6, 0.5],
+            [0.66, 0.26, 0.62, 0.5],
+            [0.12, 0.16, 0.7, 0.6],
+        ],
     ],
-    ink: Ink { tone: (161.0 / 255.0, 0.9), dodge: true, linear_light: (230.0 / 255.0, 0.3), floor: 59.0, rise: 0.18 },
+    ink: Ink {
+        tone: (161.0 / 255.0, 0.9),
+        dodge: true,
+        linear_light: (230.0 / 255.0, 0.3),
+        floor: 59.0,
+        rise: 0.18,
+    },
 };
 
 /// A value easing toward a target on a damped spring.
@@ -90,7 +137,13 @@ struct Eased {
 
 impl Eased {
     fn at(x: f32) -> Eased {
-        Eased { x, v: 0.0, to: x, k: 0.0, c: 0.0 }
+        Eased {
+            x,
+            v: 0.0,
+            to: x,
+            k: 0.0,
+            c: 0.0,
+        }
     }
 
     /// Head for `to` on a spring of damping ratio `zeta` and response
@@ -190,7 +243,11 @@ impl GlowClock {
 
     /// The disc colours now.
     pub fn colors(&self) -> [[f32; 4]; 4] {
-        let (a, b, t) = (&self.look.colors[self.from], &self.look.colors[self.to], self.blend.x);
+        let (a, b, t) = (
+            &self.look.colors[self.from],
+            &self.look.colors[self.to],
+            self.blend.x,
+        );
         std::array::from_fn(|i| std::array::from_fn(|c| a[i][c] + (b[i][c] - a[i][c]) * t))
     }
 
@@ -217,7 +274,15 @@ pub struct Field {
 /// Sample the field over a `w`×`h` screen every `cell` pixels. `top` is the
 /// height, as a fraction of the screen, of the band at the top the discs
 /// are placed in; `fade` lets the page colour `bg` through.
-pub fn sample(clock: &GlowClock, w: usize, h: usize, cell: usize, top: f32, bg: Rgba, fade: f32) -> Field {
+pub fn sample(
+    clock: &GlowClock,
+    w: usize,
+    h: usize,
+    cell: usize,
+    top: f32,
+    bg: Rgba,
+    fade: f32,
+) -> Field {
     let g = clock.look();
     let t = clock.time();
     let colors = clock.colors();
@@ -233,12 +298,22 @@ pub fn sample(clock: &GlowClock, w: usize, h: usize, cell: usize, top: f32, bg: 
     let mut rgb = vec![[0.0; 3]; cols * rows];
     for (j, line) in rgb.chunks_exact_mut(cols).enumerate() {
         for (i, px) in line.iter_mut().enumerate() {
-            let (u, v) = (((i * cell) as f32 + 0.5) / w as f32, 1.0 - ((j * cell) as f32 + 0.5) / h as f32);
+            let (u, v) = (
+                ((i * cell) as f32 + 0.5) / w as f32,
+                1.0 - ((j * cell) as f32 + 0.5) / h as f32,
+            );
             let (c, a) = shade(g, &discs, &colors, t, u, v, top);
-            *px = std::array::from_fn(|k| bg[k] + (c[k] * 255.0 * a + bg[k] * (1.0 - a) - bg[k]) * fade);
+            *px = std::array::from_fn(|k| {
+                bg[k] + (c[k] * 255.0 * a + bg[k] * (1.0 - a) - bg[k]) * fade
+            });
         }
     }
-    Field { cell, cols, rows, rgb }
+    Field {
+        cell,
+        cols,
+        rows,
+        rgb,
+    }
 }
 
 impl Field {
@@ -252,11 +327,15 @@ impl Field {
         let fy = gy - j as f32;
         let mut left = [0.0f32; 3];
         for i in 0..self.cols {
-            let (a, b) = (self.rgb[j * self.cols + i], self.rgb[(j + 1) * self.cols + i]);
+            let (a, b) = (
+                self.rgb[j * self.cols + i],
+                self.rgb[(j + 1) * self.cols + i],
+            );
             let c: [f32; 3] = std::array::from_fn(|k| a[k] + (b[k] - a[k]) * fy);
             if i > 0 {
                 start[i - 1] = left.map(|v| (v * ONE) as i32 + 0x8000);
-                step[i - 1] = std::array::from_fn(|k| ((c[k] - left[k]) * ONE / self.cell as f32) as i32);
+                step[i - 1] =
+                    std::array::from_fn(|k| ((c[k] - left[k]) * ONE / self.cell as f32) as i32);
             }
             left = c;
         }
@@ -264,7 +343,15 @@ impl Field {
 }
 
 /// Colour and opacity of the field at screen fraction (`u`, `v`), y up.
-fn shade(g: &Glow, discs: &[(f32, f32, f32); 4], colors: &[[f32; 4]; 4], t: f32, u: f32, v: f32, top: f32) -> ([f32; 3], f32) {
+fn shade(
+    g: &Glow,
+    discs: &[(f32, f32, f32); 4],
+    colors: &[[f32; 4]; 4],
+    t: f32,
+    u: f32,
+    v: f32,
+    top: f32,
+) -> ([f32; 3], f32) {
     // Disc space: the band of height `top` at the top of the screen.
     let (bx, by) = (u, (v - (1.0 - top)) / top);
     let mut c = [0.0f32; 3];
@@ -305,10 +392,15 @@ fn hash(x: f32, y: f32) -> f32 {
 }
 
 /// Smooth value noise in 0..1.
-fn perlin(x: f32, y: f32) -> f32 {
+pub(crate) fn perlin(x: f32, y: f32) -> f32 {
     let (ix, iy) = (x.floor(), y.floor());
     let (fx, fy) = (x - ix, y - iy);
-    let (a, b, c, d) = (hash(ix, iy), hash(ix + 1.0, iy), hash(ix, iy + 1.0), hash(ix + 1.0, iy + 1.0));
+    let (a, b, c, d) = (
+        hash(ix, iy),
+        hash(ix + 1.0, iy),
+        hash(ix, iy + 1.0),
+        hash(ix + 1.0, iy + 1.0),
+    );
     let (ux, uy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
     a + (b - a) * ux + (c - a) * uy * (1.0 - ux) + (d - b) * ux * uy
 }
@@ -339,7 +431,8 @@ fn from_hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
 /// The ±5-step dither the field is drawn with, at pixel (`x`, `y`), in
 /// steps of one 255th.
 pub fn dither(x: usize, y: usize) -> f32 {
-    let n = fract(52.982_92 * fract(0.067_110_56 * (x as f32 + 0.5) + 0.005_837_15 * (y as f32 + 0.5)));
+    let n =
+        fract(52.982_92 * fract(0.067_110_56 * (x as f32 + 0.5) + 0.005_837_15 * (y as f32 + 0.5)));
     10.0 * n - 5.0
 }
 
@@ -376,8 +469,15 @@ pub struct Layer<'a> {
 pub fn paint(out: &mut Canvas, field: &Field, fade: f32, layer: &Layer, dither: &Dither) {
     let w = out.w as usize;
     assert_eq!(dither.w, w, "the dither was made for this screen");
-    assert!(out.whole() && layer.canvas.whole(), "the field fills a whole screen under a whole page");
-    let clear = [Run { x0: 0, x1: w as u16, cover: Cover::Clear }];
+    assert!(
+        out.whole() && layer.canvas.whole(),
+        "the field fills a whole screen under a whole page"
+    );
+    let clear = [Run {
+        x0: 0,
+        x1: w as u16,
+        cover: Cover::Clear,
+    }];
     let mut start = vec![[0i32; 3]; field.cols - 1];
     let mut step = vec![[0i32; 3]; field.cols - 1];
     // A dither value in sixteenths times this gives 16.16 fixed point.
@@ -389,7 +489,11 @@ pub fn paint(out: &mut Canvas, field: &Field, fade: f32, layer: &Layer, dither: 
         let py = y as isize + layer.offset;
         let inside = usize::try_from(py).ok().filter(|&p| p < layer.runs.len());
         let runs: &[Run] = inside.map_or(&clear, |p| &layer.runs[p]);
-        let src = inside.map(|p| layer.canvas.data[p * w * 4..(p + 1) * w * 4].as_chunks::<4>().0);
+        let src = inside.map(|p| {
+            layer.canvas.data[p * w * 4..(p + 1) * w * 4]
+                .as_chunks::<4>()
+                .0
+        });
         for run in runs {
             let (x0, x1) = (run.x0 as usize, run.x1 as usize);
             let px = &mut row[x0..x1];
@@ -408,14 +512,30 @@ pub fn paint(out: &mut Canvas, field: &Field, fade: f32, layer: &Layer, dither: 
 /// Pixels from column `x0` of a grid row laid out by [`Field::row`], one
 /// per entry of `px`, dithered by `noise` at `shade`. Each cell's loop is
 /// straight enough for the compiler to run on vector registers.
-fn field_span(px: &mut [[u8; 4]], noise: &[i8], x0: usize, cell: usize, start: &[[i32; 3]], step: &[[i32; 3]], shade: i32) {
+fn field_span(
+    px: &mut [[u8; 4]],
+    noise: &[i8],
+    x0: usize,
+    cell: usize,
+    start: &[[i32; 3]],
+    step: &[[i32; 3]],
+    shade: i32,
+) {
     let x1 = x0 + px.len();
     let mut x = x0;
     while x < x1 {
         let i = (x / cell).min(start.len() - 1);
-        let end = if i + 1 == start.len() { x1 } else { ((i + 1) * cell).min(x1) };
+        let end = if i + 1 == start.len() {
+            x1
+        } else {
+            ((i + 1) * cell).min(x1)
+        };
         let (s, st, from) = (start[i], step[i], (x - i * cell) as i32);
-        for (j, (p, &d)) in px[x - x0..end - x0].iter_mut().zip(&noise[x - x0..end - x0]).enumerate() {
+        for (j, (p, &d)) in px[x - x0..end - x0]
+            .iter_mut()
+            .zip(&noise[x - x0..end - x0])
+            .enumerate()
+        {
             let (k, d) = (from + j as i32, d as i32 * shade);
             *p = [
                 ((s[0] + st[0] * k + d) >> 16).clamp(0, 255) as u8,
@@ -425,6 +545,31 @@ fn field_span(px: &mut [[u8; 4]], noise: &[i8], x0: usize, cell: usize, start: &
             ];
         }
         x = end;
+    }
+}
+
+/// Fill the rows of `out` from `top` down with `field`, whose first grid
+/// row lies on row `top`, as many as the field reaches or the screen
+/// holds, dithered at full strength.
+pub fn paint_band(out: &mut Canvas, field: &Field, top: usize, dither: &Dither) {
+    let w = out.w as usize;
+    assert_eq!(dither.w, w, "the dither was made for this screen");
+    assert!(out.whole(), "the field fills whole rows of a whole screen");
+    let bottom = (top + (field.rows - 1) * field.cell).min(out.h as usize);
+    let mut start = vec![[0i32; 3]; field.cols - 1];
+    let mut step = vec![[0i32; 3]; field.cols - 1];
+    for y in top..bottom {
+        field.row(y - top, &mut start, &mut step);
+        let row = out.data[y * w * 4..(y + 1) * w * 4].as_chunks_mut::<4>().0;
+        field_span(
+            row,
+            &dither.steps[y * w..(y + 1) * w],
+            0,
+            field.cell,
+            &start,
+            &step,
+            4096,
+        );
     }
 }
 
@@ -442,10 +587,21 @@ fn lay_span(dst: &mut [[u8; 4]], src: &[[u8; 4]]) {
 /// `alpha`, in the ink `look` makes of the field under each of its
 /// pixels, dithered as the field is.
 #[allow(clippy::too_many_arguments)]
-pub fn ink_wordmark(out: &mut Canvas, field: &Field, look: &Ink, sprite: &Sprite, scale: f32, alpha: f32, fade: f32, dither: &Dither) {
+pub fn ink_wordmark(
+    out: &mut Canvas,
+    field: &Field,
+    look: &Ink,
+    sprite: &Sprite,
+    scale: f32,
+    alpha: f32,
+    fade: f32,
+    dither: &Dither,
+) {
     assert!(out.whole(), "the wordmark is inked on a whole screen");
     let w = out.w as usize;
-    let Some((x0, y0, x1, y1)) = sprite.bounds(0.0, 0.0, scale, w, out.h as usize) else { return };
+    let Some((x0, y0, x1, y1)) = sprite.bounds(0.0, 0.0, scale, w, out.h as usize) else {
+        return;
+    };
     if alpha <= 0.0 {
         return;
     }
@@ -453,23 +609,46 @@ pub fn ink_wordmark(out: &mut Canvas, field: &Field, look: &Ink, sprite: &Sprite
     // as the field is.
     let cell = field.cell;
     let (i0, j0) = (x0 / cell, y0 / cell);
-    let (i1, j1) = (((x1 - 1) / cell + 2).min(field.cols), ((y1 - 1) / cell + 2).min(field.rows));
+    let (i1, j1) = (
+        ((x1 - 1) / cell + 2).min(field.cols),
+        ((y1 - 1) / cell + 2).min(field.rows),
+    );
     let inks = Field {
         cell,
         cols: i1 - i0,
         rows: j1 - j0,
-        rgb: (j0..j1).flat_map(|j| (i0..i1).map(move |i| ink(look, field.rgb[j * field.cols + i]))).collect(),
+        rgb: (j0..j1)
+            .flat_map(|j| (i0..i1).map(move |i| ink(look, field.rgb[j * field.cols + i])))
+            .collect(),
     };
     let shade = (fade * 4096.0).round() as i32;
     let strength = (alpha * 256.0).round() as u32;
-    let (mut start, mut step) = (vec![[0i32; 3]; inks.cols - 1], vec![[0i32; 3]; inks.cols - 1]);
+    let (mut start, mut step) = (
+        vec![[0i32; 3]; inks.cols - 1],
+        vec![[0i32; 3]; inks.cols - 1],
+    );
     let (mut colors, mut cov) = (vec![[0u8; 4]; x1 - x0], vec![0u8; x1 - x0]);
-    for (r, row) in out.data[y0 * w * 4..y1 * w * 4].chunks_exact_mut(w * 4).enumerate() {
+    for (r, row) in out.data[y0 * w * 4..y1 * w * 4]
+        .chunks_exact_mut(w * 4)
+        .enumerate()
+    {
         let y = y0 + r;
         sprite.cover_row(0.0, 0.0, scale, y, x0, &mut cov);
         inks.row(y - j0 * cell, &mut start, &mut step);
-        field_span(&mut colors, &dither.steps[y * w + x0..y * w + x1], x0 - i0 * cell, cell, &start, &step, shade);
-        for ((p, c), &v) in row.as_chunks_mut::<4>().0[x0..x1].iter_mut().zip(colors.iter()).zip(cov.iter()) {
+        field_span(
+            &mut colors,
+            &dither.steps[y * w + x0..y * w + x1],
+            x0 - i0 * cell,
+            cell,
+            &start,
+            &step,
+            shade,
+        );
+        for ((p, c), &v) in row.as_chunks_mut::<4>().0[x0..x1]
+            .iter_mut()
+            .zip(colors.iter())
+            .zip(cov.iter())
+        {
             let k = ((v as u32 + (v as u32 >> 7)) * strength) >> 8;
             for ch in 0..3 {
                 p[ch] = ((c[ch] as u32 * k + p[ch] as u32 * (256 - k) + 128) >> 8) as u8;
@@ -484,7 +663,11 @@ pub fn ink(look: &Ink, under: [f32; 3]) -> [f32; 3] {
     let (ll, ll_a) = look.linear_light;
     let c = under.map(|v| {
         let b = v / 255.0;
-        let t = if look.dodge { (b / (1.0 - tone)).min(1.0) } else { 1.0 - ((1.0 - b) / tone).min(1.0) };
+        let t = if look.dodge {
+            (b / (1.0 - tone)).min(1.0)
+        } else {
+            1.0 - ((1.0 - b) / tone).min(1.0)
+        };
         let b = b + (t - b) * tone_a;
         b + ((b + 2.0 * ll - 1.0).clamp(0.0, 1.0) - b) * ll_a
     });
@@ -515,7 +698,13 @@ fn to_lab(rgb: [f32; 3]) -> [f32; 3] {
     let x = (0.412_456_4 * r + 0.357_576_1 * g + 0.180_437_5 * b) / 0.950_47;
     let y = 0.212_672_9 * r + 0.715_152_2 * g + 0.072_175 * b;
     let z = (0.019_333_9 * r + 0.119_192 * g + 0.950_304_1 * b) / 1.088_83;
-    let f = |t: f32| if t > 216.0 / 24389.0 { t.cbrt() } else { (24389.0 / 27.0 * t + 16.0) / 116.0 };
+    let f = |t: f32| {
+        if t > 216.0 / 24389.0 {
+            t.cbrt()
+        } else {
+            (24389.0 / 27.0 * t + 16.0) / 116.0
+        }
+    };
     let (fx, fy, fz) = (f(x), f(y), f(z));
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
@@ -523,7 +712,13 @@ fn to_lab(rgb: [f32; 3]) -> [f32; 3] {
 fn from_lab([l, a, b]: [f32; 3]) -> [f32; 3] {
     let fy = (l + 16.0) / 116.0;
     let (fx, fz) = (fy + a / 500.0, fy - b / 200.0);
-    let inv = |t: f32| if t * t * t > 216.0 / 24389.0 { t * t * t } else { (116.0 * t - 16.0) * 27.0 / 24389.0 };
+    let inv = |t: f32| {
+        if t * t * t > 216.0 / 24389.0 {
+            t * t * t
+        } else {
+            (116.0 * t - 16.0) * 27.0 / 24389.0
+        }
+    };
     let (x, y, z) = (inv(fx) * 0.950_47, inv(fy), inv(fz) * 1.088_83);
     let r = 3.240_454_2 * x - 1.537_138_5 * y - 0.498_531_4 * z;
     let g = -0.969_266 * x + 1.876_010_8 * y + 0.041_556 * z;
@@ -552,24 +747,38 @@ mod tests {
             // The screen's own dither moves each value by up to five steps.
             let got = ink(&LIGHT.ink, under);
             for c in 0..3 {
-                assert!((got[c] - seen[c]).abs() < 12.0, "{under:?}: {got:?} vs {seen:?}");
+                assert!(
+                    (got[c] - seen[c]).abs() < 12.0,
+                    "{under:?}: {got:?} vs {seen:?}"
+                );
             }
         }
     }
 
     #[test]
     fn the_dark_ink_matches_the_wordmark_measured_over_its_backdrop() {
-        for (under, seen) in [([27.0, 41.0, 98.0], [127.0, 152.0, 240.0]), ([48.0, 32.0, 90.0], [159.0, 136.0, 238.0])] {
+        for (under, seen) in [
+            ([27.0, 41.0, 98.0], [127.0, 152.0, 240.0]),
+            ([48.0, 32.0, 90.0], [159.0, 136.0, 238.0]),
+        ] {
             let got = ink(&DARK.ink, under);
             for c in 0..3 {
-                assert!((got[c] - seen[c]).abs() < 8.0, "{under:?}: {got:?} vs {seen:?}");
+                assert!(
+                    (got[c] - seen[c]).abs() < 8.0,
+                    "{under:?}: {got:?} vs {seen:?}"
+                );
             }
         }
     }
 
     #[test]
     fn lab_round_trips() {
-        for c in [[0.2, 0.5, 0.9], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0], [0.93, 0.78, 0.85]] {
+        for c in [
+            [0.2, 0.5, 0.9],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.93, 0.78, 0.85],
+        ] {
             let back = from_lab(to_lab(c));
             for k in 0..3 {
                 assert!((back[k] - c[k]).abs() < 1e-3, "{c:?} {back:?}");
@@ -602,16 +811,28 @@ mod tests {
     #[test]
     fn the_colours_move_on_every_half_period_and_speed_up_as_they_do() {
         let mut clock = GlowClock::new(&LIGHT, 0);
-        assert_eq!(clock.colors(), LIGHT.colors[1], "it starts on the second set");
+        assert_eq!(
+            clock.colors(),
+            LIGHT.colors[1],
+            "it starts on the second set"
+        );
         // Half a period of field time passes at about a unit a second.
         clock.advance(2400);
         assert_eq!(clock.changes, 0);
         clock.advance(2600);
         assert_eq!(clock.changes, 1);
         clock.advance(2900);
-        assert!(clock.speed.x > 1.1, "the field hurries as it changes: {}", clock.speed.x);
+        assert!(
+            clock.speed.x > 1.1,
+            "the field hurries as it changes: {}",
+            clock.speed.x
+        );
         clock.advance(3600);
-        assert!(clock.blend.x > 0.5, "well on the way to the first set: {}", clock.blend.x);
+        assert!(
+            clock.blend.x > 0.5,
+            "well on the way to the first set: {}",
+            clock.blend.x
+        );
         let mut lowest: f32 = 1.0;
         let mut highest: f32 = 0.0;
         for ms in (3600..63_600).step_by(16) {
@@ -622,7 +843,10 @@ mod tests {
             }
         }
         assert!(clock.changes > 20, "{}", clock.changes);
-        assert!(lowest > 0.5 && highest < 1.01, "the colours stay among the sets: {lowest} {highest}");
+        assert!(
+            lowest > 0.5 && highest < 1.01,
+            "the colours stay among the sets: {lowest} {highest}"
+        );
     }
 
     #[test]
@@ -631,8 +855,14 @@ mod tests {
         let bg = Rgba::rgb(243, 243, 243);
         let full = sample(&clock, 1440, 3200, 16, 0.54, bg, 1.0);
         let gone = sample(&clock, 1440, 3200, 16, 0.54, bg, 0.0);
-        assert!(gone.rgb.iter().all(|c| c.iter().all(|&v| (v - 243.0).abs() < 1e-3)));
+        assert!(gone
+            .rgb
+            .iter()
+            .all(|c| c.iter().all(|&v| (v - 243.0).abs() < 1e-3)));
         let top = full.rgb[full.cols * 10 + full.cols / 2];
-        assert!(top.iter().any(|&v| (v - 243.0).abs() > 10.0), "colour at the top: {top:?}");
+        assert!(
+            top.iter().any(|&v| (v - 243.0).abs() > 10.0),
+            "colour at the top: {top:?}"
+        );
     }
 }

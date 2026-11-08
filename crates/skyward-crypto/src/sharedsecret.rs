@@ -33,9 +33,15 @@ pub struct Parameters {
 /// What one part of the secure world answered when asked what it brings.
 fn parameters(read: &mut Reader) -> Result<Parameters> {
     status::ok(read).context("ask what the secure world brings to the agreement")?;
-    let end = read.structure().context("read what the secure world brings")?;
-    let seed = read.blob().context("read the seed the secure world keeps")?;
-    let nonce = read.blob().context("read the number the secure world drew")?;
+    let end = read
+        .structure()
+        .context("read what the secure world brings")?;
+    let seed = read
+        .blob()
+        .context("read the seed the secure world keeps")?;
+    let nonce = read
+        .blob()
+        .context("read the number the secure world drew")?;
     read.go(end)?;
     Ok(Parameters { seed, nonce })
 }
@@ -64,7 +70,8 @@ fn ask_compute(all: &[Parameters]) -> Parcel {
 /// the agreement held.
 fn agreed(read: &mut Reader) -> Result<Vec<u8>> {
     status::ok(read).context("have the secure world work out the key it signs its notes with")?;
-    read.blob().context("read what the secure world answered about the key")
+    read.blob()
+        .context("read what the secure world answered about the key")
 }
 
 /// A part of the secure world that keeps keys, as this program talks to it.
@@ -76,9 +83,13 @@ pub struct SharedSecret<'a> {
 #[cfg(target_os = "android")]
 impl<'a> SharedSecret<'a> {
     /// Reach the part registered under `name`, or say that none is.
-    pub fn open(binder: &'a skyward_binder::driver::Binder, name: &str) -> Result<SharedSecret<'a>> {
-        let device = skyward_binder::service::find(binder, name)?
-            .with_context(|| format!("{name} is not running; the phone's key service has to be started first"))?;
+    pub fn open(
+        binder: &'a skyward_binder::driver::Binder,
+        name: &str,
+    ) -> Result<SharedSecret<'a>> {
+        let device = skyward_binder::service::find(binder, name)?.with_context(|| {
+            format!("{name} is not running; the phone's key service has to be started first")
+        })?;
         Ok(SharedSecret { device })
     }
 
@@ -107,12 +118,20 @@ impl<'a> SharedSecret<'a> {
 /// values in the order it is given them. Returns how many agreed.
 #[cfg(target_os = "android")]
 pub fn agree(binder: &skyward_binder::driver::Binder, names: &[String]) -> Result<usize> {
-    let parts: Vec<SharedSecret> = names.iter().map(|n| SharedSecret::open(binder, n)).collect::<Result<_>>()?;
-    let mut all: Vec<Parameters> = parts.iter().map(|p| p.parameters()).collect::<Result<_>>()?;
+    let parts: Vec<SharedSecret> = names
+        .iter()
+        .map(|n| SharedSecret::open(binder, n))
+        .collect::<Result<_>>()?;
+    let mut all: Vec<Parameters> = parts
+        .iter()
+        .map(|p| p.parameters())
+        .collect::<Result<_>>()?;
     all.sort();
     let mut agreed = None;
     for (part, name) in parts.iter().zip(names) {
-        let said = part.compute(&all).with_context(|| format!("have {name} work out the key it signs its notes with"))?;
+        let said = part
+            .compute(&all)
+            .with_context(|| format!("have {name} work out the key it signs its notes with"))?;
         anyhow::ensure!(
             agreed.get_or_insert_with(|| said.clone()) == &said,
             "{name} worked out another key than the rest of the secure world"
@@ -145,13 +164,27 @@ mod tests {
             p.blob(&[2; 32]);
         });
         let brought = parameters(&mut Reader::new(&reply)).unwrap();
-        assert_eq!(brought, Parameters { seed: vec![1; 32], nonce: vec![2; 32] });
+        assert_eq!(
+            brought,
+            Parameters {
+                seed: vec![1; 32],
+                nonce: vec![2; 32]
+            }
+        );
     }
 
     #[test]
     fn working_out_the_key_tells_the_secure_world_what_every_part_brought() {
-        let all =
-            [Parameters { seed: vec![], nonce: vec![9; 32] }, Parameters { seed: vec![4; 32], nonce: vec![5; 32] }];
+        let all = [
+            Parameters {
+                seed: vec![],
+                nonce: vec![9; 32],
+            },
+            Parameters {
+                seed: vec![4; 32],
+                nonce: vec![5; 32],
+            },
+        ];
         let call = ask_compute(&all);
         let mut r = Reader::new(call.bytes());
         for _ in 0..3 {
@@ -171,17 +204,35 @@ mod tests {
     #[test]
     fn the_values_are_given_in_the_order_they_sort_in() {
         let mut all = vec![
-            Parameters { seed: vec![2], nonce: vec![1] },
-            Parameters { seed: vec![1], nonce: vec![9] },
-            Parameters { seed: vec![1], nonce: vec![3] },
+            Parameters {
+                seed: vec![2],
+                nonce: vec![1],
+            },
+            Parameters {
+                seed: vec![1],
+                nonce: vec![9],
+            },
+            Parameters {
+                seed: vec![1],
+                nonce: vec![3],
+            },
         ];
         all.sort();
         assert_eq!(
             all,
             [
-                Parameters { seed: vec![1], nonce: vec![3] },
-                Parameters { seed: vec![1], nonce: vec![9] },
-                Parameters { seed: vec![2], nonce: vec![1] },
+                Parameters {
+                    seed: vec![1],
+                    nonce: vec![3]
+                },
+                Parameters {
+                    seed: vec![1],
+                    nonce: vec![9]
+                },
+                Parameters {
+                    seed: vec![2],
+                    nonce: vec![1]
+                },
             ]
         );
     }

@@ -29,9 +29,18 @@ impl Security {
     /// ciphers. A network offering a password and a login of its own is
     /// joined with the password.
     pub fn of(flags: &str) -> Security {
-        let items: Vec<&str> = flags.split(['[', ']']).filter(|item| !item.is_empty()).collect();
-        let protected = items.iter().filter(|item| ["WPA-", "WPA2-", "RSN-"].iter().any(|p| item.starts_with(p)));
-        let words: Vec<&str> = protected.flat_map(|item| item.split(['-', '+', '/'])).collect();
+        let items: Vec<&str> = flags
+            .split(['[', ']'])
+            .filter(|item| !item.is_empty())
+            .collect();
+        let protected = items.iter().filter(|item| {
+            ["WPA-", "WPA2-", "RSN-"]
+                .iter()
+                .any(|p| item.starts_with(p))
+        });
+        let words: Vec<&str> = protected
+            .flat_map(|item| item.split(['-', '+', '/']))
+            .collect();
         let has = |word: &str| words.contains(&word);
         match (has("PSK"), has("SAE")) {
             (true, true) => Security::PskSae,
@@ -93,12 +102,23 @@ pub fn bss_list(answer: &str) -> Result<Vec<Bss>> {
             continue;
         }
         let fields = fields(block);
-        let field = |name: &str| fields.get(name).copied().with_context(|| format!("an access point is listed with no {name}"));
+        let field = |name: &str| {
+            fields
+                .get(name)
+                .copied()
+                .with_context(|| format!("an access point is listed with no {name}"))
+        };
         found.push(Bss {
-            id: field("id")?.parse().context("an access point's place is not a number")?,
+            id: field("id")?
+                .parse()
+                .context("an access point's place is not a number")?,
             bssid: field("bssid")?.to_string(),
-            frequency: field("freq")?.parse().context("an access point's frequency is not a number")?,
-            signal: field("level")?.parse().context("an access point's signal level is not a number")?,
+            frequency: field("freq")?
+                .parse()
+                .context("an access point's frequency is not a number")?,
+            signal: field("level")?
+                .parse()
+                .context("an access point's signal level is not a number")?,
             security: Security::of(field("flags")?),
             ssid: unescape(field("ssid")?)?,
         });
@@ -109,7 +129,10 @@ pub fn bss_list(answer: &str) -> Result<Vec<Bss>> {
 /// The `name=value` lines of an answer, such as `STATUS` or
 /// `SIGNAL_POLL` gives.
 pub fn fields(answer: &str) -> BTreeMap<&str, &str> {
-    answer.lines().filter_map(|line| line.split_once('=')).collect()
+    answer
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect()
 }
 
 /// Bytes the supplicant writes as C would, with `\\`, `\"`, `\e`, `\n`,
@@ -131,10 +154,14 @@ pub fn unescape(text: &str) -> Result<Vec<u8>> {
             Some(b't') => b'\t',
             Some(b'x') => {
                 let hex = [bytes.next(), bytes.next()];
-                let [Some(hi), Some(lo)] = hex else { bail!("{text:?} ends inside an escape") };
+                let [Some(hi), Some(lo)] = hex else {
+                    bail!("{text:?} ends inside an escape")
+                };
                 let digits = [hi, lo];
-                let digits = std::str::from_utf8(&digits).context("an escape holds no hex digits")?;
-                u8::from_str_radix(digits, 16).with_context(|| format!("\\x{digits} in {text:?} is not a byte"))?
+                let digits =
+                    std::str::from_utf8(&digits).context("an escape holds no hex digits")?;
+                u8::from_str_radix(digits, 16)
+                    .with_context(|| format!("\\x{digits} in {text:?} is not a byte"))?
             }
             other => bail!("{text:?} holds an escape the supplicant does not write: {other:?}"),
         });
@@ -154,15 +181,27 @@ pub fn hex(bytes: &[u8]) -> String {
 /// supplicant takes up to the last one, so a quote inside it stays. A
 /// network `hidden`, which answers only a scan that names it, is scanned
 /// for by name.
-pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str, hidden: bool) -> Result<Vec<String>> {
+pub fn network_commands(
+    id: u32,
+    ssid: &[u8],
+    security: Security,
+    password: &str,
+    hidden: bool,
+) -> Result<Vec<String>> {
     let set = |name: &str, value: String| format!("SET_NETWORK {id} {name} {value}");
     let mut commands = vec![set("ssid", hex(ssid))];
     if hidden {
         commands.push(set("scan_ssid", "1".into()));
     }
     let psk = || -> Result<String> {
-        ensure!((8..=63).contains(&password.len()), "a WPA2 password is 8 to 63 characters long");
-        ensure!(password.bytes().all(|b| (32..=126).contains(&b)), "a WPA2 password is printable ASCII");
+        ensure!(
+            (8..=63).contains(&password.len()),
+            "a WPA2 password is 8 to 63 characters long"
+        );
+        ensure!(
+            password.bytes().all(|b| (32..=126).contains(&b)),
+            "a WPA2 password is printable ASCII"
+        );
         Ok(format!("\"{password}\""))
     };
     match security {
@@ -187,7 +226,9 @@ pub fn network_commands(id: u32, ssid: &[u8], security: Security, password: &str
             commands.push(set("sae_password", hex(password.as_bytes())));
             commands.push(set("ieee80211w", "1".into()));
         }
-        Security::Wep | Security::Enterprise => bail!("the recovery does not join a network protected so"),
+        Security::Wep | Security::Enterprise => {
+            bail!("the recovery does not join a network protected so")
+        }
     }
     Ok(commands)
 }
@@ -229,8 +270,13 @@ pub fn event(message: &str) -> Option<Event> {
         "CTRL-EVENT-CONNECTED" => Event::Connected,
         "CTRL-EVENT-DISCONNECTED" => Event::Disconnected,
         "CTRL-EVENT-SSID-TEMP-DISABLED" => {
-            let reason = rest.split(' ').find_map(|word| word.strip_prefix("reason=")).unwrap_or_default();
-            Event::TemporarilyDisabled { reason: reason.to_string() }
+            let reason = rest
+                .split(' ')
+                .find_map(|word| word.strip_prefix("reason="))
+                .unwrap_or_default();
+            Event::TemporarilyDisabled {
+                reason: reason.to_string(),
+            }
         }
         "CTRL-EVENT-NETWORK-NOT-FOUND" => Event::NotFound,
         "CTRL-EVENT-ASSOC-REJECT" | "CTRL-EVENT-AUTH-REJECT" => Event::Rejected,
@@ -268,21 +314,33 @@ mod control {
     impl Control {
         pub fn open(socket: &Path) -> Result<Control> {
             static OPENED: AtomicU32 = AtomicU32::new(0);
-            let name = format!("skyward-wpa-{}-{}", std::process::id(), OPENED.fetch_add(1, Ordering::Relaxed));
-            let local = SocketAddr::from_abstract_name(name.as_bytes()).context("name a control connection")?;
+            let name = format!(
+                "skyward-wpa-{}-{}",
+                std::process::id(),
+                OPENED.fetch_add(1, Ordering::Relaxed)
+            );
+            let local = SocketAddr::from_abstract_name(name.as_bytes())
+                .context("name a control connection")?;
             let s = UnixDatagram::bind_addr(&local).context("make a control connection")?;
-            s.connect(socket).with_context(|| format!("connect to {}", socket.display()))?;
-            s.set_read_timeout(Some(ANSWER_TIMEOUT)).context("time the control connection's answers")?;
+            s.connect(socket)
+                .with_context(|| format!("connect to {}", socket.display()))?;
+            s.set_read_timeout(Some(ANSWER_TIMEOUT))
+                .context("time the control connection's answers")?;
             Ok(Control { socket: s })
         }
 
         /// Send `command` and give the answer. An event that comes ahead of
         /// it on an attached connection is not it.
         pub fn ask(&self, command: &str) -> Result<String> {
-            self.socket.send(command.as_bytes()).with_context(|| format!("send {}", first_word(command)))?;
+            self.socket
+                .send(command.as_bytes())
+                .with_context(|| format!("send {}", first_word(command)))?;
             let mut buf = vec![0u8; MESSAGE_MAX];
             loop {
-                let n = self.socket.recv(&mut buf).with_context(|| format!("wait for the answer to {}", first_word(command)))?;
+                let n = self
+                    .socket
+                    .recv(&mut buf)
+                    .with_context(|| format!("wait for the answer to {}", first_word(command)))?;
                 let answer = String::from_utf8_lossy(&buf[..n]).into_owned();
                 if !answer.starts_with('<') {
                     return Ok(answer);
@@ -308,7 +366,14 @@ mod control {
             let mut buf = vec![0u8; MESSAGE_MAX];
             let mut out = Vec::new();
             loop {
-                let n = unsafe { libc::recv(self.socket.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), libc::MSG_DONTWAIT) };
+                let n = unsafe {
+                    libc::recv(
+                        self.socket.as_raw_fd(),
+                        buf.as_mut_ptr().cast(),
+                        buf.len(),
+                        libc::MSG_DONTWAIT,
+                    )
+                };
                 if n >= 0 {
                     out.push(String::from_utf8_lossy(&buf[..n as usize]).into_owned());
                     continue;
@@ -367,8 +432,14 @@ mod tests {
         for (flags, security) in cases {
             assert_eq!(Security::of(flags), security, "{flags}");
         }
-        assert!(Security::PskSae.password() && !Security::Owe.password() && !Security::Open.password());
-        assert!(!Security::Wep.joinable() && !Security::Enterprise.joinable() && Security::Sae.joinable());
+        assert!(
+            Security::PskSae.password() && !Security::Owe.password() && !Security::Open.password()
+        );
+        assert!(
+            !Security::Wep.joinable()
+                && !Security::Enterprise.joinable()
+                && Security::Sae.joinable()
+        );
     }
 
     /// Two access points as the 13 Ultra's supplicant listed them, the
@@ -382,11 +453,27 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(
             found[0],
-            Bss { id: 33, bssid: "02:00:00:00:00:02".into(), frequency: 5200, signal: -66, security: Security::Psk, ssid: b"Skyward-Studio".to_vec() }
+            Bss {
+                id: 33,
+                bssid: "02:00:00:00:00:02".into(),
+                frequency: 5200,
+                signal: -66,
+                security: Security::Psk,
+                ssid: b"Skyward-Studio".to_vec()
+            }
         );
-        assert_eq!(String::from_utf8(found[1].ssid.clone()).unwrap(), "Skyward客厅");
-        assert!(bss_list("").unwrap().is_empty(), "no access point found answers nothing");
-        assert!(bss_list("id=1\nbssid=x\n====\n").is_err(), "a block missing a field is not an access point");
+        assert_eq!(
+            String::from_utf8(found[1].ssid.clone()).unwrap(),
+            "Skyward客厅"
+        );
+        assert!(
+            bss_list("").unwrap().is_empty(),
+            "no access point found answers nothing"
+        );
+        assert!(
+            bss_list("id=1\nbssid=x\n====\n").is_err(),
+            "a block missing a field is not an access point"
+        );
     }
 
     #[test]
@@ -401,35 +488,83 @@ mod tests {
 
     #[test]
     fn a_network_is_set_up_with_its_name_and_password_written_as_the_supplicant_takes_them() {
-        let wpa2 = network_commands(0, "Skyward客厅".as_bytes(), Security::Psk, "pass\"word", false).unwrap();
+        let wpa2 = network_commands(
+            0,
+            "Skyward客厅".as_bytes(),
+            Security::Psk,
+            "pass\"word",
+            false,
+        )
+        .unwrap();
         assert_eq!(
             wpa2,
-            ["SET_NETWORK 0 ssid 536b7977617264e5aea2e58e85", "SET_NETWORK 0 key_mgmt WPA-PSK WPA-PSK-SHA256", "SET_NETWORK 0 psk \"pass\"word\""]
+            [
+                "SET_NETWORK 0 ssid 536b7977617264e5aea2e58e85",
+                "SET_NETWORK 0 key_mgmt WPA-PSK WPA-PSK-SHA256",
+                "SET_NETWORK 0 psk \"pass\"word\""
+            ]
         );
-        let wpa3 = network_commands(2, b"Skyward",Security::Sae, "short", false).unwrap();
-        assert_eq!(wpa3[1..], ["SET_NETWORK 2 key_mgmt SAE", "SET_NETWORK 2 sae_password 73686f7274", "SET_NETWORK 2 ieee80211w 2"]);
-        let both = network_commands(1, b"Skyward",Security::PskSae, "12345678", false).unwrap();
+        let wpa3 = network_commands(2, b"Skyward", Security::Sae, "short", false).unwrap();
+        assert_eq!(
+            wpa3[1..],
+            [
+                "SET_NETWORK 2 key_mgmt SAE",
+                "SET_NETWORK 2 sae_password 73686f7274",
+                "SET_NETWORK 2 ieee80211w 2"
+            ]
+        );
+        let both = network_commands(1, b"Skyward", Security::PskSae, "12345678", false).unwrap();
         assert!(both.contains(&"SET_NETWORK 1 psk \"12345678\"".to_string()));
         assert!(both.contains(&"SET_NETWORK 1 sae_password 3132333435363738".to_string()));
-        assert_eq!(network_commands(0, b"Skyward",Security::Open, "", false).unwrap()[1], "SET_NETWORK 0 key_mgmt NONE");
-        assert!(network_commands(0, b"Skyward",Security::Psk, "1234567", false).is_err(), "a WPA2 password is 8 characters at least");
-        assert!(network_commands(0, b"Skyward",Security::Psk, "密码密码密码密码", false).is_err(), "a WPA2 password is ASCII");
-        assert!(network_commands(0, b"Skyward",Security::Wep, "12345", false).is_err());
+        assert_eq!(
+            network_commands(0, b"Skyward", Security::Open, "", false).unwrap()[1],
+            "SET_NETWORK 0 key_mgmt NONE"
+        );
+        assert!(
+            network_commands(0, b"Skyward", Security::Psk, "1234567", false).is_err(),
+            "a WPA2 password is 8 characters at least"
+        );
+        assert!(
+            network_commands(0, b"Skyward", Security::Psk, "密码密码密码密码", false).is_err(),
+            "a WPA2 password is ASCII"
+        );
+        assert!(network_commands(0, b"Skyward", Security::Wep, "12345", false).is_err());
         let hidden = network_commands(3, b"Skyward", Security::Open, "", true).unwrap();
-        assert_eq!(hidden, ["SET_NETWORK 3 ssid 536b7977617264", "SET_NETWORK 3 scan_ssid 1", "SET_NETWORK 3 key_mgmt NONE"]);
+        assert_eq!(
+            hidden,
+            [
+                "SET_NETWORK 3 ssid 536b7977617264",
+                "SET_NETWORK 3 scan_ssid 1",
+                "SET_NETWORK 3 key_mgmt NONE"
+            ]
+        );
     }
 
     #[test]
     fn events_are_known_by_their_names() {
-        assert_eq!(event("<3>CTRL-EVENT-SCAN-RESULTS "), Some(Event::ScanResults));
+        assert_eq!(
+            event("<3>CTRL-EVENT-SCAN-RESULTS "),
+            Some(Event::ScanResults)
+        );
         assert_eq!(event("<3>CTRL-EVENT-CONNECTED - Connection to 02:00:00:00:00:01 completed [id=0 id_str=]"), Some(Event::Connected));
-        assert_eq!(event("<3>CTRL-EVENT-DISCONNECTED bssid=02:00:00:00:00:01 reason=3 locally_generated=1"), Some(Event::Disconnected));
+        assert_eq!(
+            event(
+                "<3>CTRL-EVENT-DISCONNECTED bssid=02:00:00:00:00:01 reason=3 locally_generated=1"
+            ),
+            Some(Event::Disconnected)
+        );
         assert_eq!(
             event("<3>CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"Skyward\" auth_failures=1 duration=10 reason=WRONG_KEY"),
             Some(Event::TemporarilyDisabled { reason: "WRONG_KEY".into() })
         );
-        assert_eq!(event("<3>CTRL-EVENT-NETWORK-NOT-FOUND"), Some(Event::NotFound));
-        assert_eq!(event("<3>CTRL-EVENT-ASSOC-REJECT bssid=00:00:00:00:00:00 status_code=16"), Some(Event::Rejected));
+        assert_eq!(
+            event("<3>CTRL-EVENT-NETWORK-NOT-FOUND"),
+            Some(Event::NotFound)
+        );
+        assert_eq!(
+            event("<3>CTRL-EVENT-ASSOC-REJECT bssid=00:00:00:00:00:00 status_code=16"),
+            Some(Event::Rejected)
+        );
         assert_eq!(event("<2>Trying to associate with 02:00:00:00:00:01"), None);
         assert_eq!(event("CTRL-EVENT-TERMINATING"), Some(Event::Terminating));
     }

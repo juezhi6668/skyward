@@ -39,7 +39,13 @@ const CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 /// `libraries` is a directory of shared libraries every one of them may
 /// need, searched after whatever it names itself.
 pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
-    let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
+    let known = ueventd::accounts(
+        &ueventd::PASSWD_FILES
+            .iter()
+            .chain(&ueventd::GROUP_FILES)
+            .copied()
+            .collect::<Vec<_>>(),
+    );
     for s in services {
         if !Path::new(&s.path).is_file() {
             bail!("{} is missing; is its partition mounted?", s.path);
@@ -50,14 +56,26 @@ pub fn start(services: &[Service], libraries: Option<&Path>) -> Result<()> {
         }
         let who = Credentials::of(&s, &known)?;
         if s.oneshot {
-            let status = command(&s, &who).status().with_context(|| format!("run {}", s.path))?;
-            ensure!(status.success(), "{} {} ended: {status}", s.path, s.args.join(" "));
+            let status = command(&s, &who)
+                .status()
+                .with_context(|| format!("run {}", s.path))?;
+            ensure!(
+                status.success(),
+                "{} {} ended: {status}",
+                s.path,
+                s.args.join(" ")
+            );
             skyward_sys::kmsg(&format!("ran {} {}", s.path, s.args.join(" ")))?;
             continue;
         }
         let waiting = s.clone();
-        let name = Path::new(&s.path).file_name().map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
-        thread::Builder::new().name(name).spawn(move || supervise(&s, &who)).context("start a supervising thread")?;
+        let name = Path::new(&s.path)
+            .file_name()
+            .map_or_else(|| s.path.clone(), |n| n.to_string_lossy().into_owned());
+        thread::Builder::new()
+            .name(name)
+            .spawn(move || supervise(&s, &who))
+            .context("start a supervising thread")?;
         ready(&waiting)?;
     }
     Ok(())
@@ -90,20 +108,47 @@ impl Credentials {
     /// Who `s` runs as, by the names the phone gives its accounts: root,
     /// in no other group, keeping all of root's, where it names none.
     fn of(s: &Service, known: &HashMap<String, u32>) -> Result<Self> {
-        let id = |name: &String| ueventd::account(known, name).with_context(|| format!("{}: the phone has no account named {name}", s.path));
+        let id = |name: &String| {
+            ueventd::account(known, name)
+                .with_context(|| format!("{}: the phone has no account named {name}", s.path))
+        };
         let uid = s.user.as_ref().map(id).transpose()?.unwrap_or(0);
         let mut groups = s.groups.iter().map(id).collect::<Result<Vec<_>>>()?;
-        let gid = if groups.is_empty() { 0 } else { groups.remove(0) };
+        let gid = if groups.is_empty() {
+            0
+        } else {
+            groups.remove(0)
+        };
         let kept = if s.capabilities.is_empty() {
             None
         } else {
-            let bit = |name: &str| skyward_config::capability(name).map(|n| 1u64 << n).with_context(|| format!("{}: {name} is not a capability", s.path));
-            let mask = s.capabilities.iter().try_fold(0, |mask, c| bit(c).map(|b| mask | b))?;
-            let last = fs::read_to_string(CAP_LAST_CAP).with_context(|| format!("read {CAP_LAST_CAP}"))?;
-            let last = last.trim().parse().with_context(|| format!("read the number in {CAP_LAST_CAP}"))?;
-            Some(Kept { mask, dropping: mask | bit("SETPCAP")?, last })
+            let bit = |name: &str| {
+                skyward_config::capability(name)
+                    .map(|n| 1u64 << n)
+                    .with_context(|| format!("{}: {name} is not a capability", s.path))
+            };
+            let mask = s
+                .capabilities
+                .iter()
+                .try_fold(0, |mask, c| bit(c).map(|b| mask | b))?;
+            let last =
+                fs::read_to_string(CAP_LAST_CAP).with_context(|| format!("read {CAP_LAST_CAP}"))?;
+            let last = last
+                .trim()
+                .parse()
+                .with_context(|| format!("read the number in {CAP_LAST_CAP}"))?;
+            Some(Kept {
+                mask,
+                dropping: mask | bit("SETPCAP")?,
+                last,
+            })
         };
-        Ok(Self { uid, gid, groups, kept })
+        Ok(Self {
+            uid,
+            gid,
+            groups,
+            kept,
+        })
     }
 
     /// Become who the program runs as, in the child about to run it, as
@@ -111,8 +156,16 @@ impl Credentials {
     /// through the change where it keeps some, then drop every other one
     /// for good and hand those it keeps on through the exec.
     fn take_on(&self) -> io::Result<()> {
-        let done = |r: libc::c_int| if r == 0 { Ok(()) } else { Err(io::Error::last_os_error()) };
-        let prctl = |option: libc::c_int, a: libc::c_ulong, b: libc::c_ulong| done(unsafe { libc::prctl(option, a, b, 0 as libc::c_ulong, 0 as libc::c_ulong) });
+        let done = |r: libc::c_int| {
+            if r == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        };
+        let prctl = |option: libc::c_int, a: libc::c_ulong, b: libc::c_ulong| {
+            done(unsafe { libc::prctl(option, a, b, 0 as libc::c_ulong, 0 as libc::c_ulong) })
+        };
         if self.kept.is_some() {
             prctl(libc::PR_SET_KEEPCAPS, 1, 0)?;
         }
@@ -126,7 +179,11 @@ impl Credentials {
         }
         set_capabilities(kept.mask)?;
         for cap in (0..=kept.last).filter(|c| kept.mask & 1 << c != 0) {
-            prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong, cap.into())?;
+            prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                cap.into(),
+            )?;
         }
         Ok(())
     }
@@ -145,8 +202,15 @@ fn set_capabilities(mask: u64) -> io::Result<()> {
         permitted: u32,
         inheritable: u32,
     }
-    let header = Header { version: CAPABILITY_VERSION_3, pid: 0 };
-    let half = |bits: u32| Sets { effective: bits, permitted: bits, inheritable: bits };
+    let header = Header {
+        version: CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let half = |bits: u32| Sets {
+        effective: bits,
+        permitted: bits,
+        inheritable: bits,
+    };
     let sets = [half(mask as u32), half((mask >> 32) as u32)];
     if unsafe { libc::syscall(libc::SYS_capset, &header, sets.as_ptr()) } == 0 {
         Ok(())
@@ -157,7 +221,11 @@ fn set_capabilities(mask: u64) -> io::Result<()> {
 
 /// Wait until the program has what it says it will be ready with.
 fn ready(s: &Service) -> Result<()> {
-    let waited_on = match (&s.ready_property, &s.ready_service, &s.ready_hardware_service) {
+    let waited_on = match (
+        &s.ready_property,
+        &s.ready_service,
+        &s.ready_hardware_service,
+    ) {
         (Some(p), _, _) => format!("set no {p}"),
         (_, Some(n), _) => format!("registered no {n}"),
         (_, _, Some(n)) => format!("registered no {n}"),
@@ -183,7 +251,11 @@ fn ready(s: &Service) -> Result<()> {
             }
         }
         if Instant::now() >= until {
-            bail!("{} {waited_on} in {} seconds", s.path, READY_TIMEOUT.as_secs());
+            bail!(
+                "{} {waited_on} in {} seconds",
+                s.path,
+                READY_TIMEOUT.as_secs()
+            );
         }
         thread::sleep(READY_POLL);
     }
@@ -193,7 +265,8 @@ fn supervise(s: &Service, who: &Credentials) -> ! {
     loop {
         let started = Instant::now();
         let ended = match running(&s.path) {
-            Some(pid) => wait_for(pid).map(|()| format!("pid {pid}, left by an earlier recovery service, exited")),
+            Some(pid) => wait_for(pid)
+                .map(|()| format!("pid {pid}, left by an earlier recovery service, exited")),
             None => run(s, who),
         };
         let line = match ended {
@@ -209,7 +282,9 @@ fn supervise(s: &Service, who: &Credentials) -> ! {
 
 /// Start the program and wait for it to end.
 fn run(s: &Service, who: &Credentials) -> Result<String> {
-    let mut child = command(s, who).spawn().with_context(|| format!("start {}", s.path))?;
+    let mut child = command(s, who)
+        .spawn()
+        .with_context(|| format!("start {}", s.path))?;
     let status = child.wait().context("wait for it")?;
     Ok(format!("pid {} ended: {status}", child.id()))
 }
@@ -219,7 +294,11 @@ fn run(s: &Service, who: &Credentials) -> Result<String> {
 /// libraries where it names them, and as `who`.
 fn command(s: &Service, who: &Credentials) -> Command {
     let mut cmd = Command::new(&s.path);
-    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(&s.args)
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     if !s.libraries.is_empty() {
         cmd.env("LD_LIBRARY_PATH", s.libraries.join(":"));
     }
@@ -239,23 +318,39 @@ pub fn pin(services: &[Service], mounted: &[Mounted]) -> Result<Vec<PathBuf>> {
     // A program run once has ended, and one between restarts has nothing in
     // memory to keep either.
     for s in services.iter().filter(|s| !s.oneshot) {
-        let Some(pid) = running(&s.path) else { continue };
+        let Some(pid) = running(&s.path) else {
+            continue;
+        };
         let process = Process::new(pid as i32).with_context(|| format!("open process {pid}"))?;
-        for map in process.maps().with_context(|| format!("read the mappings of {}", s.path))? {
+        for map in process
+            .maps()
+            .with_context(|| format!("read the mappings of {}", s.path))?
+        {
             if let MMapPath::Path(p) = map.pathname {
                 files.insert(p);
             }
         }
-        for fd in process.fd().with_context(|| format!("read the files {} has open", s.path))? {
-            if let FDTarget::Path(p) = fd.with_context(|| format!("read a file {} has open", s.path))?.target {
+        for fd in process
+            .fd()
+            .with_context(|| format!("read the files {} has open", s.path))?
+        {
+            if let FDTarget::Path(p) = fd
+                .with_context(|| format!("read a file {} has open", s.path))?
+                .target
+            {
                 files.insert(p);
             }
         }
     }
     let mut busy: Vec<PathBuf> = Vec::new();
     for file in files {
-        let Some(m) = mounted.iter().find(|m| file.starts_with(&m.mount_point)) else { continue };
-        if !fs::metadata(&file).with_context(|| format!("stat {}", file.display()))?.is_file() {
+        let Some(m) = mounted.iter().find(|m| file.starts_with(&m.mount_point)) else {
+            continue;
+        };
+        if !fs::metadata(&file)
+            .with_context(|| format!("stat {}", file.display()))?
+            .is_file()
+        {
             continue;
         }
         lock(&file)?;
@@ -271,16 +366,29 @@ pub fn pin(services: &[Service], mounted: &[Mounted]) -> Result<Vec<PathBuf>> {
 /// for every process that maps the file.
 fn lock(path: &Path) -> Result<()> {
     let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let len = file.metadata().with_context(|| format!("stat {}", path.display()))?.len() as usize;
+    let len = file
+        .metadata()
+        .with_context(|| format!("stat {}", path.display()))?
+        .len() as usize;
     if len == 0 {
         return Ok(());
     }
-    let at = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+    let at = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            file.as_raw_fd(),
+            0,
+        )
+    };
     if at == libc::MAP_FAILED {
         return Err(io::Error::last_os_error()).with_context(|| format!("map {}", path.display()));
     }
     if unsafe { libc::mlock(at, len) } != 0 {
-        return Err(io::Error::last_os_error()).with_context(|| format!("lock {} in memory", path.display()));
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("lock {} in memory", path.display()));
     }
     Ok(())
 }
@@ -299,9 +407,14 @@ pub fn registered(name: &str) -> bool {
 /// directory its kind uses. It is named as the interface and then which of
 /// them it is.
 pub fn registered_hardware(name: &str) -> bool {
-    let Some((interface, instance)) = name.rsplit_once('/') else { return false };
+    let Some((interface, instance)) = name.rsplit_once('/') else {
+        return false;
+    };
     match skyward_binder::driver::Binder::hardware() {
-        Ok(binder) => matches!(skyward_binder::hidl::find(&binder, interface, instance), Ok(Some(_))),
+        Ok(binder) => matches!(
+            skyward_binder::hidl::find(&binder, interface, instance),
+            Ok(Some(_))
+        ),
         Err(_) => false,
     }
 }
@@ -335,7 +448,11 @@ fn wait_for(pid: u32) -> Result<()> {
         return Err(e).context("open a pidfd");
     }
     let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-    let mut pfd = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    let mut pfd = libc::pollfd {
+        fd: fd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
     loop {
         if unsafe { libc::poll(&mut pfd, 1, -1) } >= 0 {
             return Ok(());

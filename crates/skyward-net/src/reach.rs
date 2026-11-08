@@ -61,7 +61,9 @@ fn judge(page: &str, code: u16, location: Option<String>) -> Reach {
 
 /// What `page` answers: its status, and where it sends on to.
 fn answer(page: &str, servers: &[Ipv4Addr]) -> Result<(u16, Option<String>)> {
-    let uri: Uri = page.parse().with_context(|| format!("{page} is not an address"))?;
+    let uri: Uri = page
+        .parse()
+        .with_context(|| format!("{page} is not an address"))?;
     let (host, authority) = match (uri.host(), uri.authority()) {
         (Some(host), Some(authority)) => (host, authority.as_str()),
         _ => bail!("{page} names no host"),
@@ -72,7 +74,9 @@ fn answer(page: &str, servers: &[Ipv4Addr]) -> Result<(u16, Option<String>)> {
     for address in dns::lookup(host, servers)? {
         let at = SocketAddr::new(IpAddr::V4(address), port);
         match TcpStream::connect_timeout(&at, WAIT) {
-            Ok(stream) => return ask(stream, authority, path).with_context(|| format!("ask {page} at {at}")),
+            Ok(stream) => {
+                return ask(stream, authority, path).with_context(|| format!("ask {page} at {at}"))
+            }
             Err(e) => tried.push(format!("{at}: {e}")),
         }
     }
@@ -85,27 +89,52 @@ fn answer(page: &str, servers: &[Ipv4Addr]) -> Result<(u16, Option<String>)> {
 /// HTTP client the rest of the recovery uses writes every name in small
 /// letters, so the request is written here as a browser writes it.
 fn ask(mut stream: TcpStream, authority: &str, path: &str) -> Result<(u16, Option<String>)> {
-    stream.set_read_timeout(Some(WAIT)).context("time the connection")?;
-    stream.set_write_timeout(Some(WAIT)).context("time the connection")?;
-    stream.write_all(format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n").as_bytes()).context("send the request")?;
+    stream
+        .set_read_timeout(Some(WAIT))
+        .context("time the connection")?;
+    stream
+        .set_write_timeout(Some(WAIT))
+        .context("time the connection")?;
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .context("send the request")?;
     let mut head = Vec::new();
     let mut chunk = [0u8; 2048];
     loop {
         let n = match stream.read(&mut chunk) {
             Ok(n) => n,
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => bail!("no answer in {} s", WAIT.as_secs()),
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                bail!("no answer in {} s", WAIT.as_secs())
+            }
             Err(e) => return Err(e).context("read the answer"),
         };
-        ensure!(n > 0, "the connection closed before the answer's head ended");
+        ensure!(
+            n > 0,
+            "the connection closed before the answer's head ended"
+        );
         head.extend_from_slice(&chunk[..n]);
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut response = httparse::Response::new(&mut headers);
-        if response.parse(&head).context("read the head of the answer")?.is_complete() {
+        if response
+            .parse(&head)
+            .context("read the head of the answer")?
+            .is_complete()
+        {
             let code = response.code.context("the answer has no status")?;
-            let location = response.headers.iter().find(|h| h.name.eq_ignore_ascii_case("location")).map(|h| String::from_utf8_lossy(h.value).into_owned());
+            let location = response
+                .headers
+                .iter()
+                .find(|h| h.name.eq_ignore_ascii_case("location"))
+                .map(|h| String::from_utf8_lossy(h.value).into_owned());
             return Ok((code, location));
         }
-        ensure!(head.len() < HEAD, "the head of the answer runs past {HEAD} bytes");
+        ensure!(
+            head.len() < HEAD,
+            "the head of the answer runs past {HEAD} bytes"
+        );
     }
 }
 
@@ -148,21 +177,46 @@ mod tests {
     fn a_network_that_wants_a_login_sends_on_to_its_page() {
         let page = gateway("HTTP/1.1 302 Moved Temporarily\r\nCache-Control: no-cache\r\nLocation: http://192.168.64.254:2060/redirect/?pip=192.168.72.76\r\n\r\n");
         let login = probe(&page, &[]);
-        assert_eq!(login, Reach::Login(Some("http://192.168.64.254:2060/redirect/?pip=192.168.72.76".into())), "the head is read as it ends, the rest not waited for");
+        assert_eq!(
+            login,
+            Reach::Login(Some(
+                "http://192.168.64.254:2060/redirect/?pip=192.168.72.76".into()
+            )),
+            "the head is read as it ends, the rest not waited for"
+        );
     }
 
     #[test]
     fn a_page_shown_in_the_pages_stead_is_a_login_and_an_error_is_neither() {
         assert_eq!(judge("p", 200, None), Reach::Login(None));
-        assert_eq!(judge("p", 307, Some("http://login".into())), Reach::Login(Some("http://login".into())));
-        assert_eq!(judge("http://a/generate_204", 503, None), Reach::Offline("http://a/generate_204 answered 503".into()));
+        assert_eq!(
+            judge("p", 307, Some("http://login".into())),
+            Reach::Login(Some("http://login".into()))
+        );
+        assert_eq!(
+            judge("http://a/generate_204", 503, None),
+            Reach::Offline("http://a/generate_204 answered 503".into())
+        );
     }
 
     #[test]
     fn nothing_listening_reaches_nothing() {
-        let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
-        let Reach::Offline(why) = probe(&format!("http://127.0.0.1:{port}/generate_204"), &[]) else { panic!("a closed port reaches nothing") };
+        let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let Reach::Offline(why) = probe(&format!("http://127.0.0.1:{port}/generate_204"), &[])
+        else {
+            panic!("a closed port reaches nothing")
+        };
         assert!(why.contains("could not reach 127.0.0.1"), "{why}");
-        assert!(matches!(probe("http://connect.rom.miui.com/generate_204", &[]), Reach::Offline(_)), "a name without a DNS server to ask");
+        assert!(
+            matches!(
+                probe("http://connect.rom.miui.com/generate_204", &[]),
+                Reach::Offline(_)
+            ),
+            "a name without a DNS server to ask"
+        );
     }
 }

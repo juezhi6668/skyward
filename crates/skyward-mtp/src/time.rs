@@ -9,9 +9,18 @@ use jiff::Timestamp;
 /// file's can be, is written as 1970 began; one past the calendar, as its
 /// end.
 pub fn format(unix: i64, zone: &TimeZone) -> String {
-    let at = Timestamp::from_second(unix.clamp(0, Timestamp::MAX.as_second())).expect("a time within the calendar");
+    let at = Timestamp::from_second(unix.clamp(0, Timestamp::MAX.as_second()))
+        .expect("a time within the calendar");
     let t = at.to_zoned(zone.clone()).datetime();
-    format!("{:04}{:02}{:02}T{:02}{:02}{:02}", t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second())
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}",
+        t.year(),
+        t.month(),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    )
 }
 
 /// A time from the computer, on the clock of `zone` unless it gives a zone
@@ -48,7 +57,11 @@ mod tests {
     fn the_computer_s_times_are_read_on_the_zone_s_clock_or_their_own() {
         let zone = shanghai();
         assert_eq!(parse("20261021T201500", &zone), Some(AT));
-        assert_eq!(parse("20261021T201500.5", &zone), Some(AT), "tenths of a second");
+        assert_eq!(
+            parse("20261021T201500.5", &zone),
+            Some(AT),
+            "tenths of a second"
+        );
         assert_eq!(parse("20261021T121500Z", &zone), Some(AT));
         assert_eq!(parse("20261021T201500+0800", &TimeZone::UTC), Some(AT));
         assert_eq!(parse("", &zone), None);

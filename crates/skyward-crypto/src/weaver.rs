@@ -45,12 +45,17 @@ fn ask_config() -> Parcel {
 /// What the weaver answered about itself.
 fn config(read: &mut Reader) -> Result<Config> {
     status::ok(read).context("ask the weaver about itself")?;
-    let end = read.structure().context("read what the weaver says of itself")?;
+    let end = read
+        .structure()
+        .context("read what the weaver says of itself")?;
     let (slots, key, value) = (read.i32()?, read.i32()?, read.i32()?);
     read.go(end)?;
-    let size = |n: i32, what: &str| usize::try_from(n).with_context(|| format!("the weaver says its {what} are {n} bytes long"));
+    let size = |n: i32, what: &str| {
+        usize::try_from(n).with_context(|| format!("the weaver says its {what} are {n} bytes long"))
+    };
     Ok(Config {
-        slots: u32::try_from(slots).with_context(|| format!("the weaver says it has {slots} slots"))?,
+        slots: u32::try_from(slots)
+            .with_context(|| format!("the weaver says it has {slots} slots"))?,
         key_bytes: size(key, "keys")?,
         value_bytes: size(value, "values")?,
     })
@@ -69,7 +74,9 @@ fn ask_value(slot: u32, key: &[u8]) -> Parcel {
 fn value(read: &mut Reader) -> Result<Vec<u8>> {
     if let Err(e) = status::ok(read) {
         return Err(match status::refused_with(&e) {
-            Some(STATUS_INCORRECT_KEY) => e.context("the secure element does not recognise that credential"),
+            Some(STATUS_INCORRECT_KEY) => {
+                e.context("the secure element does not recognise that credential")
+            }
             Some(STATUS_THROTTLE) => e.context("the secure element is holding off further tries"),
             _ => e.context("read the slot of the weaver"),
         });
@@ -87,7 +94,9 @@ fn value(read: &mut Reader) -> Result<Vec<u8>> {
     let seconds = (wait.max(0) as u64).div_ceil(1000);
     match said {
         READ_OK => Ok(value),
-        READ_THROTTLE => bail!("the secure element is holding off further tries for another {seconds} seconds"),
+        READ_THROTTLE => {
+            bail!("the secure element is holding off further tries for another {seconds} seconds")
+        }
         READ_INCORRECT_KEY if wait > 0 => {
             bail!("the secure element does not recognise that credential, and holds off further tries for another {seconds} seconds")
         }
@@ -106,13 +115,17 @@ pub struct Weaver<'a> {
 impl<'a> Weaver<'a> {
     /// Reach the running weaver, or say that none is.
     pub fn open(binder: &'a skyward_binder::driver::Binder) -> Result<Weaver<'a>> {
-        let device = skyward_binder::service::find(binder, SERVICE)?
-            .with_context(|| format!("{SERVICE} is not running; the phone's weaver has to be started first"))?;
+        let device = skyward_binder::service::find(binder, SERVICE)?.with_context(|| {
+            format!("{SERVICE} is not running; the phone's weaver has to be started first")
+        })?;
         Ok(Weaver { device })
     }
 
     pub fn config(&self) -> Result<Config> {
-        let reply = self.device.transact(GET_CONFIG, &ask_config()).context("ask the weaver about itself")?;
+        let reply = self
+            .device
+            .transact(GET_CONFIG, &ask_config())
+            .context("ask the weaver about itself")?;
         config(&mut reply.read())
     }
 
@@ -120,7 +133,10 @@ impl<'a> Weaver<'a> {
     /// the slot by the secure element, so this is not something to call
     /// twice over on a guess.
     pub fn read(&self, slot: u32, key: &[u8]) -> Result<Vec<u8>> {
-        let reply = self.device.transact(READ, &ask_value(slot, key)).with_context(|| format!("read slot {slot} of the weaver"))?;
+        let reply = self
+            .device
+            .transact(READ, &ask_value(slot, key))
+            .with_context(|| format!("read slot {slot} of the weaver"))?;
         value(&mut reply.read())
     }
 }
@@ -160,7 +176,14 @@ mod tests {
             p.i32(16);
         });
         let c = config(&mut Reader::new(&reply)).unwrap();
-        assert_eq!(c, Config { slots: 64, key_bytes: 16, value_bytes: 16 });
+        assert_eq!(
+            c,
+            Config {
+                slots: 64,
+                key_bytes: 16,
+                value_bytes: 16
+            }
+        );
     }
 
     #[test]
@@ -188,7 +211,11 @@ mod tests {
             p.i64(0);
             p.blob(&[0xCD; 16]);
         });
-        assert_eq!(value(&mut Reader::new(&first)).unwrap(), vec![0xCD; 16], "the first version says nothing of how it went");
+        assert_eq!(
+            value(&mut Reader::new(&first)).unwrap(),
+            vec![0xCD; 16],
+            "the first version says nothing of how it went"
+        );
     }
 
     #[test]
@@ -198,13 +225,19 @@ mod tests {
             p.blob(&[]);
             p.i32(READ_INCORRECT_KEY);
         });
-        assert_eq!(value(&mut Reader::new(&wrong)).unwrap_err().to_string(), "the secure element does not recognise that credential");
+        assert_eq!(
+            value(&mut Reader::new(&wrong)).unwrap_err().to_string(),
+            "the secure element does not recognise that credential"
+        );
         let wrong_and_wait = answered(|p| {
             p.i64(29_001);
             p.blob(&[]);
             p.i32(READ_INCORRECT_KEY);
         });
-        assert!(value(&mut Reader::new(&wrong_and_wait)).unwrap_err().to_string().ends_with("for another 30 seconds"));
+        assert!(value(&mut Reader::new(&wrong_and_wait))
+            .unwrap_err()
+            .to_string()
+            .ends_with("for another 30 seconds"));
         let waiting = answered(|p| {
             p.i64(5_000);
             p.blob(&[]);
@@ -226,8 +259,11 @@ mod tests {
     fn the_first_versions_refusals_are_its_own_errors() {
         let wrong = value(&mut Reader::new(&refused(STATUS_INCORRECT_KEY))).unwrap_err();
         assert_eq!(status::refused_with(&wrong), Some(STATUS_INCORRECT_KEY));
-        assert!(format!("{wrong:#}").starts_with("the secure element does not recognise that credential"));
+        assert!(format!("{wrong:#}")
+            .starts_with("the secure element does not recognise that credential"));
         let waiting = value(&mut Reader::new(&refused(STATUS_THROTTLE))).unwrap_err();
-        assert!(format!("{waiting:#}").starts_with("the secure element is holding off further tries"));
+        assert!(
+            format!("{waiting:#}").starts_with("the secure element is holding off further tries")
+        );
     }
 }

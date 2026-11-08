@@ -67,7 +67,11 @@ pub(super) fn run(args: &[OsString], io: &mut Io) -> i32 {
                 FAILED
             }
         },
-        Ok(Asked::Help) => match io.output.write_all(HELP.as_bytes()).and_then(|()| io.output.flush()) {
+        Ok(Asked::Help) => match io
+            .output
+            .write_all(HELP.as_bytes())
+            .and_then(|()| io.output.flush())
+        {
             Ok(()) => DONE,
             Err(_) => FAILED,
         },
@@ -123,9 +127,12 @@ struct Request {
 impl Request {
     /// Whether the file `name` is one to work on.
     fn takes(&self, name: &str) -> bool {
-        let Ok(name) = CString::new(name) else { return self.includes.is_empty() };
+        let Ok(name) = CString::new(name) else {
+            return self.includes.is_empty();
+        };
         !self.excludes.iter().any(|pattern| matches(pattern, &name))
-            && (self.includes.is_empty() || self.includes.iter().any(|pattern| matches(pattern, &name)))
+            && (self.includes.is_empty()
+                || self.includes.iter().any(|pattern| matches(pattern, &name)))
     }
 }
 
@@ -169,7 +176,10 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
         if options && bytes.starts_with(b"--") {
             return match bytes {
                 b"--help" => Ok(Asked::Help),
-                _ => Err(format!("unrecognized option '{}'\n{USAGE}", arg.to_string_lossy())),
+                _ => Err(format!(
+                    "unrecognized option '{}'\n{USAGE}",
+                    arg.to_string_lossy()
+                )),
             };
         }
         if options && bytes.len() > 1 && bytes[0] == b'-' {
@@ -180,7 +190,13 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
                     // The folder is the rest of the group, or the next argument.
                     b'd' => {
                         let mut named = match &bytes[at + 1..] {
-                            [] => args.next().ok_or_else(|| format!("option requires an argument -- d\n{USAGE}"))?.as_bytes().to_vec(),
+                            [] => args
+                                .next()
+                                .ok_or_else(|| {
+                                    format!("option requires an argument -- d\n{USAGE}")
+                                })?
+                                .as_bytes()
+                                .to_vec(),
                             rest => rest.to_vec(),
                         };
                         if !named.ends_with(b"/") {
@@ -200,7 +216,10 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
                     b'v' => verbose = true,
                     b'x' => leaving_out = true,
                     _ => {
-                        let letter = String::from_utf8_lossy(&bytes[at..]).chars().next().expect("a letter follows the dash");
+                        let letter = String::from_utf8_lossy(&bytes[at..])
+                            .chars()
+                            .next()
+                            .expect("a letter follows the dash");
                         return Err(format!("invalid option -- {letter}\n{USAGE}"));
                     }
                 }
@@ -218,7 +237,19 @@ fn parse(args: &[OsString]) -> Result<Asked, String> {
         };
     }
     let archive = archive.ok_or("missing archive filename")?;
-    Ok(Asked::Unzip(Request { archive, includes, excludes, folder, junk, overwrite, quiet, test, list, verbose, pipe }))
+    Ok(Asked::Unzip(Request {
+        archive,
+        includes,
+        excludes,
+        folder,
+        junk,
+        overwrite,
+        quiet,
+        test,
+        list,
+        verbose,
+        pipe,
+    }))
 }
 
 /// How much the files worked on held, and how many there were.
@@ -234,7 +265,8 @@ struct Totals {
 fn unzip(request: &Request, io: &mut Io) -> Result<i32, String> {
     let shown = request.archive.display();
     let file = File::open(&request.archive).map_err(|e| format!("couldn't open {shown}: {e}"))?;
-    let mut zip = ZipArchive::new(BufReader::with_capacity(CHUNK, file)).map_err(|e| format!("couldn't open {shown}: {e}"))?;
+    let mut zip = ZipArchive::new(BufReader::with_capacity(CHUNK, file))
+        .map_err(|e| format!("couldn't open {shown}: {e}"))?;
     // The folder itself is made, whatever is done; the folders it is in
     // have to be there already, as with the original unzip.
     if let Some(folder) = &request.folder {
@@ -250,15 +282,23 @@ fn unzip(request: &Request, io: &mut Io) -> Result<i32, String> {
     if request.verbose {
         tell(io, " Length   Method    Size  Cmpr    Date    Time   CRC-32   Name\n--------  ------  ------- ---- ---------- ----- --------  ----\n")?;
     } else if request.list {
-        tell(io, "  Length      Date    Time    Name\n---------  ---------- -----   ----\n")?;
+        tell(
+            io,
+            "  Length      Date    Time    Name\n---------  ---------- -----   ----\n",
+        )?;
     }
     let (mut totals, mut bad, mut overwrite) = (Totals::default(), 0, request.overwrite);
     for index in 0..zip.len() {
-        let name = zip.name_for_index(index).ok_or_else(|| format!("couldn't read file {index} of {shown}"))?.to_string();
+        let name = zip
+            .name_for_index(index)
+            .ok_or_else(|| format!("couldn't read file {index} of {shown}"))?
+            .to_string();
         if !request.takes(&name) {
             continue;
         }
-        let mut entry = zip.by_index(index).map_err(|e| format!("failed to extract {name}: {e}"))?;
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|e| format!("failed to extract {name}: {e}"))?;
         if request.test {
             bad += usize::from(!test(&mut entry, &name, request.quiet, io)?);
         } else if request.list || request.verbose {
@@ -276,12 +316,16 @@ fn unzip(request: &Request, io: &mut Io) -> Result<i32, String> {
         totals.files += 1;
     }
     footer(request, &totals, bad, io)?;
-    io.output.flush().map_err(|e| format!("write to stdout: {e}"))?;
+    io.output
+        .flush()
+        .map_err(|e| format!("write to stdout: {e}"))?;
     Ok(if bad > 0 { BAD_CRC } else { DONE })
 }
 
 fn tell(io: &mut Io, text: &str) -> Result<(), String> {
-    io.output.write_all(text.as_bytes()).map_err(|e| format!("write to stdout: {e}"))
+    io.output
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("write to stdout: {e}"))
 }
 
 /// The share of a file its compression saved, in percent, as ziptool
@@ -304,13 +348,26 @@ fn changed<R: Read>(entry: &ZipFile<'_, R>) -> String {
 }
 
 /// One line of `-l` or `-v`.
-fn list<R: Read>(entry: &ZipFile<'_, R>, name: &str, verbose: bool, io: &mut Io) -> Result<(), String> {
+fn list<R: Read>(
+    entry: &ZipFile<'_, R>,
+    name: &str,
+    verbose: bool,
+    io: &mut Io,
+) -> Result<(), String> {
     let (size, compressed) = (entry.size(), entry.compressed_size());
     let line = match verbose {
         true => {
-            let method = if entry.compression() == CompressionMethod::Stored { "Stored" } else { "Defl:N" };
+            let method = if entry.compression() == CompressionMethod::Stored {
+                "Stored"
+            } else {
+                "Defl:N"
+            };
             let crc = entry.crc32();
-            format!("{size:8}  {method} {compressed:8} {:3.0}% {} {crc:08x}  {name}\n", saved(size, compressed), changed(entry))
+            format!(
+                "{size:8}  {method} {compressed:8} {:3.0}% {} {crc:08x}  {name}\n",
+                saved(size, compressed),
+                changed(entry)
+            )
         }
         false => format!("{size:9}  {}   {name}\n", changed(entry)),
     };
@@ -339,7 +396,12 @@ impl Write for Checked {
 
 /// Check the data of `entry` against its checksum, telling how it went as
 /// ziptool tells it, and give whether it matched.
-fn test<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, quiet: bool, io: &mut Io) -> Result<bool, String> {
+fn test<R: Read>(
+    entry: &mut ZipFile<'_, R>,
+    name: &str,
+    quiet: bool,
+    io: &mut Io,
+) -> Result<bool, String> {
     if !quiet {
         tell(io, &format!("    testing: {name:<24} "))?;
     }
@@ -351,7 +413,9 @@ fn test<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, quiet: bool, io: &mut I
         // The archive's reader finds the checksum wrong once all the data
         // is through it; anything else wrong stops the test.
         Err(Failed::Reading(_)) if checked.length == entry.size() && sum != should => {}
-        Err(Failed::Reading(e) | Failed::Writing(e)) => return Err(format!("failed to extract {name}: {e}")),
+        Err(Failed::Reading(e) | Failed::Writing(e)) => {
+            return Err(format!("failed to extract {name}: {e}"))
+        }
     }
     if sum == should {
         if !quiet {
@@ -362,13 +426,20 @@ fn test<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, quiet: bool, io: &mut I
     if quiet {
         tell(io, &format!("{name:<23} "))?;
     }
-    tell(io, &format!("bad CRC {sum:08x}  (should be {should:08x})\n"))?;
+    tell(
+        io,
+        &format!("bad CRC {sum:08x}  (should be {should:08x})\n"),
+    )?;
     Ok(false)
 }
 
 /// The lines after the files: totals for a listing, a verdict for a test.
 fn footer(request: &Request, totals: &Totals, bad: usize, io: &mut Io) -> Result<(), String> {
-    let Totals { size, compressed, files } = *totals;
+    let Totals {
+        size,
+        compressed,
+        files,
+    } = *totals;
     let plural = if files == 1 { "" } else { "s" };
     let archive = request.archive.display();
     let text = if request.verbose {
@@ -392,7 +463,13 @@ fn footer(request: &Request, totals: &Totals, bad: usize, io: &mut Io) -> Result
 
 /// Take `entry` out under its name, into the folder `-d` named or the
 /// current one, as ziptool takes it out.
-fn take_out<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, request: &Request, overwrite: &mut Overwrite, io: &mut Io) -> Result<(), String> {
+fn take_out<R: Read>(
+    entry: &mut ZipFile<'_, R>,
+    name: &str,
+    request: &Request,
+    overwrite: &mut Overwrite,
+    io: &mut Io,
+) -> Result<(), String> {
     if name.starts_with('/') || name.split('/').any(|part| part == "..") {
         return Err(format!("bad filename {name}"));
     }
@@ -402,10 +479,17 @@ fn take_out<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, request: &Request, 
         return Ok(());
     }
     let name = match request.junk {
-        true => name.rsplit('/').next().expect("a split gives a part at least"),
+        true => name
+            .rsplit('/')
+            .next()
+            .expect("a split gives a part at least"),
         false => name,
     };
-    let base = request.folder.as_deref().map(Path::new).unwrap_or(Path::new(""));
+    let base = request
+        .folder
+        .as_deref()
+        .map(Path::new)
+        .unwrap_or(Path::new(""));
     let (path, shown) = (base.join(name), format!("{}{name}", base.display()));
     if let Some(parent) = path.parent() {
         DirBuilder::new()
@@ -417,12 +501,19 @@ fn take_out<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, request: &Request, 
     if folder_entry {
         let mode = entry.unix_mode().unwrap_or(FOLDER_MODE) & 0o777;
         return match DirBuilder::new().mode(mode).create(&path) {
-            Err(e) if !(e.kind() == io::ErrorKind::AlreadyExists && path.is_dir()) => Err(format!("couldn't extract directory {shown}: {e}")),
+            Err(e) if !(e.kind() == io::ErrorKind::AlreadyExists && path.is_dir()) => {
+                Err(format!("couldn't extract directory {shown}: {e}"))
+            }
             _ => Ok(()),
         };
     }
     let mode = entry.unix_mode().unwrap_or(FILE_MODE) & 0o777;
-    let mut out = match OpenOptions::new().write(true).create_new(true).mode(mode).open(&path) {
+    let mut out = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(&path)
+    {
         Ok(out) => out,
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             let replace = match *overwrite {
@@ -433,7 +524,13 @@ fn take_out<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, request: &Request, 
             if !replace {
                 return Ok(());
             }
-            OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(&path).map_err(|e| format!("couldn't create file {shown}: {e}"))?
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(&path)
+                .map_err(|e| format!("couldn't create file {shown}: {e}"))?
         }
         Err(e) => return Err(format!("couldn't create file {shown}: {e}")),
     };
@@ -449,8 +546,13 @@ fn take_out<R: Read>(entry: &mut ZipFile<'_, R>, name: &str, request: &Request, 
 /// answer from standard input; an answer for every file sets `overwrite`
 /// for the rest. Standard input ending first stops the command.
 fn ask(shown: &str, overwrite: &mut Overwrite, io: &mut Io) -> Result<bool, String> {
-    tell(io, &format!("replace {shown}? [y]es, [n]o, [A]ll, [N]one: "))?;
-    io.output.flush().map_err(|e| format!("write to stdout: {e}"))?;
+    tell(
+        io,
+        &format!("replace {shown}? [y]es, [n]o, [A]ll, [N]one: "),
+    )?;
+    io.output
+        .flush()
+        .map_err(|e| format!("write to stdout: {e}"))?;
     loop {
         let mut line = Vec::new();
         let mut byte = [0];
@@ -502,7 +604,13 @@ mod tests {
     }
 
     fn stored<'a>(name: &'a str, data: &'a [u8]) -> Entry<'a> {
-        Entry { name, data, method: CompressionMethod::Stored, mode: None, large: false }
+        Entry {
+            name,
+            data,
+            method: CompressionMethod::Stored,
+            mode: None,
+            large: false,
+        }
     }
 
     /// A zip of `entries`, all last changed at 20:41 on 6 November 2026.
@@ -510,7 +618,10 @@ mod tests {
         let time = DateTime::from_date_and_time(2026, 11, 6, 20, 41, 0).unwrap();
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for e in entries {
-            let mut options = SimpleFileOptions::default().compression_method(e.method).large_file(e.large).last_modified_time(time);
+            let mut options = SimpleFileOptions::default()
+                .compression_method(e.method)
+                .large_file(e.large)
+                .last_modified_time(time);
             if let Some(mode) = e.mode {
                 options = options.unix_permissions(mode);
             }
@@ -548,10 +659,22 @@ mod tests {
     /// `{dir}` for the test's folder, and `input` as standard input: how it
     /// ended, what it wrote to standard output, and what to standard error.
     fn ran(args: &[&str], zip: &Path, dir: &Path, input: &[u8]) -> (i32, Vec<u8>, String) {
-        let fill = |a: &&str| OsString::from(a.replace("{zip}", &zip.display().to_string()).replace("{dir}", &dir.display().to_string()));
+        let fill = |a: &&str| {
+            OsString::from(
+                a.replace("{zip}", &zip.display().to_string())
+                    .replace("{dir}", &dir.display().to_string()),
+            )
+        };
         let args: Vec<OsString> = args.iter().map(fill).collect();
         let (mut output, mut errors) = (Vec::new(), Vec::new());
-        let code = run(&args, &mut Io { input: &mut Cursor::new(input), output: &mut output, errors: &mut errors });
+        let code = run(
+            &args,
+            &mut Io {
+                input: &mut Cursor::new(input),
+                output: &mut output,
+                errors: &mut errors,
+            },
+        );
         (code, output, String::from_utf8(errors).unwrap())
     }
 
@@ -582,43 +705,100 @@ mod tests {
 
     #[test]
     fn options_are_read_as_ziptool_reads_them() {
-        let r = request(&["-qo", "rom.zip", "bin/*", "-d", "/tmp", "-x", "*.txt", "-j", "META-INF/*"]);
+        let r = request(&[
+            "-qo",
+            "rom.zip",
+            "bin/*",
+            "-d",
+            "/tmp",
+            "-x",
+            "*.txt",
+            "-j",
+            "META-INF/*",
+        ]);
         assert_eq!(r.archive, PathBuf::from("rom.zip"));
         assert_eq!(r.includes, patterns(&["bin/*"]));
-        assert_eq!(r.excludes, patterns(&["*.txt", "META-INF/*"]), "every name after -x is one to leave out");
+        assert_eq!(
+            r.excludes,
+            patterns(&["*.txt", "META-INF/*"]),
+            "every name after -x is one to leave out"
+        );
         assert_eq!(r.folder, Some("/tmp/".into()));
         assert!(r.quiet && r.junk);
         assert_eq!(r.overwrite, Overwrite::Always);
-        assert_eq!(request(&["-od/data/x", "rom.zip"]).folder, Some("/data/x/".into()), "-d takes the rest of its group");
+        assert_eq!(
+            request(&["-od/data/x", "rom.zip"]).folder,
+            Some("/data/x/".into()),
+            "-d takes the rest of its group"
+        );
         let r = request(&["-p", "-o", "-n", "rom.zip"]);
         assert!(r.pipe && r.quiet, "-p is quiet");
-        assert_eq!(r.overwrite, Overwrite::Never, "the last of -n and -o counts");
+        assert_eq!(
+            r.overwrite,
+            Overwrite::Never,
+            "the last of -n and -o counts"
+        );
         let r = request(&["--", "-o.zip", "-q"]);
-        assert_eq!((r.archive, r.includes, r.quiet), (PathBuf::from("-o.zip"), patterns(&["-q"]), false), "after -- a dash starts a name");
+        assert_eq!(
+            (r.archive, r.includes, r.quiet),
+            (PathBuf::from("-o.zip"), patterns(&["-q"]), false),
+            "after -- a dash starts a name"
+        );
         assert_eq!(parsed(&["--help"]), Ok(Asked::Help));
         assert_eq!(parsed(&["-h", "rom.zip"]), Ok(Asked::Help));
-        assert_eq!(parsed(&["-Z", "-1", "rom.zip"]), Ok(Asked::Zipinfo(vec!["-1".into(), "rom.zip".into()])));
-        assert_eq!(parsed(&["-K", "rom.zip"]), Err(format!("invalid option -- K\n{USAGE}")));
-        assert_eq!(parsed(&["--list", "rom.zip"]), Err(format!("unrecognized option '--list'\n{USAGE}")));
-        assert_eq!(parsed(&["rom.zip", "-d"]), Err(format!("option requires an argument -- d\n{USAGE}")));
+        assert_eq!(
+            parsed(&["-Z", "-1", "rom.zip"]),
+            Ok(Asked::Zipinfo(vec!["-1".into(), "rom.zip".into()]))
+        );
+        assert_eq!(
+            parsed(&["-K", "rom.zip"]),
+            Err(format!("invalid option -- K\n{USAGE}"))
+        );
+        assert_eq!(
+            parsed(&["--list", "rom.zip"]),
+            Err(format!("unrecognized option '--list'\n{USAGE}"))
+        );
+        assert_eq!(
+            parsed(&["rom.zip", "-d"]),
+            Err(format!("option requires an argument -- d\n{USAGE}"))
+        );
         assert_eq!(parsed(&[]), Err("missing archive filename".into()));
         assert_eq!(parsed(&["-q"]), Err("missing archive filename".into()));
     }
 
     #[test]
     fn names_match_as_the_c_library_s_fnmatch_matches_them_with_no_flags() {
-        let takes = |args: &[&str], name: &str| request(&[&["rom.zip"][..], args].concat()).takes(name);
+        let takes =
+            |args: &[&str], name: &str| request(&[&["rom.zip"][..], args].concat()).takes(name);
         assert!(takes(&[], "images/super.img"), "no names take every file");
         assert!(takes(&["images/*"], "images/super.img"));
-        assert!(takes(&["*.img"], "images/super.img"), "* stands for slashes too");
-        assert!(takes(&["images?super.img"], "images/super.img"), "and so does ?");
+        assert!(
+            takes(&["*.img"], "images/super.img"),
+            "* stands for slashes too"
+        );
+        assert!(
+            takes(&["images?super.img"], "images/super.img"),
+            "and so does ?"
+        );
         assert!(takes(&["[it]*.txt"], "top.txt") && takes(&["[it]*.txt"], "images/a.txt"));
         assert!(!takes(&["[!it]*"], "top.txt"));
-        assert!(takes(&["a\\*b"], "a*b") && !takes(&["a\\*b"], "axb"), "a backslash takes the next character as it is");
+        assert!(
+            takes(&["a\\*b"], "a*b") && !takes(&["a\\*b"], "axb"),
+            "a backslash takes the next character as it is"
+        );
         assert!(!takes(&["images/*"], "bin/tool"));
         assert!(!takes(&["-x", "*.txt"], "a.txt"));
-        assert!(!takes(&["*", "-x", "*/updater-script"], "META-INF/com/google/android/updater-script"), "a name left out stays out");
-        assert!(takes(&["*", "-x", "*/updater-script"], "META-INF/com/google/android/update-binary"));
+        assert!(
+            !takes(
+                &["*", "-x", "*/updater-script"],
+                "META-INF/com/google/android/updater-script"
+            ),
+            "a name left out stays out"
+        );
+        assert!(takes(
+            &["*", "-x", "*/updater-script"],
+            "META-INF/com/google/android/update-binary"
+        ));
     }
 
     #[test]
@@ -626,20 +806,58 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let image = noise(CHUNK * 2 + 99);
         let script = b"#!/sbin/sh\n";
-        for (method, large) in [(CompressionMethod::Stored, false), (CompressionMethod::Deflated, false), (CompressionMethod::Stored, true)] {
+        for (method, large) in [
+            (CompressionMethod::Stored, false),
+            (CompressionMethod::Deflated, false),
+            (CompressionMethod::Stored, true),
+        ] {
             let archive = written(
                 dir.path(),
                 "rom.zip",
-                &[stored("META-INF/com/google/android/update-binary", script), Entry { method, large, ..stored("super.zst", &image) }],
+                &[
+                    stored("META-INF/com/google/android/update-binary", script),
+                    Entry {
+                        method,
+                        large,
+                        ..stored("super.zst", &image)
+                    },
+                ],
             );
-            let (code, output, errors) = ran(&["-p", "{zip}", "super.zst"], &archive, dir.path(), b"");
-            assert_eq!((code, errors.as_str()), (DONE, ""), "{method:?}, zip64 {large}");
+            let (code, output, errors) =
+                ran(&["-p", "{zip}", "super.zst"], &archive, dir.path(), b"");
+            assert_eq!(
+                (code, errors.as_str()),
+                (DONE, ""),
+                "{method:?}, zip64 {large}"
+            );
             assert!(output == image, "{method:?}, zip64 {large}");
         }
-        let archive = written(dir.path(), "several.zip", &[stored("images/", b""), stored("images/b.txt", b"b"), stored("images/a.txt", b"a"), stored("top.txt", b"top")]);
-        let (code, output, _) = ran(&["-p", "{zip}", "top.txt", "images/*"], &archive, dir.path(), b"");
-        assert_eq!((code, output.as_slice()), (DONE, b"batop".as_slice()), "in the archive's order, a folder giving nothing");
-        assert_eq!(ran(&["-p", "{zip}", "none.txt"], &archive, dir.path(), b""), (DONE, Vec::new(), String::new()), "nothing picked is no error");
+        let archive = written(
+            dir.path(),
+            "several.zip",
+            &[
+                stored("images/", b""),
+                stored("images/b.txt", b"b"),
+                stored("images/a.txt", b"a"),
+                stored("top.txt", b"top"),
+            ],
+        );
+        let (code, output, _) = ran(
+            &["-p", "{zip}", "top.txt", "images/*"],
+            &archive,
+            dir.path(),
+            b"",
+        );
+        assert_eq!(
+            (code, output.as_slice()),
+            (DONE, b"batop".as_slice()),
+            "in the archive's order, a folder giving nothing"
+        );
+        assert_eq!(
+            ran(&["-p", "{zip}", "none.txt"], &archive, dir.path(), b""),
+            (DONE, Vec::new(), String::new()),
+            "nothing picked is no error"
+        );
     }
 
     #[test]
@@ -647,7 +865,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = noise(1000);
         let mut bytes = zip(&[stored("x.bin", &data)]);
-        let start = ZipArchive::new(Cursor::new(&bytes)).unwrap().by_index(0).unwrap().data_start().unwrap() as usize;
+        let start = ZipArchive::new(Cursor::new(&bytes))
+            .unwrap()
+            .by_index(0)
+            .unwrap()
+            .data_start()
+            .unwrap() as usize;
         bytes[start + 500] ^= 0xff;
         let mut damaged = data.clone();
         damaged[500] ^= 0xff;
@@ -655,7 +878,10 @@ mod tests {
         fs::write(&archive, &bytes).unwrap();
         let (code, _, errors) = ran(&["-p", "{zip}"], &archive, dir.path(), b"");
         assert_eq!(code, FAILED);
-        assert!(errors.starts_with("unzip: failed to extract x.bin: "), "{errors}");
+        assert!(
+            errors.starts_with("unzip: failed to extract x.bin: "),
+            "{errors}"
+        );
         let shown = archive.display();
         let (sum, should) = (crc(&damaged), crc(&data));
         let (code, output, _) = ran(&["-t", "{zip}"], &archive, dir.path(), b"");
@@ -672,7 +898,14 @@ mod tests {
         let archive = written(
             dir.path(),
             "rom.zip",
-            &[stored("images/", b""), stored("images/a.txt", b"hello\n"), stored("META-INF/com/google/android/updater-script", b"ui_print(\"x\");\n")],
+            &[
+                stored("images/", b""),
+                stored("images/a.txt", b"hello\n"),
+                stored(
+                    "META-INF/com/google/android/updater-script",
+                    b"ui_print(\"x\");\n",
+                ),
+            ],
         );
         let shown = archive.display();
         let (code, output, _) = ran(&["-t", "{zip}"], &archive, dir.path(), b"");
@@ -681,17 +914,44 @@ mod tests {
         );
         assert_eq!((code, text(output)), (DONE, told));
         let (code, output, _) = ran(&["-tq", "{zip}"], &archive, dir.path(), b"");
-        assert_eq!((code, text(output)), (DONE, format!("No errors detected in compressed data of {shown}.\n")));
+        assert_eq!(
+            (code, text(output)),
+            (
+                DONE,
+                format!("No errors detected in compressed data of {shown}.\n")
+            )
+        );
         let (code, output, _) = ran(&["-tq", "{zip}", "images/*"], &archive, dir.path(), b"");
-        assert_eq!((code, text(output)), (DONE, format!("No errors detected in {shown} for the 2 files tested.\n")), "the folder counts too");
+        assert_eq!(
+            (code, text(output)),
+            (
+                DONE,
+                format!("No errors detected in {shown} for the 2 files tested.\n")
+            ),
+            "the folder counts too"
+        );
         let (code, output, _) = ran(&["-tq", "{zip}", "images/a.txt"], &archive, dir.path(), b"");
-        assert_eq!((code, text(output)), (DONE, format!("No errors detected in {shown} for the 1 file tested.\n")));
+        assert_eq!(
+            (code, text(output)),
+            (
+                DONE,
+                format!("No errors detected in {shown} for the 1 file tested.\n")
+            )
+        );
     }
 
     #[test]
     fn l_and_v_list_as_ziptool_lists() {
         let dir = tempfile::tempdir().unwrap();
-        let archive = written(dir.path(), "rom.zip", &[stored("images/", b""), stored("images/a.txt", b"hello\n"), stored("bin/tool", b"\x7fELF")]);
+        let archive = written(
+            dir.path(),
+            "rom.zip",
+            &[
+                stored("images/", b""),
+                stored("images/a.txt", b"hello\n"),
+                stored("bin/tool", b"\x7fELF"),
+            ],
+        );
         let shown = archive.display();
         let (code, output, _) = ran(&["-l", "{zip}"], &archive, dir.path(), b"");
         let listed = "  Length      Date    Time    Name\n\
@@ -701,8 +961,15 @@ mod tests {
                       4  2026-11-06 20:41   bin/tool\n\
                       ---------                     -------\n       \
                       10                     3 files\n";
-        assert_eq!((code, text(output)), (DONE, format!("Archive:  {shown}\n{listed}")));
-        assert_eq!(text(ran(&["-lq", "{zip}"], &archive, dir.path(), b"").1), listed, "-q leaves out the archive's name");
+        assert_eq!(
+            (code, text(output)),
+            (DONE, format!("Archive:  {shown}\n{listed}"))
+        );
+        assert_eq!(
+            text(ran(&["-lq", "{zip}"], &archive, dir.path(), b"").1),
+            listed,
+            "-q leaves out the archive's name"
+        );
         let (code, output, _) = ran(&["-v", "{zip}", "*a*"], &archive, dir.path(), b"");
         let listed = format!(
             "Archive:  {shown}\n Length   Method    Size  Cmpr    Date    Time   CRC-32   Name\n\
@@ -713,11 +980,32 @@ mod tests {
              6                6   0%                            2 files\n"
         );
         assert_eq!((code, text(output)), (DONE, listed));
-        let deflated = written(dir.path(), "deflated.zip", &[Entry { method: CompressionMethod::Deflated, ..stored("zeros.img", &[0; 100_000]) }]);
-        let packed = ZipArchive::new(File::open(&deflated).unwrap()).unwrap().by_index(0).unwrap().compressed_size();
-        let line = text(ran(&["-vq", "{zip}"], &deflated, dir.path(), b"").1).lines().nth(2).unwrap().to_string();
+        let deflated = written(
+            dir.path(),
+            "deflated.zip",
+            &[Entry {
+                method: CompressionMethod::Deflated,
+                ..stored("zeros.img", &[0; 100_000])
+            }],
+        );
+        let packed = ZipArchive::new(File::open(&deflated).unwrap())
+            .unwrap()
+            .by_index(0)
+            .unwrap()
+            .compressed_size();
+        let line = text(ran(&["-vq", "{zip}"], &deflated, dir.path(), b"").1)
+            .lines()
+            .nth(2)
+            .unwrap()
+            .to_string();
         let saved = 100.0 * (100_000.0 - packed as f32) / 100_000.0;
-        assert_eq!(line, format!("  100000  Defl:N {packed:8} {saved:3.0}% 2026-11-06 20:41 {:08x}  zeros.img", crc(&[0; 100_000])));
+        assert_eq!(
+            line,
+            format!(
+                "  100000  Defl:N {packed:8} {saved:3.0}% 2026-11-06 20:41 {:08x}  zeros.img",
+                crc(&[0; 100_000])
+            )
+        );
     }
 
     #[test]
@@ -727,9 +1015,18 @@ mod tests {
             dir.path(),
             "rom.zip",
             &[
-                Entry { mode: Some(0o755), ..stored("bin/", b"") },
-                Entry { mode: Some(0o755), ..stored("bin/tool", b"\x7fELF") },
-                Entry { mode: Some(0o644), ..stored("images/a.txt", b"hello\n") },
+                Entry {
+                    mode: Some(0o755),
+                    ..stored("bin/", b"")
+                },
+                Entry {
+                    mode: Some(0o755),
+                    ..stored("bin/tool", b"\x7fELF")
+                },
+                Entry {
+                    mode: Some(0o644),
+                    ..stored("images/a.txt", b"hello\n")
+                },
                 stored("META-INF/com/google/android/update-binary", b"#!/sbin/sh\n"),
                 stored("empty/", b""),
             ],
@@ -743,32 +1040,68 @@ mod tests {
         );
         assert_eq!((code, text(output), errors.as_str()), (DONE, told, ""));
         assert_eq!(fs::read(out.join("bin/tool")).unwrap(), b"\x7fELF");
-        assert_eq!(fs::read(out.join("META-INF/com/google/android/update-binary")).unwrap(), b"#!/sbin/sh\n");
+        assert_eq!(
+            fs::read(out.join("META-INF/com/google/android/update-binary")).unwrap(),
+            b"#!/sbin/sh\n"
+        );
         let mode = |path: &str| fs::metadata(out.join(path)).unwrap().permissions().mode();
-        assert!(mode("bin/tool") & 0o100 != 0 && mode("images/a.txt") & 0o100 == 0, "each file keeps its mode");
+        assert!(
+            mode("bin/tool") & 0o100 != 0 && mode("images/a.txt") & 0o100 == 0,
+            "each file keeps its mode"
+        );
         assert!(out.join("empty").is_dir());
-        let (code, _, _) = ran(&["-jqo", "{zip}", "-d", "{dir}/flat", "bin/*", "META-INF/*"], &archive, dir.path(), b"");
+        let (code, _, _) = ran(
+            &["-jqo", "{zip}", "-d", "{dir}/flat", "bin/*", "META-INF/*"],
+            &archive,
+            dir.path(),
+            b"",
+        );
         assert_eq!(code, DONE);
-        let mut names: Vec<_> = fs::read_dir(dir.path().join("flat")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let mut names: Vec<_> = fs::read_dir(dir.path().join("flat"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         names.sort();
-        assert_eq!(names, ["tool", "update-binary"], "-j takes the files out without their folders, and no folder as a file");
+        assert_eq!(
+            names,
+            ["tool", "update-binary"],
+            "-j takes the files out without their folders, and no folder as a file"
+        );
     }
 
     #[test]
     fn d_makes_its_folder_but_not_the_folders_it_is_in() {
         let dir = tempfile::tempdir().unwrap();
         let archive = written(dir.path(), "rom.zip", &[stored("top.txt", b"top")]);
-        let (code, _, errors) = ran(&["-q", "{zip}", "-d", "{dir}/x/y"], &archive, dir.path(), b"");
+        let (code, _, errors) = ran(
+            &["-q", "{zip}", "-d", "{dir}/x/y"],
+            &archive,
+            dir.path(),
+            b"",
+        );
         assert_eq!(code, FAILED);
-        assert!(errors.starts_with(&format!("unzip: couldn't create {}/x/y/: ", dir.path().display())), "{errors}");
-        assert_eq!(ran(&["-q", "{zip}", "-d", "{dir}/x"], &archive, dir.path(), b"").0, DONE);
+        assert!(
+            errors.starts_with(&format!(
+                "unzip: couldn't create {}/x/y/: ",
+                dir.path().display()
+            )),
+            "{errors}"
+        );
+        assert_eq!(
+            ran(&["-q", "{zip}", "-d", "{dir}/x"], &archive, dir.path(), b"").0,
+            DONE
+        );
         assert_eq!(fs::read(dir.path().join("x/top.txt")).unwrap(), b"top");
     }
 
     #[test]
     fn a_file_already_there_is_kept_replaced_or_asked_about() {
         let dir = tempfile::tempdir().unwrap();
-        let archive = written(dir.path(), "rom.zip", &[stored("a.txt", b"new a"), stored("b.txt", b"new b")]);
+        let archive = written(
+            dir.path(),
+            "rom.zip",
+            &[stored("a.txt", b"new a"), stored("b.txt", b"new b")],
+        );
         let out = dir.path().join("out");
         let before = || {
             fs::create_dir_all(&out).unwrap();
@@ -776,15 +1109,56 @@ mod tests {
             fs::write(out.join("b.txt"), b"old b").unwrap();
         };
         let now = |name: &str| fs::read(out.join(name)).unwrap();
-        let prompt = |name: &str| format!("replace {}/{name}? [y]es, [n]o, [A]ll, [N]one: ", out.display());
+        let prompt = |name: &str| {
+            format!(
+                "replace {}/{name}? [y]es, [n]o, [A]ll, [N]one: ",
+                out.display()
+            )
+        };
         before();
-        let (code, output, errors) = ran(&["-q", "{zip}", "-d", "{dir}/out"], &archive, dir.path(), b"");
-        assert_eq!((code, text(output), errors.as_str()), (FAILED, prompt("a.txt"), "unzip: (EOF/read error; assuming [N]one...)\n"));
+        let (code, output, errors) = ran(
+            &["-q", "{zip}", "-d", "{dir}/out"],
+            &archive,
+            dir.path(),
+            b"",
+        );
+        assert_eq!(
+            (code, text(output), errors.as_str()),
+            (
+                FAILED,
+                prompt("a.txt"),
+                "unzip: (EOF/read error; assuming [N]one...)\n"
+            )
+        );
         assert_eq!(now("a.txt"), b"old a");
-        assert_eq!(ran(&["-qn", "{zip}", "-d", "{dir}/out"], &archive, dir.path(), b"").0, DONE);
-        assert_eq!((now("a.txt"), now("b.txt")), (b"old a".to_vec(), b"old b".to_vec()));
-        assert_eq!(ran(&["-qo", "{zip}", "-d", "{dir}/out"], &archive, dir.path(), b"").0, DONE);
-        assert_eq!((now("a.txt"), now("b.txt")), (b"new a".to_vec(), b"new b".to_vec()));
+        assert_eq!(
+            ran(
+                &["-qn", "{zip}", "-d", "{dir}/out"],
+                &archive,
+                dir.path(),
+                b""
+            )
+            .0,
+            DONE
+        );
+        assert_eq!(
+            (now("a.txt"), now("b.txt")),
+            (b"old a".to_vec(), b"old b".to_vec())
+        );
+        assert_eq!(
+            ran(
+                &["-qo", "{zip}", "-d", "{dir}/out"],
+                &archive,
+                dir.path(),
+                b""
+            )
+            .0,
+            DONE
+        );
+        assert_eq!(
+            (now("a.txt"), now("b.txt")),
+            (b"new a".to_vec(), b"new b".to_vec())
+        );
         for (answers, a, b, asked) in [
             (&b"y\nn\n"[..], "new a", "old b", 2),
             (b"?\nn\ny\n", "old a", "new b", 2),
@@ -792,10 +1166,23 @@ mod tests {
             (b"N\n", "old a", "old b", 1),
         ] {
             before();
-            let (code, output, _) = ran(&["-q", "{zip}", "-d", "{dir}/out"], &archive, dir.path(), answers);
+            let (code, output, _) = ran(
+                &["-q", "{zip}", "-d", "{dir}/out"],
+                &archive,
+                dir.path(),
+                answers,
+            );
             assert_eq!(code, DONE, "{answers:?}");
-            assert_eq!((now("a.txt"), now("b.txt")), (a.as_bytes().to_vec(), b.as_bytes().to_vec()), "{answers:?}");
-            assert_eq!(text(output).matches("replace ").count(), asked, "{answers:?}");
+            assert_eq!(
+                (now("a.txt"), now("b.txt")),
+                (a.as_bytes().to_vec(), b.as_bytes().to_vec()),
+                "{answers:?}"
+            );
+            assert_eq!(
+                text(output).matches("replace ").count(),
+                asked,
+                "{answers:?}"
+            );
         }
     }
 
@@ -804,10 +1191,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for name in ["../escaped", "a/../../escaped"] {
             let archive = written(dir.path(), "rom.zip", &[stored(name, b"out")]);
-            let (code, _, errors) = ran(&["-q", "{zip}", "-d", "{dir}/in"], &archive, dir.path(), b"");
-            assert_eq!((code, errors), (FAILED, format!("unzip: bad filename {name}\n")));
+            let (code, _, errors) = ran(
+                &["-q", "{zip}", "-d", "{dir}/in"],
+                &archive,
+                dir.path(),
+                b"",
+            );
+            assert_eq!(
+                (code, errors),
+                (FAILED, format!("unzip: bad filename {name}\n"))
+            );
             assert!(!dir.path().join("escaped").exists());
-            assert_eq!(ran(&["-p", "{zip}"], &archive, dir.path(), b"").1, b"out", "standard output is no folder to leave");
+            assert_eq!(
+                ran(&["-p", "{zip}"], &archive, dir.path(), b"").1,
+                b"out",
+                "standard output is no folder to leave"
+            );
         }
     }
 
@@ -817,7 +1216,10 @@ mod tests {
         let missing = dir.path().join("none.zip");
         let (code, _, errors) = ran(&["-p", "{zip}"], &missing, dir.path(), b"");
         assert_eq!(code, FAILED);
-        assert!(errors.starts_with(&format!("unzip: couldn't open {}: ", missing.display())), "{errors}");
+        assert!(
+            errors.starts_with(&format!("unzip: couldn't open {}: ", missing.display())),
+            "{errors}"
+        );
         let text_file = dir.path().join("text.zip");
         fs::write(&text_file, b"not a zip").unwrap();
         assert_eq!(ran(&["-l", "{zip}"], &text_file, dir.path(), b"").0, FAILED);

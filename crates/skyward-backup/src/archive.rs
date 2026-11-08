@@ -30,18 +30,38 @@ pub struct Skipped(Vec<Vec<String>>);
 
 impl Skipped {
     pub fn new(paths: &[String]) -> Skipped {
-        Skipped(paths.iter().map(|p| p.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect()).collect())
+        Skipped(
+            paths
+                .iter()
+                .map(|p| {
+                    p.split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .collect(),
+        )
     }
 
     /// Whether `rel` itself is skipped.
     fn holds(&self, rel: &Path) -> bool {
-        let names: Vec<&str> = rel.components().map(|c| c.as_os_str().to_str().unwrap_or_default()).collect();
-        self.0.iter().any(|p| p.len() == names.len() && p.iter().zip(&names).all(|(want, name)| want == "*" || want == name))
+        let names: Vec<&str> = rel
+            .components()
+            .map(|c| c.as_os_str().to_str().unwrap_or_default())
+            .collect();
+        self.0.iter().any(|p| {
+            p.len() == names.len()
+                && p.iter()
+                    .zip(&names)
+                    .all(|(want, name)| want == "*" || want == name)
+        })
     }
 
     /// Whether `rel` is skipped or inside what is.
     fn covers(&self, rel: &Path) -> bool {
-        rel.ancestors().filter(|a| !a.as_os_str().is_empty()).any(|a| self.holds(a))
+        rel.ancestors()
+            .filter(|a| !a.as_os_str().is_empty())
+            .any(|a| self.holds(a))
     }
 }
 
@@ -63,7 +83,10 @@ pub fn measure(root: &Path, skipped: &Skipped, cancel: &AtomicBool) -> Result<(u
         }
         for (name, path, meta) in children(folder)? {
             let rel = rel.join(&name);
-            if skipped.holds(&rel) || meta.file_type().is_socket() || (meta.is_dir() && meta.dev() != dev) {
+            if skipped.holds(&rel)
+                || meta.file_type().is_socket()
+                || (meta.is_dir() && meta.dev() != dev)
+            {
                 continue;
             }
             sum.1 += 1;
@@ -75,9 +98,19 @@ pub fn measure(root: &Path, skipped: &Skipped, cancel: &AtomicBool) -> Result<(u
         }
         Ok(())
     }
-    let dev = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?.dev();
+    let dev = fs::symlink_metadata(root)
+        .with_context(|| format!("look at {}", root.display()))?
+        .dev();
     let mut sum = (0, 0);
-    walk(root, Path::new(""), dev, skipped, cancel, &mut HashSet::new(), &mut sum)?;
+    walk(
+        root,
+        Path::new(""),
+        dev,
+        skipped,
+        cancel,
+        &mut HashSet::new(),
+        &mut sum,
+    )?;
     Ok(sum)
 }
 
@@ -88,7 +121,8 @@ fn children(folder: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf, fs::Metad
     for entry in fs::read_dir(folder).with_context(|| format!("read {}", folder.display()))? {
         let entry = entry.with_context(|| format!("read {}", folder.display()))?;
         let path = entry.path();
-        let meta = fs::symlink_metadata(&path).with_context(|| format!("look at {}", path.display()))?;
+        let meta =
+            fs::symlink_metadata(&path).with_context(|| format!("look at {}", path.display()))?;
         out.push((entry.file_name(), path, meta));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -99,12 +133,33 @@ fn children(folder: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf, fs::Metad
 /// `skipped`, sockets, which only the program that made them answers, and
 /// what another filesystem mounted inside holds. A folder comes before what
 /// it holds. Tells how many bytes of file contents are archived so far.
-pub fn pack(root: &Path, skipped: &Skipped, out: impl Write, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<()> {
+pub fn pack(
+    root: &Path,
+    skipped: &Skipped,
+    out: impl Write,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<()> {
     let mut b = Builder::new(out);
     let meta = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?;
-    let mut packing = Packing { links: HashMap::new(), done: 0, cancel, progress };
-    packing.folder(&mut b, root, Path::new(""), meta.dev(), skipped, key(root)?.as_deref())?;
-    b.into_inner().context("finish the archive")?.flush().context("finish the archive")?;
+    let mut packing = Packing {
+        links: HashMap::new(),
+        done: 0,
+        cancel,
+        progress,
+    };
+    packing.folder(
+        &mut b,
+        root,
+        Path::new(""),
+        meta.dev(),
+        skipped,
+        key(root)?.as_deref(),
+    )?;
+    b.into_inner()
+        .context("finish the archive")?
+        .flush()
+        .context("finish the archive")?;
     Ok(())
 }
 
@@ -120,17 +175,34 @@ struct Packing<'a> {
 impl Packing<'_> {
     /// Archive what the folder at `path` holds; `rel` is where it is in the
     /// archive and `above` the key its own entries are encrypted with.
-    fn folder<W: Write>(&mut self, b: &mut Builder<W>, path: &Path, rel: &Path, dev: u64, skipped: &Skipped, above: Option<&[u8]>) -> Result<()> {
+    fn folder<W: Write>(
+        &mut self,
+        b: &mut Builder<W>,
+        path: &Path,
+        rel: &Path,
+        dev: u64,
+        skipped: &Skipped,
+        above: Option<&[u8]>,
+    ) -> Result<()> {
         for (name, path, meta) in children(path)? {
             let rel = rel.join(&name);
-            if skipped.holds(&rel) || meta.file_type().is_socket() || (meta.is_dir() && meta.dev() != dev) {
+            if skipped.holds(&rel)
+                || meta.file_type().is_socket()
+                || (meta.is_dir() && meta.dev() != dev)
+            {
                 continue;
             }
             if self.cancel.load(Ordering::Relaxed) {
                 return Err(Cancelled.into());
             }
             let own = if meta.is_dir() { key(&path)? } else { None };
-            if let Err(e) = self.entry(b, &path, &rel, &meta, meta.is_dir() && own.as_deref() != above) {
+            if let Err(e) = self.entry(
+                b,
+                &path,
+                &rel,
+                &meta,
+                meta.is_dir() && own.as_deref() != above,
+            ) {
                 // A file stopped partway through comes back as an error of
                 // the archive's writing; it was stopped all the same.
                 if self.cancel.load(Ordering::Relaxed) {
@@ -145,7 +217,14 @@ impl Packing<'_> {
         Ok(())
     }
 
-    fn entry<W: Write>(&mut self, b: &mut Builder<W>, path: &Path, rel: &Path, meta: &fs::Metadata, key_root: bool) -> Result<()> {
+    fn entry<W: Write>(
+        &mut self,
+        b: &mut Builder<W>,
+        path: &Path,
+        rel: &Path,
+        meta: &fs::Metadata,
+        key_root: bool,
+    ) -> Result<()> {
         let kind = meta.file_type();
         let mut header = Header::new_gnu();
         header.set_mode(meta.mode() & 0o7777);
@@ -154,7 +233,10 @@ impl Packing<'_> {
         header.set_mtime(meta.mtime().max(0) as u64);
         header.set_size(0);
         let mut records = beyond(path, meta)?;
-        records.push((MTIME.into(), format!("{}.{:09}", meta.mtime(), meta.mtime_nsec()).into_bytes()));
+        records.push((
+            MTIME.into(),
+            format!("{}.{:09}", meta.mtime(), meta.mtime_nsec()).into_bytes(),
+        ));
         if key_root {
             records.push((KEY_ROOT.into(), b"1".to_vec()));
         }
@@ -178,7 +260,13 @@ impl Packing<'_> {
             header.set_entry_type(EntryType::Regular);
             header.set_size(meta.len());
             let file = File::open(path)?;
-            let feed = Feed { file, left: meta.len(), done: &mut self.done, cancel: self.cancel, progress: &mut *self.progress };
+            let feed = Feed {
+                file,
+                left: meta.len(),
+                done: &mut self.done,
+                cancel: self.cancel,
+                progress: &mut *self.progress,
+            };
             b.append_data(&mut header, rel, feed)?;
         } else {
             header.set_entry_type(match kind {
@@ -216,7 +304,10 @@ impl Read for Feed<'_> {
         let want = buf.len().min(self.left as usize);
         let n = self.file.read(&mut buf[..want])?;
         if n == 0 {
-            return Err(io::Error::new(ErrorKind::UnexpectedEof, "the file got shorter while it was archived"));
+            return Err(io::Error::new(
+                ErrorKind::UnexpectedEof,
+                "the file got shorter while it was archived",
+            ));
         }
         self.left -= n as u64;
         *self.done += n as u64;
@@ -248,7 +339,13 @@ struct Records {
 /// is there already kept as it is; then take away what the archive does
 /// not hold, but for what is `skipped` and the folders a key of their own
 /// begins in. Tells how many bytes of file contents are written so far.
-pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicBool, progress: &mut dyn FnMut(u64)) -> Result<Unpacked> {
+pub fn unpack(
+    input: impl Read,
+    root: &Path,
+    skipped: &Skipped,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Unpacked> {
     let mut archive = Archive::new(input);
     let mut held: HashSet<PathBuf> = HashSet::new();
     let mut folders: Vec<(PathBuf, (i64, u32))> = Vec::new();
@@ -260,11 +357,16 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
         }
         let mut entry = entry.context("read the archive")?;
         let rel = entry.path().context("read the archive")?.into_owned();
-        ensure!(rel.components().all(|c| matches!(c, Component::Normal(_))), "the archive names {} outside its folder", rel.display());
+        ensure!(
+            rel.components().all(|c| matches!(c, Component::Normal(_))),
+            "the archive names {} outside its folder",
+            rel.display()
+        );
         if skipped.covers(&rel) || unpacked.unmade.iter().any(|u| rel.starts_with(u)) {
             continue;
         }
-        let records = records(&mut entry).with_context(|| format!("read what the archive holds of {}", rel.display()))?;
+        let records = records(&mut entry)
+            .with_context(|| format!("read what the archive holds of {}", rel.display()))?;
         let header = entry.header().clone();
         let path = root.join(&rel);
         let mtime = records.mtime.unwrap_or((header.mtime()? as i64, 0));
@@ -287,11 +389,20 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
                     folders.push((rel.clone(), mtime));
                 }
                 EntryType::Regular => {
-                    let name = path.file_name().context("it has no name")?.to_string_lossy().into_owned();
+                    let name = path
+                        .file_name()
+                        .context("it has no name")?
+                        .to_string_lossy()
+                        .into_owned();
                     let temp = path.with_file_name(format!(".{name}.skyward-restore"));
                     // One a restore that stopped left behind goes first.
                     remove_any(&temp)?;
-                    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temp).context("make it")?;
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(&temp)
+                        .context("make it")?;
                     let mut buf = vec![0u8; 1 << 20];
                     loop {
                         if cancel.load(Ordering::Relaxed) {
@@ -317,14 +428,22 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
                     fs::rename(&temp, &path).context("put it in place")?;
                 }
                 EntryType::Symlink => {
-                    let target = entry.link_name().context("read where it points")?.context("it points nowhere")?.into_owned();
+                    let target = entry
+                        .link_name()
+                        .context("read where it points")?
+                        .context("it points nowhere")?
+                        .into_owned();
                     remove_any(&path)?;
                     std::os::unix::fs::symlink(&target, &path).context("make it")?;
                     give(&path, &header, &records, true)?;
                     times(&path, mtime)?;
                 }
                 EntryType::Link => {
-                    let first = entry.link_name().context("read what it is another name of")?.context("it names no file")?.into_owned();
+                    let first = entry
+                        .link_name()
+                        .context("read what it is another name of")?
+                        .context("it names no file")?
+                        .into_owned();
                     remove_any(&path)?;
                     fs::hard_link(root.join(first), &path).context("make it")?;
                 }
@@ -335,8 +454,15 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
                     let made = match header.entry_type() {
                         EntryType::Fifo => unsafe { libc::mkfifo(c.as_ptr(), mode) },
                         kind => {
-                            let kind = if kind == EntryType::Char { libc::S_IFCHR } else { libc::S_IFBLK };
-                            let dev = libc::makedev(header.device_major()?.unwrap_or(0) as _, header.device_minor()?.unwrap_or(0) as _);
+                            let kind = if kind == EntryType::Char {
+                                libc::S_IFCHR
+                            } else {
+                                libc::S_IFBLK
+                            };
+                            let dev = libc::makedev(
+                                header.device_major()?.unwrap_or(0) as _,
+                                header.device_minor()?.unwrap_or(0) as _,
+                            );
                             unsafe { libc::mknod(c.as_ptr(), kind | mode, dev) }
                         }
                     };
@@ -357,8 +483,17 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
         }
         held.insert(rel);
     }
-    let dev = fs::symlink_metadata(root).with_context(|| format!("look at {}", root.display()))?.dev();
-    sweep(root, Path::new(""), dev, &held, skipped, key(root)?.as_deref())?;
+    let dev = fs::symlink_metadata(root)
+        .with_context(|| format!("look at {}", root.display()))?
+        .dev();
+    sweep(
+        root,
+        Path::new(""),
+        dev,
+        &held,
+        skipped,
+        key(root)?.as_deref(),
+    )?;
     // A folder's time goes last, its contents having changed it, the
     // deepest first.
     for (rel, mtime) in folders.iter().rev() {
@@ -371,7 +506,14 @@ pub fn unpack(input: impl Read, root: &Path, skipped: &Skipped, cancel: &AtomicB
 /// not: all but what is `skipped`, what another filesystem mounted inside
 /// holds, and the folders a key of their own begins in, which the system
 /// made; `above` is the key the folder's own entries are encrypted with.
-fn sweep(root: &Path, rel: &Path, dev: u64, held: &HashSet<PathBuf>, skipped: &Skipped, above: Option<&[u8]>) -> Result<()> {
+fn sweep(
+    root: &Path,
+    rel: &Path,
+    dev: u64,
+    held: &HashSet<PathBuf>,
+    skipped: &Skipped,
+    above: Option<&[u8]>,
+) -> Result<()> {
     for (name, path, meta) in children(&root.join(rel))? {
         let rel = rel.join(&name);
         if skipped.holds(&rel) || (meta.is_dir() && meta.dev() != dev) {
@@ -410,7 +552,9 @@ fn remove_any(path: &Path) -> Result<()> {
 
 fn records(entry: &mut tar::Entry<impl Read>) -> Result<Records> {
     let mut r = Records::default();
-    let Some(extensions) = entry.pax_extensions()? else { return Ok(r) };
+    let Some(extensions) = entry.pax_extensions()? else {
+        return Ok(r);
+    };
     for ext in extensions {
         let ext = ext?;
         let key = ext.key()?;
@@ -435,7 +579,13 @@ fn records(entry: &mut tar::Entry<impl Read>) -> Result<Records> {
 fn time(text: &str) -> Result<(i64, u32)> {
     let (secs, frac) = text.split_once('.').unwrap_or((text, ""));
     let digits: String = frac.chars().chain(std::iter::repeat('0')).take(9).collect();
-    Ok((secs.parse().with_context(|| format!("read the time {text}"))?, digits.parse().with_context(|| format!("read the time {text}"))?))
+    Ok((
+        secs.parse()
+            .with_context(|| format!("read the time {text}"))?,
+        digits
+            .parse()
+            .with_context(|| format!("read the time {text}"))?,
+    ))
 }
 
 /// Give an entry the owner, permissions and all else the archive held of
@@ -444,7 +594,8 @@ fn give(path: &Path, header: &Header, records: &Records, link: bool) -> Result<(
     let (uid, gid) = (header.uid()? as u32, header.gid()? as u32);
     std::os::unix::fs::lchown(path, Some(uid), Some(gid)).context("give it its owner")?;
     if !link {
-        fs::set_permissions(path, fs::Permissions::from_mode(header.mode()? & 0o7777)).context("give it its permissions")?;
+        fs::set_permissions(path, fs::Permissions::from_mode(header.mode()? & 0o7777))
+            .context("give it its permissions")?;
     }
     for (name, value) in &records.xattrs {
         set_xattr(path, name, value)?;
@@ -459,16 +610,29 @@ fn give(path: &Path, header: &Header, records: &Records, link: bool) -> Result<(
 /// same as the time it was read.
 fn times(path: &Path, (secs, nanos): (i64, u32)) -> Result<()> {
     let c = cstr(path)?;
-    let t = libc::timespec { tv_sec: secs as _, tv_nsec: nanos as _ };
-    if unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [t, t].as_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-        return Err(io::Error::last_os_error()).with_context(|| format!("give {} its times", path.display()));
+    let t = libc::timespec {
+        tv_sec: secs as _,
+        tv_nsec: nanos as _,
+    };
+    if unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c.as_ptr(),
+            [t, t].as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("give {} its times", path.display()));
     }
     Ok(())
 }
 
 fn cstr(path: &Path) -> Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(path.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", path.display()))
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", path.display()))
 }
 
 fn major(rdev: u64) -> u32 {
@@ -518,16 +682,28 @@ fn beyond(path: &Path, meta: &fs::Metadata) -> Result<Vec<(String, Vec<u8>)>> {
     if size < 0 {
         return Err(io::Error::last_os_error()).context("list its attributes");
     }
-    for raw in names[..size as usize].split(|&b| b == 0).filter(|n| !n.is_empty()) {
+    for raw in names[..size as usize]
+        .split(|&b| b == 0)
+        .filter(|n| !n.is_empty())
+    {
         let name = std::ffi::CString::new(raw).expect("a name split at NULs holds none");
         let len = unsafe { libc::lgetxattr(c.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0) };
         if len < 0 {
-            return Err(io::Error::last_os_error()).with_context(|| format!("read its attribute {name:?}"));
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("read its attribute {name:?}"));
         }
         let mut value = vec![0u8; len as usize];
-        let len = unsafe { libc::lgetxattr(c.as_ptr(), name.as_ptr(), value.as_mut_ptr().cast(), value.len()) };
+        let len = unsafe {
+            libc::lgetxattr(
+                c.as_ptr(),
+                name.as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+            )
+        };
         if len < 0 {
-            return Err(io::Error::last_os_error()).with_context(|| format!("read its attribute {name:?}"));
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("read its attribute {name:?}"));
         }
         value.truncate(len as usize);
         out.push((format!("{XATTR}{}", String::from_utf8_lossy(raw)), value));
@@ -580,7 +756,11 @@ fn set_project(path: &Path, project: u32, inherits: bool) -> Result<()> {
     let file = open_bare(path)?;
     let mut fsx = fs_attributes(path)?;
     fsx.projid = project;
-    fsx.xflags = if inherits { fsx.xflags | FS_XFLAG_PROJINHERIT } else { fsx.xflags & !FS_XFLAG_PROJINHERIT };
+    fsx.xflags = if inherits {
+        fsx.xflags | FS_XFLAG_PROJINHERIT
+    } else {
+        fsx.xflags & !FS_XFLAG_PROJINHERIT
+    };
     if unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_FSSETXATTR, &fsx) } != 0 {
         return Err(io::Error::last_os_error()).context("give it its project");
     }
@@ -597,8 +777,18 @@ fn set_project(_path: &Path, _project: u32, _inherits: bool) -> Result<()> {
 #[cfg(target_os = "android")]
 fn set_xattr(path: &Path, name: &str, value: &[u8]) -> Result<()> {
     let c = cstr(path)?;
-    let n = std::ffi::CString::new(name).with_context(|| format!("the attribute {name} holds a NUL"))?;
-    if unsafe { libc::lsetxattr(c.as_ptr(), n.as_ptr(), value.as_ptr().cast(), value.len(), 0) } != 0 {
+    let n = std::ffi::CString::new(name)
+        .with_context(|| format!("the attribute {name} holds a NUL"))?;
+    if unsafe {
+        libc::lsetxattr(
+            c.as_ptr(),
+            n.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    } != 0
+    {
         let e = io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::EOPNOTSUPP) {
             return Ok(());
@@ -625,9 +815,19 @@ fn key(path: &Path) -> Result<Option<Vec<u8>>> {
     let file = open_bare(path)?;
     let mut arg = [0u8; 8 + POLICY];
     arg[..8].copy_from_slice(&(POLICY as u64).to_ne_bytes());
-    if unsafe { libc::ioctl(file.as_raw_fd(), FS_IOC_GET_ENCRYPTION_POLICY_EX, arg.as_mut_ptr()) } != 0 {
+    if unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            FS_IOC_GET_ENCRYPTION_POLICY_EX,
+            arg.as_mut_ptr(),
+        )
+    } != 0
+    {
         let e = io::Error::last_os_error();
-        if matches!(e.raw_os_error(), Some(libc::ENODATA | libc::ENOTTY | libc::EOPNOTSUPP)) {
+        if matches!(
+            e.raw_os_error(),
+            Some(libc::ENODATA | libc::ENOTTY | libc::EOPNOTSUPP)
+        ) {
             return Ok(None);
         }
         return Err(e).with_context(|| format!("read how {} is encrypted", path.display()));
@@ -647,7 +847,8 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn scratch(test: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("skyward-archive-{test}-{}", std::process::id()));
+        let at =
+            std::env::temp_dir().join(format!("skyward-archive-{test}-{}", std::process::id()));
         if at.exists() {
             fs::remove_dir_all(&at).unwrap();
         }
@@ -664,15 +865,35 @@ mod tests {
     /// with two names, links, a pipe, and what is left out.
     fn tree(at: &Path) {
         fs::create_dir_all(at.join("data/com.example/files")).unwrap();
-        fs::write(at.join("data/com.example/files/notes.db"), vec![7u8; 300_000]).unwrap();
-        fs::set_permissions(at.join("data/com.example/files/notes.db"), fs::Permissions::from_mode(0o660)).unwrap();
-        fs::set_permissions(at.join("data/com.example"), fs::Permissions::from_mode(0o751)).unwrap();
+        fs::write(
+            at.join("data/com.example/files/notes.db"),
+            vec![7u8; 300_000],
+        )
+        .unwrap();
+        fs::set_permissions(
+            at.join("data/com.example/files/notes.db"),
+            fs::Permissions::from_mode(0o660),
+        )
+        .unwrap();
+        fs::set_permissions(
+            at.join("data/com.example"),
+            fs::Permissions::from_mode(0o751),
+        )
+        .unwrap();
         fs::write(at.join("data/com.example/empty"), b"").unwrap();
-        fs::hard_link(at.join("data/com.example/files/notes.db"), at.join("data/com.example/notes-link.db")).unwrap();
+        fs::hard_link(
+            at.join("data/com.example/files/notes.db"),
+            at.join("data/com.example/notes-link.db"),
+        )
+        .unwrap();
         symlink("/data/user/0", at.join("data/self")).unwrap();
         fifo(&at.join("data/com.example/pipe"));
         fs::create_dir_all(at.join("system_de/0/spblob")).unwrap();
-        fs::write(at.join("system_de/0/spblob/secret"), b"bound to the secure world").unwrap();
+        fs::write(
+            at.join("system_de/0/spblob/secret"),
+            b"bound to the secure world",
+        )
+        .unwrap();
         fs::write(at.join("system_de/0/settings.xml"), b"<settings/>").unwrap();
         fs::create_dir_all(at.join("media/0/DCIM")).unwrap();
         fs::write(at.join("media/0/DCIM/photo.jpg"), b"jpeg").unwrap();
@@ -688,12 +909,28 @@ mod tests {
         let (from, to) = (at.join("from"), at.join("to"));
         tree(&from);
         #[cfg(target_os = "android")]
-        set_xattr(&from.join("data/com.example/empty"), "user.skyward", b"kept").unwrap();
+        set_xattr(
+            &from.join("data/com.example/empty"),
+            "user.skyward",
+            b"kept",
+        )
+        .unwrap();
         let (bytes, entries) = measure(&from, &skipped(), &AtomicBool::new(false)).unwrap();
-        assert_eq!((bytes, entries), (300_000 + 11, 11), "what is left out is not counted, nor a second name");
+        assert_eq!(
+            (bytes, entries),
+            (300_000 + 11, 11),
+            "what is left out is not counted, nor a second name"
+        );
         let mut archived = Vec::new();
         let mut told = 0;
-        pack(&from, &skipped(), &mut archived, &AtomicBool::new(false), &mut |n| told = n).unwrap();
+        pack(
+            &from,
+            &skipped(),
+            &mut archived,
+            &AtomicBool::new(false),
+            &mut |n| told = n,
+        )
+        .unwrap();
         assert_eq!(told, 300_000 + 11, "a file with two names is archived once");
         // What is there before goes, but for what is left out.
         fs::create_dir_all(to.join("data/com.removed/cache")).unwrap();
@@ -701,35 +938,106 @@ mod tests {
         fs::create_dir_all(to.join("data/com.example")).unwrap();
         fs::write(to.join("data/com.example/stale"), b"old").unwrap();
         fs::create_dir_all(to.join("system_de/0/spblob")).unwrap();
-        fs::write(to.join("system_de/0/spblob/current"), b"the secure world's own").unwrap();
+        fs::write(
+            to.join("system_de/0/spblob/current"),
+            b"the secure world's own",
+        )
+        .unwrap();
         fs::create_dir_all(to.join("media/0")).unwrap();
         fs::write(to.join("media/0/kept.jpg"), b"jpeg").unwrap();
-        let unpacked = unpack(archived.as_slice(), &to, &skipped(), &AtomicBool::new(false), &mut |_| {}).unwrap();
+        let unpacked = unpack(
+            archived.as_slice(),
+            &to,
+            &skipped(),
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(unpacked, Unpacked::default());
-        assert_eq!(fs::read(to.join("data/com.example/files/notes.db")).unwrap(), vec![7u8; 300_000]);
-        assert_eq!(fs::metadata(to.join("data/com.example/files/notes.db")).unwrap().mode() & 0o7777, 0o660);
-        assert_eq!(fs::metadata(to.join("data/com.example")).unwrap().mode() & 0o7777, 0o751);
-        let (a, b) = (fs::metadata(to.join("data/com.example/files/notes.db")).unwrap(), fs::metadata(to.join("data/com.example/notes-link.db")).unwrap());
+        assert_eq!(
+            fs::read(to.join("data/com.example/files/notes.db")).unwrap(),
+            vec![7u8; 300_000]
+        );
+        assert_eq!(
+            fs::metadata(to.join("data/com.example/files/notes.db"))
+                .unwrap()
+                .mode()
+                & 0o7777,
+            0o660
+        );
+        assert_eq!(
+            fs::metadata(to.join("data/com.example")).unwrap().mode() & 0o7777,
+            0o751
+        );
+        let (a, b) = (
+            fs::metadata(to.join("data/com.example/files/notes.db")).unwrap(),
+            fs::metadata(to.join("data/com.example/notes-link.db")).unwrap(),
+        );
         assert_eq!(a.ino(), b.ino(), "two names of one file stay so");
-        assert_eq!(fs::read_link(to.join("data/self")).unwrap(), Path::new("/data/user/0"));
-        assert!(fs::symlink_metadata(to.join("data/com.example/pipe")).unwrap().file_type().is_fifo());
+        assert_eq!(
+            fs::read_link(to.join("data/self")).unwrap(),
+            Path::new("/data/user/0")
+        );
+        assert!(fs::symlink_metadata(to.join("data/com.example/pipe"))
+            .unwrap()
+            .file_type()
+            .is_fifo());
         assert_eq!(fs::read(to.join("data/com.example/empty")).unwrap(), b"");
-        assert_eq!(fs::read(to.join("system_de/0/settings.xml")).unwrap(), b"<settings/>");
-        assert!(!to.join("data/com.removed").exists(), "an app's folder the backup does not hold goes");
+        assert_eq!(
+            fs::read(to.join("system_de/0/settings.xml")).unwrap(),
+            b"<settings/>"
+        );
+        assert!(
+            !to.join("data/com.removed").exists(),
+            "an app's folder the backup does not hold goes"
+        );
         assert!(!to.join("data/com.example/stale").exists());
-        assert_eq!(fs::read(to.join("system_de/0/spblob/current")).unwrap(), b"the secure world's own", "what is left out stays");
-        assert!(!to.join("system_de/0/spblob/secret").exists(), "and none of the backup's goes in");
+        assert_eq!(
+            fs::read(to.join("system_de/0/spblob/current")).unwrap(),
+            b"the secure world's own",
+            "what is left out stays"
+        );
+        assert!(
+            !to.join("system_de/0/spblob/secret").exists(),
+            "and none of the backup's goes in"
+        );
         assert!(to.join("media/0/kept.jpg").exists());
-        for rel in ["data/com.example/files/notes.db", "data/com.example", "data/self"] {
-            let (was, now) = (fs::symlink_metadata(from.join(rel)).unwrap(), fs::symlink_metadata(to.join(rel)).unwrap());
-            assert_eq!((was.mtime(), was.mtime_nsec()), (now.mtime(), now.mtime_nsec()), "{rel} keeps its time");
+        for rel in [
+            "data/com.example/files/notes.db",
+            "data/com.example",
+            "data/self",
+        ] {
+            let (was, now) = (
+                fs::symlink_metadata(from.join(rel)).unwrap(),
+                fs::symlink_metadata(to.join(rel)).unwrap(),
+            );
+            assert_eq!(
+                (was.mtime(), was.mtime_nsec()),
+                (now.mtime(), now.mtime_nsec()),
+                "{rel} keeps its time"
+            );
         }
         #[cfg(target_os = "android")]
-        for rel in ["data/com.example/files/notes.db", "data/com.example/empty", "data/com.example", "data/self", "data/com.example/pipe"] {
+        for rel in [
+            "data/com.example/files/notes.db",
+            "data/com.example/empty",
+            "data/com.example",
+            "data/self",
+            "data/com.example/pipe",
+        ] {
             let (was, now) = (from.join(rel), to.join(rel));
             let held = |p: &Path| beyond(p, &fs::symlink_metadata(p).unwrap()).unwrap();
-            assert_eq!(held(&was), held(&now), "{rel} keeps its label and all else beyond its contents");
-            assert!(held(&now).iter().any(|(k, _)| k == "SCHILY.xattr.security.selinux"), "{rel} has a label");
+            assert_eq!(
+                held(&was),
+                held(&now),
+                "{rel} keeps its label and all else beyond its contents"
+            );
+            assert!(
+                held(&now)
+                    .iter()
+                    .any(|(k, _)| k == "SCHILY.xattr.security.selinux"),
+                "{rel} has a label"
+            );
         }
         fs::remove_dir_all(&at).unwrap();
     }
@@ -744,8 +1052,18 @@ mod tests {
         let e = pack(&at.join("from"), &skipped(), io::sink(), &stop, &mut |_| {}).unwrap_err();
         assert!(e.is::<Cancelled>(), "{e:#}");
         let partway = AtomicBool::new(false);
-        let e = pack(&at.join("from"), &skipped(), io::sink(), &partway, &mut |n| partway.store(n > 0, Ordering::Relaxed)).unwrap_err();
-        assert!(e.is::<Cancelled>(), "stopped in the middle of a file: {e:#}");
+        let e = pack(
+            &at.join("from"),
+            &skipped(),
+            io::sink(),
+            &partway,
+            &mut |n| partway.store(n > 0, Ordering::Relaxed),
+        )
+        .unwrap_err();
+        assert!(
+            e.is::<Cancelled>(),
+            "stopped in the middle of a file: {e:#}"
+        );
         fs::remove_dir_all(&at).unwrap();
     }
 

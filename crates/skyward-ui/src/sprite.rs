@@ -19,7 +19,13 @@ impl Sprite {
     /// What `draw` inks on a `w`×`h` canvas whose top-left corner is at
     /// (`x`, `y`), taken down to whole pixels; `draw` works in those outer
     /// coordinates, offset by the two numbers it is given.
-    pub fn capture(x: f32, y: f32, w: u32, h: u32, draw: impl FnOnce(&mut Canvas, f32, f32)) -> Sprite {
+    pub fn capture(
+        x: f32,
+        y: f32,
+        w: u32,
+        h: u32,
+        draw: impl FnOnce(&mut Canvas, f32, f32),
+    ) -> Sprite {
         let (x, y) = (x.floor(), y.floor());
         let mut c = Canvas::new(w, h);
         draw(&mut c, -x, -y);
@@ -39,7 +45,9 @@ impl Sprite {
         }
         let (w, h) = (self.w as usize, self.h as usize);
         let width = 2 * half + 1;
-        let mean: Vec<u8> = (0..=255 * width).map(|s| ((s + width / 2) / width) as u8).collect();
+        let mean: Vec<u8> = (0..=255 * width)
+            .map(|s| ((s + width / 2) / width) as u8)
+            .collect();
         let mut a = self.cov.clone();
         let mut b = vec![0u8; a.len()];
         let mut sums = vec![0u32; w];
@@ -60,12 +68,17 @@ impl Sprite {
                 sums.iter_mut().zip(row).for_each(|(s, &v)| *s += v as u32);
             }
             for y in 0..h {
-                a[y * w..(y + 1) * w].iter_mut().zip(&sums).for_each(|(d, &s)| *d = mean[s as usize]);
+                a[y * w..(y + 1) * w]
+                    .iter_mut()
+                    .zip(&sums)
+                    .for_each(|(d, &s)| *d = mean[s as usize]);
                 if let Some(row) = b.get((y + half + 1) * w..(y + half + 2) * w) {
                     sums.iter_mut().zip(row).for_each(|(s, &v)| *s += v as u32);
                 }
                 if let Some(up) = y.checked_sub(half) {
-                    sums.iter_mut().zip(&b[up * w..(up + 1) * w]).for_each(|(s, &v)| *s -= v as u32);
+                    sums.iter_mut()
+                        .zip(&b[up * w..(up + 1) * w])
+                        .for_each(|(s, &v)| *s -= v as u32);
                 }
             }
         }
@@ -75,7 +88,10 @@ impl Sprite {
     /// Lay the sprite moved by (`dx`, `dy`), rounded to whole pixels, in
     /// `color` at `alpha` of its strength, over an opaque canvas.
     pub fn draw(&self, c: &mut Canvas, dx: f32, dy: f32, color: Rgba, alpha: f32) {
-        assert!(c.whole(), "a sprite is drawn on a canvas holding all its rows");
+        assert!(
+            c.whole(),
+            "a sprite is drawn on a canvas holding all its rows"
+        );
         if alpha <= 0.0 {
             return;
         }
@@ -109,13 +125,26 @@ impl Sprite {
     /// The sprite shrunk or grown by `scale` about its centre, moved by
     /// (`dx`, `dy`), in `color` at `alpha` of its strength, over an opaque
     /// canvas.
-    pub fn draw_scaled(&self, c: &mut Canvas, dx: f32, dy: f32, scale: f32, color: Rgba, alpha: f32) {
+    pub fn draw_scaled(
+        &self,
+        c: &mut Canvas,
+        dx: f32,
+        dy: f32,
+        scale: f32,
+        color: Rgba,
+        alpha: f32,
+    ) {
         if scale == 1.0 {
             self.draw(c, dx, dy, color, alpha);
             return;
         }
-        assert!(c.whole(), "a sprite is drawn on a canvas holding all its rows");
-        let Some((x0, y0, x1, y1)) = self.bounds(dx, dy, scale, c.w as usize, c.h as usize) else { return };
+        assert!(
+            c.whole(),
+            "a sprite is drawn on a canvas holding all its rows"
+        );
+        let Some((x0, y0, x1, y1)) = self.bounds(dx, dy, scale, c.w as usize, c.h as usize) else {
+            return;
+        };
         if alpha <= 0.0 {
             return;
         }
@@ -138,12 +167,28 @@ impl Sprite {
     /// The screen pixels, columns `x0..x1` of rows `y0..y1`, that the
     /// sprite grown by `scale` about its centre and moved by (`dx`, `dy`)
     /// touches on a `w`×`h` screen; none when it lies off the screen.
-    pub fn bounds(&self, dx: f32, dy: f32, scale: f32, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+    pub fn bounds(
+        &self,
+        dx: f32,
+        dy: f32,
+        scale: f32,
+        w: usize,
+        h: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
         let (sw, sh) = (self.w as f32 * scale, self.h as f32 * scale);
-        let (cx, cy) = (self.x + dx + self.w as f32 / 2.0, self.y + dy + self.h as f32 / 2.0);
+        let (cx, cy) = (
+            self.x + dx + self.w as f32 / 2.0,
+            self.y + dy + self.h as f32 / 2.0,
+        );
         let clip = |v: f32, max: usize| v.clamp(0.0, max as f32) as usize;
-        let (x0, x1) = (clip((cx - sw / 2.0).floor(), w), clip((cx + sw / 2.0).ceil(), w));
-        let (y0, y1) = (clip((cy - sh / 2.0).floor(), h), clip((cy + sh / 2.0).ceil(), h));
+        let (x0, x1) = (
+            clip((cx - sw / 2.0).floor(), w),
+            clip((cx + sw / 2.0).ceil(), w),
+        );
+        let (y0, y1) = (
+            clip((cy - sh / 2.0).floor(), h),
+            clip((cy + sh / 2.0).ceil(), h),
+        );
         (x0 < x1 && y0 < y1).then_some((x0, y0, x1, y1))
     }
 
@@ -165,7 +210,8 @@ impl Sprite {
                 let from = x0 as i64 - left as i64;
                 let a = (-from).clamp(0, out.len() as i64) as usize;
                 let b = (w as i64 - from).clamp(a as i64, out.len() as i64) as usize;
-                out[a..b].copy_from_slice(&src[(from + a as i64) as usize..(from + b as i64) as usize]);
+                out[a..b]
+                    .copy_from_slice(&src[(from + a as i64) as usize..(from + b as i64) as usize]);
             }
             return;
         }
@@ -174,9 +220,14 @@ impl Sprite {
         let sy = (y as f32 + 0.5 - cy) / scale + h as f32 / 2.0 - 0.5;
         let iy = sy.floor();
         let fy = ((sy - iy) * 256.0) as u32;
-        let line = |r: f32| (r >= 0.0 && r < h as f32).then(|| &self.cov[r as usize * w..(r as usize + 1) * w]);
+        let line = |r: f32| {
+            (r >= 0.0 && r < h as f32).then(|| &self.cov[r as usize * w..(r as usize + 1) * w])
+        };
         let (upper, lower) = (line(iy), line(iy + 1.0));
-        let at = |l: Option<&[u8]>, ix: i32| l.and_then(|l| usize::try_from(ix).ok().and_then(|i| l.get(i))).map_or(0, |&v| v as u32);
+        let at = |l: Option<&[u8]>, ix: i32| {
+            l.and_then(|l| usize::try_from(ix).ok().and_then(|i| l.get(i)))
+                .map_or(0, |&v| v as u32)
+        };
         // Sprite column, in 16.16 fixed point, of each screen pixel's centre.
         let mut sx = (((x0 as f32 + 0.5 - cx) / scale + w as f32 / 2.0 - 0.5) * ONE) as i32;
         let step = (ONE / scale) as i32;
@@ -198,7 +249,10 @@ pub struct Blurs {
 
 impl Blurs {
     pub fn new(sharp: Sprite) -> Blurs {
-        Blurs { sharp, blurred: Vec::new() }
+        Blurs {
+            sharp,
+            blurred: Vec::new(),
+        }
     }
 
     /// The sprite blurred by about `radius` pixels, to the nearest box
@@ -221,7 +275,9 @@ mod tests {
     use super::*;
 
     fn dot() -> Sprite {
-        Sprite::capture(10.0, 20.0, 40, 40, |c, dx, dy| c.fill_rect(25.0 + dx, 35.0 + dy, 10.0, 10.0, Rgba::rgb(0, 0, 0)))
+        Sprite::capture(10.0, 20.0, 40, 40, |c, dx, dy| {
+            c.fill_rect(25.0 + dx, 35.0 + dy, 10.0, 10.0, Rgba::rgb(0, 0, 0))
+        })
     }
 
     fn white(w: u32, h: u32) -> Canvas {

@@ -20,10 +20,15 @@ const NO_PROTECTOR: i64 = 0;
 /// Which protector `user`'s own credential opens, named as its files are.
 /// A phone that recorded none for this user gives nothing.
 pub fn current_protector(database: &Path, user: u32) -> Result<Option<String>> {
-    let Some(recorded) = value(database, CURRENT_PROTECTOR, user)? else { return Ok(None) };
-    let id: i64 = recorded
-        .parse()
-        .with_context(|| format!("{} records user {user}'s protector as {recorded:?}", database.display()))?;
+    let Some(recorded) = value(database, CURRENT_PROTECTOR, user)? else {
+        return Ok(None);
+    };
+    let id: i64 = recorded.parse().with_context(|| {
+        format!(
+            "{} records user {user}'s protector as {recorded:?}",
+            database.display()
+        )
+    })?;
     Ok((id != NO_PROTECTOR).then(|| crate::user::protector_name(id)))
 }
 
@@ -34,17 +39,22 @@ pub fn current_protector(database: &Path, user: u32) -> Result<Option<String>> {
 fn value(database: &Path, name: &str, user: u32) -> Result<Option<String>> {
     let at = format!("file:{}?immutable=1", database.display());
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI;
-    let db = rusqlite::Connection::open_with_flags(&at, flags).with_context(|| format!("open {}", database.display()))?;
+    let db = rusqlite::Connection::open_with_flags(&at, flags)
+        .with_context(|| format!("open {}", database.display()))?;
     let mut query = db
         .prepare("SELECT value FROM locksettings WHERE name = ?1 AND user = ?2")
         .context("ask the lock settings what they keep")?;
     let mut rows = query
         .query((name, user))
         .with_context(|| format!("ask the lock settings what {name} is for user {user}"))?;
-    let Some(row) = rows.next().with_context(|| format!("read what {} says about {name}", database.display()))? else {
+    let Some(row) = rows
+        .next()
+        .with_context(|| format!("read what {} says about {name}", database.display()))?
+    else {
         return Ok(None);
     };
-    row.get(0).with_context(|| format!("read what {name} is for user {user}"))
+    row.get(0)
+        .with_context(|| format!("read what {name} is for user {user}"))
 }
 
 #[cfg(test)]
@@ -54,34 +64,61 @@ mod tests {
     /// Lock settings as the phone writes them: the table it keeps, holding
     /// the rows given.
     fn scratch(test: &str, rows: &[(&str, u32, Option<&str>)]) -> std::path::PathBuf {
-        let at = std::env::temp_dir().join(format!("skyward-locksettings-{test}-{}.db", std::process::id()));
+        let at = std::env::temp_dir().join(format!(
+            "skyward-locksettings-{test}-{}.db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&at);
         let db = rusqlite::Connection::open(&at).unwrap();
         db.execute("CREATE TABLE locksettings (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, user INTEGER, value TEXT)", ()).unwrap();
         for (name, user, value) in rows {
-            db.execute("INSERT INTO locksettings (name, user, value) VALUES (?1, ?2, ?3)", (name, user, value)).unwrap();
+            db.execute(
+                "INSERT INTO locksettings (name, user, value) VALUES (?1, ?2, ?3)",
+                (name, user, value),
+            )
+            .unwrap();
         }
         at
     }
 
     #[test]
     fn the_protector_recorded_for_a_user_is_the_one_named() {
-        let at = scratch("recorded", &[
-            ("sp-handle", 0, Some("623346955855960006")),
-            ("sp-handle", 10, Some("-1")),
-            ("lockscreen.password_type", 0, Some("65536")),
-        ]);
-        assert_eq!(current_protector(&at, 0).unwrap().as_deref(), Some("08a692c0f39d97c6"));
-        assert_eq!(current_protector(&at, 10).unwrap().as_deref(), Some("ffffffffffffffff"));
-        assert_eq!(current_protector(&at, 11).unwrap(), None, "a user the phone recorded nothing for");
+        let at = scratch(
+            "recorded",
+            &[
+                ("sp-handle", 0, Some("623346955855960006")),
+                ("sp-handle", 10, Some("-1")),
+                ("lockscreen.password_type", 0, Some("65536")),
+            ],
+        );
+        assert_eq!(
+            current_protector(&at, 0).unwrap().as_deref(),
+            Some("08a692c0f39d97c6")
+        );
+        assert_eq!(
+            current_protector(&at, 10).unwrap().as_deref(),
+            Some("ffffffffffffffff")
+        );
+        assert_eq!(
+            current_protector(&at, 11).unwrap(),
+            None,
+            "a user the phone recorded nothing for"
+        );
         std::fs::remove_file(&at).unwrap();
     }
 
     #[test]
     fn the_number_of_no_protector_and_a_row_holding_nothing_give_none() {
-        let at = scratch("none", &[("sp-handle", 0, Some("0")), ("sp-handle", 10, None)]);
+        let at = scratch(
+            "none",
+            &[("sp-handle", 0, Some("0")), ("sp-handle", 10, None)],
+        );
         assert_eq!(current_protector(&at, 0).unwrap(), None);
-        assert_eq!(current_protector(&at, 10).unwrap(), None, "a row holding nothing");
+        assert_eq!(
+            current_protector(&at, 10).unwrap(),
+            None,
+            "a row holding nothing"
+        );
         std::fs::remove_file(&at).unwrap();
     }
 

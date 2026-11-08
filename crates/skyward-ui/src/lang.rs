@@ -46,14 +46,17 @@ impl Lang {
     /// every other language in English.
     pub fn for_locale(tag: &str) -> Result<Lang> {
         // ICU takes a hyphen alone between the parts of a locale.
-        let locale = Locale::try_from_str(&tag.replace('_', "-")).with_context(|| format!("read the locale {tag:?}"))?;
+        let locale = Locale::try_from_str(&tag.replace('_', "-"))
+            .with_context(|| format!("read the locale {tag:?}"))?;
         let id = locale.id;
         if id.language.as_str() != "zh" {
             return Ok(Lang::En);
         }
         let traditional = match id.script {
             Some(script) => script.as_str() == "Hant",
-            None => id.region.is_some_and(|r| matches!(r.as_str(), "TW" | "HK" | "MO")),
+            None => id
+                .region
+                .is_some_and(|r| matches!(r.as_str(), "TW" | "HK" | "MO")),
         };
         Ok(if traditional { Lang::Hant } else { Lang::Hans })
     }
@@ -120,11 +123,20 @@ mod tests {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for entry in fs::read_dir(&src).unwrap() {
             let path = entry.unwrap().path();
-            let file = syn::parse_file(&fs::read_to_string(&path).unwrap()).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+            let file = syn::parse_file(&fs::read_to_string(&path).unwrap())
+                .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
             texts.visit_file(&file);
         }
-        assert!(texts.0.iter().any(|t| t.contains("簽章")), "the texts in traditional characters are read");
-        let missing: BTreeSet<char> = texts.0.iter().flat_map(|t| t.chars()).filter(|&ch| !ch.is_control() && !f.body.has(ch)).collect();
+        assert!(
+            texts.0.iter().any(|t| t.contains("簽章")),
+            "the texts in traditional characters are read"
+        );
+        let missing: BTreeSet<char> = texts
+            .0
+            .iter()
+            .flat_map(|t| t.chars())
+            .filter(|&ch| !ch.is_control() && !f.body.has(ch))
+            .collect();
         assert!(missing.is_empty(), "MiSans draws none of {missing:?}");
     }
 
@@ -138,7 +150,11 @@ mod tests {
         assert_eq!(of("zh-TW"), Lang::Hant);
         assert_eq!(of("zh-HK"), Lang::Hant);
         assert_eq!(of("zh-Hant-TW"), Lang::Hant);
-        assert_eq!(of("zh-Hans-HK"), Lang::Hans, "a script named wins over the region");
+        assert_eq!(
+            of("zh-Hans-HK"),
+            Lang::Hans,
+            "a script named wins over the region"
+        );
         assert_eq!(of("en-US"), Lang::En);
         assert_eq!(of("ja-JP"), Lang::En, "a language the pages do not speak");
         assert!(Lang::for_locale("not a locale").is_err());
@@ -155,7 +171,18 @@ mod tests {
     fn a_text_is_picked_and_made_in_the_language() {
         assert_eq!(Lang::Hant.pick(["设置", "設定", "Settings"]), "設定");
         let base = "vendor";
-        assert_eq!(tr!(Lang::En, "挂载 {base} 失败", "掛載 {base} 失敗", "Couldn't mount {base}"), "Couldn't mount vendor");
-        assert_eq!(Lang::ALL.map(Lang::name), ["简体中文", "繁體中文", "English"]);
+        assert_eq!(
+            tr!(
+                Lang::En,
+                "挂载 {base} 失败",
+                "掛載 {base} 失敗",
+                "Couldn't mount {base}"
+            ),
+            "Couldn't mount vendor"
+        );
+        assert_eq!(
+            Lang::ALL.map(Lang::name),
+            ["简体中文", "繁體中文", "English"]
+        );
     }
 }

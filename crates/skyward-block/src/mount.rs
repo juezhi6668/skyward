@@ -26,6 +26,8 @@ const FLAGS: [(&str, u64); 18] = [
     ("defaults", 0),
 ];
 
+use anyhow::Context;
+
 /// Split the mount options of a phone's table into the kernel's flags and
 /// the options the filesystem reads, joined the way the kernel takes them.
 pub fn split_options(options: &[String]) -> (u64, String) {
@@ -48,6 +50,26 @@ pub struct Visible {
     pub filesystem: String,
 }
 
+/// Make `target` able to hold a mount.
+///
+/// A table written for the running system can name a mount point that is a
+/// link into another partition: this phone's `/cache` is a link to
+/// `/data/cache`, and where the system never made that folder, mounting
+/// follows the link and finds nothing -- so the link gives way to the
+/// folder the table means, for as long as the recovery runs. A link that
+/// does lead somewhere is left alone, since its target is where the phone
+/// keeps what it mounts there.
+pub fn prepare(target: &std::path::Path) -> anyhow::Result<()> {
+    let nowhere = std::fs::symlink_metadata(target)
+        .ok()
+        .is_some_and(|meta| meta.file_type().is_symlink() && !target.exists());
+    if nowhere {
+        std::fs::remove_file(target)
+            .with_context(|| format!("take the link off {}", target.display()))?;
+    }
+    std::fs::create_dir_all(target).with_context(|| format!("make {}", target.display()))
+}
+
 #[cfg(target_os = "android")]
 mod sys {
     use super::{Visible, FILESYSTEMS};
@@ -68,7 +90,8 @@ mod sys {
     const PARK: &str = "/skyward/park";
 
     fn cstr(p: &Path) -> Result<CString> {
-        CString::new(p.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", p.display()))
+        CString::new(p.as_os_str().as_bytes())
+            .with_context(|| format!("{} holds a NUL", p.display()))
     }
 
     fn os_error() -> std::io::Error {
@@ -83,18 +106,34 @@ mod sys {
         let mut refused = Vec::new();
         for fs in FILESYSTEMS {
             let ty = CString::new(fs).expect("filesystem names hold no NUL");
-            if unsafe { libc::mount(src.as_ptr(), dst.as_ptr(), ty.as_ptr(), libc::MS_RDONLY, null()) } == 0 {
+            if unsafe {
+                libc::mount(
+                    src.as_ptr(),
+                    dst.as_ptr(),
+                    ty.as_ptr(),
+                    libc::MS_RDONLY,
+                    null(),
+                )
+            } == 0
+            {
                 return Ok(fs);
             }
             let e = os_error();
             match e.raw_os_error() {
                 Some(libc::EINVAL | libc::ENODEV) => refused.push(format!("{fs}: {e}")),
                 _ => {
-                    return Err(e).with_context(|| format!("mount {} on {} as {fs}", device.display(), target.display()))
+                    return Err(e).with_context(|| {
+                        format!("mount {} on {} as {fs}", device.display(), target.display())
+                    })
                 }
             }
         }
-        bail!("{} holds none of {} ({})", device.display(), FILESYSTEMS.join(", "), refused.join("; "))
+        bail!(
+            "{} holds none of {} ({})",
+            device.display(),
+            FILESYSTEMS.join(", "),
+            refused.join("; ")
+        )
     }
 
     /// Mount `device` at `target` as `filesystem` with `options` as a
@@ -104,17 +143,42 @@ mod sys {
         let (src, dst) = (cstr(device)?, cstr(target)?);
         let ty = CString::new(filesystem).with_context(|| format!("{filesystem} holds a NUL"))?;
         let data = CString::new(own.as_str()).with_context(|| format!("{own} holds a NUL"))?;
-        if unsafe { libc::mount(src.as_ptr(), dst.as_ptr(), ty.as_ptr(), flags as libc::c_ulong, data.as_ptr().cast()) } != 0 {
-            return Err(os_error())
-                .with_context(|| format!("mount {} on {} as {filesystem} with {}", device.display(), target.display(), options.join(",")));
+        if unsafe {
+            libc::mount(
+                src.as_ptr(),
+                dst.as_ptr(),
+                ty.as_ptr(),
+                flags as libc::c_ulong,
+                data.as_ptr().cast(),
+            )
+        } != 0
+        {
+            return Err(os_error()).with_context(|| {
+                format!(
+                    "mount {} on {} as {filesystem} with {}",
+                    device.display(),
+                    target.display(),
+                    options.join(",")
+                )
+            });
         }
         Ok(())
     }
 
     /// Show the folder `from` at `to` as well: one tree, reached from both.
     pub fn bind(from: &Path, to: &Path) -> Result<()> {
-        if unsafe { libc::mount(cstr(from)?.as_ptr(), cstr(to)?.as_ptr(), null(), libc::MS_BIND, null()) } != 0 {
-            return Err(os_error()).with_context(|| format!("show {} at {}", from.display(), to.display()));
+        if unsafe {
+            libc::mount(
+                cstr(from)?.as_ptr(),
+                cstr(to)?.as_ptr(),
+                null(),
+                libc::MS_BIND,
+                null(),
+            )
+        } != 0
+        {
+            return Err(os_error())
+                .with_context(|| format!("show {} at {}", from.display(), to.display()));
         }
         Ok(())
     }
@@ -146,14 +210,20 @@ mod sys {
     /// Every mount by its id, which no other mount has while it stays, and
     /// where it is, in the order they were made.
     pub fn mount_ids() -> Result<Vec<(i32, PathBuf)>> {
-        Ok(mounts()?.into_iter().map(|m| (m.mnt_id, m.mount_point)).collect())
+        Ok(mounts()?
+            .into_iter()
+            .map(|m| (m.mnt_id, m.mount_point))
+            .collect())
     }
 
     /// Where the device numbered `device` is mounted.
     pub fn points_of(device: (u32, u32)) -> Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         for m in mounts()? {
-            let (major, minor) = m.majmin.split_once(':').with_context(|| format!("device number {:?}", m.majmin))?;
+            let (major, minor) = m
+                .majmin
+                .split_once(':')
+                .with_context(|| format!("device number {:?}", m.majmin))?;
             if (major.parse::<u32>()?, minor.parse::<u32>()?) == device {
                 out.push(m.mount_point);
             }
@@ -167,7 +237,8 @@ mod sys {
         let c = cstr(target)?;
         let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-            return Err(os_error()).with_context(|| format!("look at the mount on {}", target.display()));
+            return Err(os_error())
+                .with_context(|| format!("look at the mount on {}", target.display()));
         }
         let kept = [
             (libc::ST_NOSUID, libc::MS_NOSUID),
@@ -195,8 +266,14 @@ mod sys {
         let Some(m) = mounts()?.into_iter().rev().find(|m| m.mount_point == path) else {
             return Ok(None);
         };
-        let (major, minor) = m.majmin.split_once(':').with_context(|| format!("device number {:?}", m.majmin))?;
-        Ok(Some(Visible { device: (major.parse()?, minor.parse()?), filesystem: m.fs_type }))
+        let (major, minor) = m
+            .majmin
+            .split_once(':')
+            .with_context(|| format!("device number {:?}", m.majmin))?;
+        Ok(Some(Visible {
+            device: (major.parse()?, minor.parse()?),
+            filesystem: m.fs_type,
+        }))
     }
 
     fn remount(target: &Path, flags: libc::c_ulong, what: &str) -> Result<()> {
@@ -207,8 +284,19 @@ mod sys {
     }
 
     fn move_mount(from: &Path, to: &Path) -> Result<()> {
-        if unsafe { libc::mount(cstr(from)?.as_ptr(), cstr(to)?.as_ptr(), null(), libc::MS_MOVE, null()) } != 0 {
-            return Err(os_error()).with_context(|| format!("move the mount on {} to {}", from.display(), to.display()));
+        if unsafe {
+            libc::mount(
+                cstr(from)?.as_ptr(),
+                cstr(to)?.as_ptr(),
+                null(),
+                libc::MS_MOVE,
+                null(),
+            )
+        } != 0
+        {
+            return Err(os_error()).with_context(|| {
+                format!("move the mount on {} to {}", from.display(), to.display())
+            });
         }
         Ok(())
     }
@@ -229,15 +317,25 @@ mod sys {
         let below = |m: &MountInfo| m.mount_point.starts_with(target) && m.mount_point != target;
         let nested: HashSet<i32> = all.iter().filter(|m| below(m)).map(|m| m.mnt_id).collect();
         // `pid` is the parent mount's id.
-        let top: Vec<&MountInfo> = all.iter().filter(|m| below(m) && !nested.contains(&m.pid)).collect();
+        let top: Vec<&MountInfo> = all
+            .iter()
+            .filter(|m| below(m) && !nested.contains(&m.pid))
+            .collect();
         let mut parked = Parked::default();
         if top.is_empty() {
             return Ok(parked);
         }
-        let rootfs = all.iter().rev().find(|m| m.mount_point == Path::new("/")).map(|m| m.mnt_id);
+        let rootfs = all
+            .iter()
+            .rev()
+            .find(|m| m.mount_point == Path::new("/"))
+            .map(|m| m.mnt_id);
         let parents: HashSet<i32> = top.iter().map(|m| m.pid).chain(rootfs).collect();
         for m in all.iter().filter(|m| parents.contains(&m.mnt_id)) {
-            if m.opt_fields.iter().any(|f| matches!(f, MountOptFields::Shared(_))) {
+            if m.opt_fields
+                .iter()
+                .any(|f| matches!(f, MountOptFields::Shared(_)))
+            {
                 remount(&m.mount_point, libc::MS_PRIVATE, "private")?;
                 parked.privatized.push(m.mount_point.clone());
             }
@@ -281,7 +379,11 @@ mod sys {
             let home = home.clone();
             umount(target)?;
             unpark(parked)?;
-            bail!("{} has no {} to keep the mount there", device.display(), home.display());
+            bail!(
+                "{} has no {} to keep the mount there",
+                device.display(),
+                home.display()
+            );
         }
         unpark(parked)?;
         Ok(fs)
@@ -311,7 +413,8 @@ mod sys {
         // What shows at `target` now may lack a folder one of them was on,
         // as the recovery's own root lacks a phone partition's folders.
         for (home, _) in &parked.moved {
-            fs::create_dir_all(home).with_context(|| format!("make {} to keep the mount there", home.display()))?;
+            fs::create_dir_all(home)
+                .with_context(|| format!("make {} to keep the mount there", home.display()))?;
         }
         unpark(parked)
     }
@@ -333,7 +436,11 @@ mod sys {
     /// The processes that hold the filesystem on `device`, as [`holders`]
     /// finds them: each one's id and the program it runs.
     pub fn holding(device: (u32, u32)) -> Result<Vec<(i32, String)>> {
-        Ok(held()?.into_iter().filter(|h| h.devices.contains(&device)).map(|h| (h.pid, h.name)).collect())
+        Ok(held()?
+            .into_iter()
+            .filter(|h| h.devices.contains(&device))
+            .map(|h| (h.pid, h.name))
+            .collect())
     }
 
     /// A process and what it holds: the devices of the filesystems it has a
@@ -351,12 +458,20 @@ mod sys {
         for p in all_processes().context("list the processes")? {
             let Some(p) = present(p)? else { continue };
             // Kernel threads have no executable and hold no files.
-            let Some(exe) = present(p.exe())? else { continue };
-            let name = exe.file_name().with_context(|| format!("{} has no file name", exe.display()))?.to_string_lossy().into_owned();
+            let Some(exe) = present(p.exe())? else {
+                continue;
+            };
+            let name = exe
+                .file_name()
+                .with_context(|| format!("{} has no file name", exe.display()))?
+                .to_string_lossy()
+                .into_owned();
             let proc_dir = Path::new("/proc").join(p.pid().to_string());
             let mut devices = Vec::new();
             if let Some(maps) = present(p.maps())? {
-                let files = maps.into_iter().filter(|m| matches!(m.pathname, MMapPath::Path(_)));
+                let files = maps
+                    .into_iter()
+                    .filter(|m| matches!(m.pathname, MMapPath::Path(_)));
                 devices.extend(files.map(|m| (m.dev.0 as u32, m.dev.1 as u32)));
             }
             if let Some(fds) = present(p.fd())? {
@@ -368,7 +483,11 @@ mod sys {
             for dir in ["cwd", "root"] {
                 devices.extend(device_of(&proc_dir.join(dir))?);
             }
-            out.push(Held { pid: p.pid(), name, devices });
+            out.push(Held {
+                pid: p.pid(),
+                name,
+                devices,
+            });
         }
         Ok(out)
     }
@@ -412,7 +531,12 @@ mod sys {
         bail!("this host does not mount {}", device.display())
     }
 
-    pub fn mount(device: &Path, _target: &Path, _filesystem: &str, _options: &[String]) -> Result<()> {
+    pub fn mount(
+        device: &Path,
+        _target: &Path,
+        _filesystem: &str,
+        _options: &[String],
+    ) -> Result<()> {
         bail!("this host does not mount {}", device.display())
     }
 
@@ -466,13 +590,40 @@ mod sys {
 }
 
 pub use sys::{
-    bind, holders, holding, is_mount_point, mount, mount_ids, mount_ro, mount_ro_over, points_of, remount_writable, umount,
-    umount_detach, umount_detach_over, umount_over, visible,
+    bind, holders, holding, is_mount_point, mount, mount_ids, mount_ro, mount_ro_over, points_of,
+    remount_writable, umount, umount_detach, umount_detach_over, umount_over, visible,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mount_point_that_links_nowhere_gives_way_to_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let at = dir.path().join("cache");
+        std::os::unix::fs::symlink(data.join("cache"), &at).unwrap();
+        prepare(&at).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&at).unwrap().is_dir(),
+            "the link gives way to the folder the table means"
+        );
+        // A link that leads somewhere is left to lead there.
+        let there = dir.path().join("there");
+        std::fs::create_dir(&there).unwrap();
+        let via = dir.path().join("via");
+        std::os::unix::fs::symlink(&there, &via).unwrap();
+        prepare(&via).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&via)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "its target is where the phone keeps what goes there"
+        );
+    }
 
     #[test]
     fn the_kernels_flags_are_taken_out_of_a_phones_mount_options() {
@@ -481,9 +632,20 @@ mod tests {
             .map(str::to_string)
             .collect();
         let (flags, own) = split_options(&data);
-        assert_eq!(flags, (1 << 10) | (1 << 1) | (1 << 2), "noatime, nosuid and nodev");
-        assert_eq!(own, "discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc");
+        assert_eq!(
+            flags,
+            (1 << 10) | (1 << 1) | (1 << 2),
+            "noatime, nosuid and nodev"
+        );
+        assert_eq!(
+            own,
+            "discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier,inlinecrypt,gc_merge,atgc"
+        );
         let (flags, own) = split_options(&["ro".into(), "defaults".into(), String::new()]);
-        assert_eq!((flags, own.as_str()), (1, ""), "read-only, and nothing for the filesystem");
+        assert_eq!(
+            (flags, own.as_str()),
+            (1, ""),
+            "read-only, and nothing for the filesystem"
+        );
     }
 }

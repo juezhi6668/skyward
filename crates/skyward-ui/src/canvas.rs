@@ -54,7 +54,11 @@ fn kept(n: usize) -> Vec<u8> {
     let kept = if n >= KEEP_BYTES {
         let mut kept = KEPT.lock().expect("no one panics holding the kept memory");
         let best = |fits: &dyn Fn(&Vec<u8>) -> bool| {
-            kept.iter().enumerate().filter(|(_, v)| fits(v)).min_by_key(|(_, v)| v.capacity()).map(|(i, _)| i)
+            kept.iter()
+                .enumerate()
+                .filter(|(_, v)| fits(v))
+                .min_by_key(|(_, v)| v.capacity())
+                .map(|(i, _)| i)
         };
         let best = best(&|v| v.len() >= n).or_else(|| best(&|v| v.capacity() >= n));
         best.map(|i| kept.swap_remove(i))
@@ -68,7 +72,16 @@ fn kept(n: usize) -> Vec<u8> {
 #[allow(clippy::too_many_arguments)]
 impl Canvas {
     pub fn new(w: u32, h: u32) -> Self {
-        Self::filled(w, h, Rgba { r: 0, g: 0, b: 0, a: 0 })
+        Self::filled(
+            w,
+            h,
+            Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        )
     }
 
     /// A canvas every pixel of which is `color`.
@@ -78,7 +91,13 @@ impl Canvas {
 
     /// A canvas `w` × `h` that holds only rows `rows` of it, and of those
     /// only columns `cols`, every pixel of them `color`.
-    pub fn band(w: u32, h: u32, rows: std::ops::Range<u32>, cols: std::ops::Range<u32>, color: Rgba) -> Self {
+    pub fn band(
+        w: u32,
+        h: u32,
+        rows: std::ops::Range<u32>,
+        cols: std::ops::Range<u32>,
+        color: Rgba,
+    ) -> Self {
         let (top, bottom) = (rows.start.min(h), rows.end.clamp(rows.start.min(h), h));
         let (left, right) = (cols.start.min(w), cols.end.clamp(cols.start.min(w), w));
         let span = right - left;
@@ -92,7 +111,15 @@ impl Canvas {
                 data.extend_from_within(..data.len().min(n - data.len()));
             }
         }
-        Self { w, h, data, top, bottom, left, span }
+        Self {
+            w,
+            h,
+            data,
+            top,
+            bottom,
+            left,
+            span,
+        }
     }
 
     /// A canvas `w` × `h` that holds rows `rows` of it whole, as whatever
@@ -107,7 +134,15 @@ impl Canvas {
         } else {
             data.resize(n, 0);
         }
-        Self { w, h, data, top, bottom, left: 0, span: w }
+        Self {
+            w,
+            h,
+            data,
+            top,
+            bottom,
+            left: 0,
+            span: w,
+        }
     }
 
     /// Keep memory for `n` canvases `w` × `h`, written to once, for the
@@ -137,8 +172,17 @@ impl Canvas {
     /// panel shows of it: each pixel's color, without its alpha, which the
     /// panel does not show.
     pub fn write_png(&self, to: impl std::io::Write) -> anyhow::Result<()> {
-        assert!(self.whole(), "a picture is made of a canvas that holds all of itself");
-        let rgb: Vec<u8> = self.data.as_chunks::<4>().0.iter().flat_map(|&[r, g, b, _]| [r, g, b]).collect();
+        assert!(
+            self.whole(),
+            "a picture is made of a canvas that holds all of itself"
+        );
+        let rgb: Vec<u8> = self
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, _]| [r, g, b])
+            .collect();
         let mut png = png::Encoder::new(to, self.w, self.h);
         png.set_color(png::ColorType::Rgb);
         png.set_depth(png::BitDepth::Eight);
@@ -152,13 +196,20 @@ impl Canvas {
     /// canvas holds, which run on from this canvas's last row or up to its
     /// first.
     pub fn join(&mut self, band: &Canvas) {
-        assert_eq!((band.w, band.h, band.cols()), (self.w, self.h, self.cols()), "a band joins a canvas of its size, in its columns");
+        assert_eq!(
+            (band.w, band.h, band.cols()),
+            (self.w, self.h, self.cols()),
+            "a band joins a canvas of its size, in its columns"
+        );
         let (mine, theirs) = (self.held(), band.held());
         if theirs.start == mine.end {
             self.data.extend_from_slice(&band.data);
             self.bottom = theirs.end;
         } else {
-            assert_eq!(theirs.end, mine.start, "a band joins where the rows held end or begin");
+            assert_eq!(
+                theirs.end, mine.start,
+                "a band joins where the rows held end or begin"
+            );
             self.data.splice(0..0, band.data.iter().copied());
             self.top = theirs.start;
         }
@@ -167,8 +218,15 @@ impl Canvas {
     /// Take what `band` holds in place of this canvas's own, where it holds
     /// the same.
     pub fn replace(&mut self, band: &Canvas) {
-        assert_eq!((band.w, band.h), (self.w, self.h), "a band replaces part of a canvas of its size");
-        let (rows, cols) = (self.rows(band.top as i32, band.held().end as i32), self.columns(band.left as i32, (band.left + band.span) as i32));
+        assert_eq!(
+            (band.w, band.h),
+            (self.w, self.h),
+            "a band replaces part of a canvas of its size"
+        );
+        let (rows, cols) = (
+            self.rows(band.top as i32, band.held().end as i32),
+            self.columns(band.left as i32, (band.left + band.span) as i32),
+        );
         if cols.0 >= cols.1 {
             return;
         }
@@ -189,7 +247,10 @@ impl Canvas {
     /// The columns of `x0..x1` this canvas holds.
     #[inline]
     fn columns(&self, x0: i32, x1: i32) -> (i32, i32) {
-        (x0.max(self.left as i32), x1.min((self.left + self.span) as i32))
+        (
+            x0.max(self.left as i32),
+            x1.min((self.left + self.span) as i32),
+        )
     }
 
     /// Where the pixel (`x`, `y`) of a row and column held starts in `data`.
@@ -200,7 +261,11 @@ impl Canvas {
 
     #[inline]
     fn px(&mut self, x: i32, y: i32) -> Option<&mut [u8]> {
-        if x < self.left as i32 || x >= (self.left + self.span) as i32 || y < self.top as i32 || y >= self.bottom as i32 {
+        if x < self.left as i32
+            || x >= (self.left + self.span) as i32
+            || y < self.top as i32
+            || y >= self.bottom as i32
+        {
             return None;
         }
         let i = self.at(x, y);
@@ -210,7 +275,10 @@ impl Canvas {
     /// Make this canvas, which holds all of itself, `h` tall: the rows it
     /// keeps as they were, any it gains clear.
     pub fn resize(&mut self, h: u32) {
-        assert!(self.whole(), "only a canvas holding all of itself is resized");
+        assert!(
+            self.whole(),
+            "only a canvas holding all of itself is resized"
+        );
         self.h = h;
         self.bottom = h;
         self.data.resize((self.w * h * 4) as usize, 0);
@@ -266,6 +334,17 @@ impl Canvas {
         }
     }
 
+    /// Dim this opaque canvas toward black, keeping `level` of its light.
+    pub fn dim(&mut self, level: f32) {
+        let keep = (level.clamp(0.0, 1.0) * 256.0).round() as u32;
+        if keep >= 256 {
+            return;
+        }
+        for p in self.data.as_chunks_mut::<4>().0 {
+            *p = darken(*p, keep);
+        }
+    }
+
     /// Lay `layer`, whose top-left corner goes at (`x`, `y`), over this
     /// opaque canvas at `alpha` of its strength.
     pub fn lay(&mut self, layer: &Canvas, x: i32, y: i32, alpha: f32) {
@@ -289,12 +368,22 @@ impl Canvas {
             if src.as_chunks::<4>().0.iter().fold(255, |all, s| all & s[3]) == 255 {
                 // Where the layer is opaque, each pixel mixes at the same
                 // strength.
-                for (s, d) in src.as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
+                for (s, d) in src
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst.as_chunks_mut::<4>().0)
+                {
                     *d = mix(*d, *s, strength);
                 }
                 continue;
             }
-            for (s, d) in src.as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
+            for (s, d) in src
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst.as_chunks_mut::<4>().0)
+            {
                 if s[3] == 0 {
                     continue;
                 }
@@ -311,8 +400,15 @@ impl Canvas {
     /// over what `layer` covered. `now` is as big as `layer` and covers
     /// wholly wherever `layer` does.
     pub fn relay(&mut self, layer: &Canvas, now: &Canvas, x: i32, y: i32, level: f32) {
-        assert_eq!((layer.w, layer.h), (now.w, now.h), "the two layers are one size");
-        assert!(self.whole() && layer.whole() && now.whole(), "layers are laid again whole on a whole canvas");
+        assert_eq!(
+            (layer.w, layer.h),
+            (now.w, now.h),
+            "the two layers are one size"
+        );
+        assert!(
+            self.whole() && layer.whole() && now.whole(),
+            "layers are laid again whole on a whole canvas"
+        );
         if level <= 0.0 {
             return;
         }
@@ -327,7 +423,10 @@ impl Canvas {
             let (from, to) = (((ly * lw + x0) * 4) as usize, ((ly * lw + x1) * 4) as usize);
             let start = ((py * sw + x + x0) * 4) as usize;
             let dst = &mut self.data[start..start + to - from];
-            let (was, is) = (layer.data[from..to].as_chunks::<4>().0, now.data[from..to].as_chunks::<4>().0);
+            let (was, is) = (
+                layer.data[from..to].as_chunks::<4>().0,
+                now.data[from..to].as_chunks::<4>().0,
+            );
             if was.iter().fold(255, |all, p| all & p[3]) == 255 {
                 // Where the layer was opaque, the pixel moves towards the
                 // new layer's, except where the two layers are the same,
@@ -369,9 +468,23 @@ impl Canvas {
     /// (black laid over it, 0 to 1), and black past its right edge. Both
     /// pages are as big as this canvas, and each of its pixels is written
     /// once.
-    pub fn slide(&mut self, front: &Canvas, behind: &Canvas, at: i32, shift: i32, dim: f32, radius: f32) {
-        assert!((front.w, front.h) == (self.w, self.h) && (behind.w, behind.h) == (self.w, self.h), "the pages are one size");
-        assert!(self.whole() && front.whole() && behind.whole(), "pages slide whole");
+    pub fn slide(
+        &mut self,
+        front: &Canvas,
+        behind: &Canvas,
+        at: i32,
+        shift: i32,
+        dim: f32,
+        radius: f32,
+    ) {
+        assert!(
+            (front.w, front.h) == (self.w, self.h) && (behind.w, behind.h) == (self.w, self.h),
+            "the pages are one size"
+        );
+        assert!(
+            self.whole() && front.whole() && behind.whole(),
+            "pages slide whole"
+        );
         let (w, h) = (self.w as i32, self.h as i32);
         let (at, shift) = (at.clamp(0, w), shift.clamp(0, w));
         let keep = ((1.0 - dim.clamp(0.0, 1.0)) * 256.0).round() as u32;
@@ -398,7 +511,11 @@ impl Canvas {
                     break;
                 }
                 let k = x as usize;
-                let under = if k >= reach { [0, 0, 0, 255] } else { darken(back[k + shift as usize], keep) };
+                let under = if k >= reach {
+                    [0, 0, 0, 255]
+                } else {
+                    darken(back[k + shift as usize], keep)
+                };
                 // A pixel the front page covers at all lies right of its
                 // edge.
                 line[k] = if cover <= 0.0 {
@@ -406,8 +523,14 @@ impl Canvas {
                 } else {
                     let over = ahead[(x - at) as usize];
                     let a = (cover * 256.0).round() as u32;
-                    let mix = |f: u8, b: u8| ((f as u32 * a + b as u32 * (256 - a) + 128) >> 8) as u8;
-                    [mix(over[0], under[0]), mix(over[1], under[1]), mix(over[2], under[2]), 255]
+                    let mix =
+                        |f: u8, b: u8| ((f as u32 * a + b as u32 * (256 - a) + 128) >> 8) as u8;
+                    [
+                        mix(over[0], under[0]),
+                        mix(over[1], under[1]),
+                        mix(over[2], under[2]),
+                        255,
+                    ]
                 };
                 x += 1;
             }
@@ -421,7 +544,10 @@ impl Canvas {
     /// this canvas holds.
     pub fn crop(&self, x: u32, y: u32, w: u32, h: u32) -> Canvas {
         let (held, cols) = (self.held(), self.cols());
-        assert!(cols.start <= x && x + w <= cols.end && held.start <= y && y + h <= held.end, "the part cropped lies in what is held");
+        assert!(
+            cols.start <= x && x + w <= cols.end && held.start <= y && y + h <= held.end,
+            "the part cropped lies in what is held"
+        );
         let mut out = Canvas::new(w, h);
         let part = w as usize * 4;
         for (k, dst) in out.data.chunks_exact_mut(part).enumerate() {
@@ -435,7 +561,10 @@ impl Canvas {
     /// row at `y`; rows past either edge are left out.
     pub fn put(&mut self, strip: &Canvas, y: i32) {
         assert_eq!(strip.w, self.w, "a strip spans the canvas");
-        assert!(self.whole() && strip.whole(), "a strip is put whole on a whole canvas");
+        assert!(
+            self.whole() && strip.whole(),
+            "a strip is put whole on a whole canvas"
+        );
         let first = (-y).clamp(0, strip.h as i32);
         let last = (self.h as i32 - y).clamp(first, strip.h as i32);
         if first == last {
@@ -444,7 +573,8 @@ impl Canvas {
         let row = self.w as usize * 4;
         let dst = (y + first) as usize * row;
         let n = (last - first) as usize * row;
-        self.data[dst..dst + n].copy_from_slice(&strip.data[first as usize * row..first as usize * row + n]);
+        self.data[dst..dst + n]
+            .copy_from_slice(&strip.data[first as usize * row..first as usize * row + n]);
     }
 
     /// Copy rows `from..to` of the opaque `src`, as wide as this canvas,
@@ -465,7 +595,10 @@ impl Canvas {
             return;
         }
         let held = src.held();
-        assert!(held.start as i32 <= from + first && from + last <= held.end as i32, "the rows put are held");
+        assert!(
+            held.start as i32 <= from + first && from + last <= held.end as i32,
+            "the rows put are held"
+        );
         assert_eq!(src.cols(), 0..src.w, "the rows put are held whole");
         let row = self.w as usize * 4;
         let (dst, at) = ((y + first) as usize * row, src.at(0, from + first));
@@ -506,12 +639,20 @@ impl Canvas {
                     }
                     let c = cover(px[x][3]);
                     if c != now {
-                        runs.push(Run { x0: start as u16, x1: x as u16, cover: now });
+                        runs.push(Run {
+                            x0: start as u16,
+                            x1: x as u16,
+                            cover: now,
+                        });
                         (start, now) = (x, c);
                     }
                     x += 1;
                 }
-                runs.push(Run { x0: start as u16, x1: w as u16, cover: now });
+                runs.push(Run {
+                    x0: start as u16,
+                    x1: w as u16,
+                    cover: now,
+                });
                 runs
             })
             .collect()
@@ -521,7 +662,8 @@ impl Canvas {
     pub fn crop_height(mut self, h: u32) -> Canvas {
         let h = h.min(self.h);
         let held = self.held();
-        self.data.truncate((self.span * (h.clamp(held.start, held.end) - held.start) * 4) as usize);
+        self.data
+            .truncate((self.span * (h.clamp(held.start, held.end) - held.start) * 4) as usize);
         self.top = self.top.min(h);
         self.bottom = self.bottom.min(h);
         self.h = h;
@@ -538,7 +680,15 @@ impl Canvas {
     /// reaches is worked out from the outline: the run it covers wholly is
     /// written straight, and only the pixels the outline crosses are worked
     /// out one by one.
-    pub fn fill_round_rect_graded(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, grade: &dyn Fn(f32) -> Rgba) {
+    pub fn fill_round_rect_graded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        r: f32,
+        grade: &dyn Fn(f32) -> Rgba,
+    ) {
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0, h / 2.0);
         let r = r.min(hx).min(hy);
@@ -552,7 +702,9 @@ impl Canvas {
         for py in y0..y1 {
             let fy = py as f32 + 0.5;
             let qy = (fy - cy).abs() - (hy - r);
-            let Some(outer) = round_reach(hx, r, qy, 0.5) else { continue };
+            let Some(outer) = round_reach(hx, r, qy, 0.5) else {
+                continue;
+            };
             let color = grade(fy);
             let lo = ((cx - outer - 0.5).floor() as i32).max(x0);
             let hi = (((cx + outer - 0.5).ceil() as i32) + 1).min(x1).max(lo);
@@ -607,7 +759,16 @@ impl Canvas {
     /// the rectangle being drawn over the rest: half the colour at its
     /// edge, fading with the distance from it as the blur has it.
     #[allow(clippy::too_many_arguments)]
-    pub fn shadow_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, sigma: f32, color: Rgba) {
+    pub fn shadow_round_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        r: f32,
+        sigma: f32,
+        color: Rgba,
+    ) {
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0, h / 2.0);
         let r = r.min(hx).min(hy);
@@ -619,7 +780,9 @@ impl Canvas {
         }
         // How strong it is a whole number of pixels out, read between.
         let spread = sigma * std::f32::consts::SQRT_2;
-        let level: Vec<f32> = (0..reach.ceil() as usize + 2).map(|d| 0.5 * erfc(d as f32 / spread)).collect();
+        let level: Vec<f32> = (0..reach.ceil() as usize + 2)
+            .map(|d| 0.5 * erfc(d as f32 / spread))
+            .collect();
         for py in y0..y1 {
             let fy = py as f32 + 0.5;
             let qy = (fy - cy).abs() - (hy - r);
@@ -643,7 +806,16 @@ impl Canvas {
     /// Each row looks only at the pixels the outline crosses on either side
     /// of the middle it leaves clear, and writes straight those it covers
     /// wholly.
-    pub fn stroke_round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, t: f32, color: Rgba) {
+    pub fn stroke_round_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        r: f32,
+        t: f32,
+        color: Rgba,
+    ) {
         let (cx, cy) = (x + w / 2.0, y + h / 2.0);
         let (hx, hy) = (w / 2.0, h / 2.0);
         let r = r.min(hx).min(hy);
@@ -661,7 +833,9 @@ impl Canvas {
             let fy = py as f32 + 0.5;
             let qy = (fy - cy).abs() - (hy - r);
             let reach = |by: f32| round_reach(hx, r, qy, by);
-            let Some(outer) = reach(half + 0.5) else { continue };
+            let Some(outer) = reach(half + 0.5) else {
+                continue;
+            };
             let lo = ((cx - outer - 0.5).floor() as i32).max(x0);
             let hi = (((cx + outer - 0.5).ceil() as i32) + 1).min(x1).max(lo);
             let clear = reach(-half - 0.5).map_or((lo, lo), |k| centred(cx, k, lo, hi));
@@ -743,7 +917,10 @@ impl Canvas {
             let clear = hole * hole - dy * dy;
             let (a, b) = if hole > 0.0 && clear > 0.0 {
                 let half = clear.sqrt();
-                (((cx - half).ceil() as i32).clamp(x0, x1), ((cx + half).floor() as i32).clamp(x0, x1))
+                (
+                    ((cx - half).ceil() as i32).clamp(x0, x1),
+                    ((cx + half).floor() as i32).clamp(x0, x1),
+                )
             } else {
                 (x1, x1)
             };
@@ -764,7 +941,10 @@ impl Canvas {
     #[allow(clippy::too_many_arguments)]
     pub fn fill_sector(&mut self, cx: f32, cy: f32, r0: f32, r1: f32, half: f32, color: Rgba) {
         let (s, k) = (half.sin(), half.cos());
-        let (x0, x1) = self.columns((cx - r1 * s - 1.0).floor() as i32, (cx + r1 * s + 1.0).ceil() as i32);
+        let (x0, x1) = self.columns(
+            (cx - r1 * s - 1.0).floor() as i32,
+            (cx + r1 * s + 1.0).ceil() as i32,
+        );
         let (y0, y1) = self.rows((cy - r1 - 1.0).floor() as i32, (cy + 1.0).ceil() as i32);
         for py in y0..y1 {
             for px in x0..x1 {
@@ -784,7 +964,16 @@ impl Canvas {
     /// Round-capped arc stroke. Angles are in radians in screen space (0 points
     /// right, positive turns clockwise because y grows downward); the arc runs
     /// from `start` through `sweep` radians.
-    pub fn stroke_arc(&mut self, cx: f32, cy: f32, r: f32, start: f32, sweep: f32, t: f32, color: Rgba) {
+    pub fn stroke_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        r: f32,
+        start: f32,
+        sweep: f32,
+        t: f32,
+        color: Rgba,
+    ) {
         let tau = std::f32::consts::TAU;
         let (sx, sy) = (cx + r * start.cos(), cy + r * start.sin());
         let end = start + sweep;
@@ -841,10 +1030,15 @@ impl Canvas {
         // A pixel centre this near the line is covered at all, and this near
         // wholly.
         let (outer, inner) = (t / 2.0 + 0.5, t / 2.0 - 0.5);
-        let (top, bottom) = self.rows((y0.min(y1) - outer).floor() as i32, (y0.max(y1) + outer).ceil() as i32);
+        let (top, bottom) = self.rows(
+            (y0.min(y1) - outer).floor() as i32,
+            (y0.max(y1) + outer).ceil() as i32,
+        );
         for py in top..bottom {
             let fy = py as f32 + 0.5;
-            let Some((lo, hi)) = near_segment(x0, y0, x1, y1, fy, outer) else { continue };
+            let Some((lo, hi)) = near_segment(x0, y0, x1, y1, fy, outer) else {
+                continue;
+            };
             let (lo, hi) = self.columns((lo - 0.5).ceil() as i32, ((hi - 0.5).floor() as i32) + 1);
             if lo >= hi {
                 continue;
@@ -878,7 +1072,9 @@ impl Canvas {
             return;
         }
         let n = pts.len() as f32;
-        let (cx, cy) = pts.iter().fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
+        let (cx, cy) = pts
+            .iter()
+            .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
         // Per edge: unit normal pointing out of the polygon and its offset.
         let edges: Vec<(f32, f32, f32)> = (0..pts.len())
             .map(|i| {
@@ -903,7 +1099,10 @@ impl Canvas {
         for py in miny..maxy {
             for px in minx..maxx {
                 let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
-                let d = edges.iter().map(|&(nx, ny, c)| nx * x + ny * y - c).fold(f32::MIN, f32::max);
+                let d = edges
+                    .iter()
+                    .map(|&(nx, ny, c)| nx * x + ny * y - c)
+                    .fold(f32::MIN, f32::max);
                 let cov = (0.5 - d).clamp(0.0, 1.0);
                 if cov > 0.0 {
                     self.blend(px, py, color, cov);
@@ -958,7 +1157,16 @@ impl Canvas {
         self.text_with(face, text, x, baseline, px, Ink::Paint(paint), max_w)
     }
 
-    fn text_with(&mut self, face: &Face, text: &str, x: f32, baseline: f32, px: f32, ink: Ink, max_w: Option<f32>) -> f32 {
+    fn text_with(
+        &mut self,
+        face: &Face,
+        text: &str,
+        x: f32,
+        baseline: f32,
+        px: f32,
+        ink: Ink,
+        max_w: Option<f32>,
+    ) -> f32 {
         let scale = face.scale(px);
         let sf = face.font.as_scaled(scale);
         let (ell, ell_w) = face.glyph('…', scale);
@@ -987,13 +1195,31 @@ impl Canvas {
     }
 
     /// Text whose ink is vertically centred on `cy` (by the reference ideograph).
-    pub fn text_vc(&mut self, face: &Face, text: &str, x: f32, cy: f32, px: f32, color: Rgba, max_w: Option<f32>) -> f32 {
+    pub fn text_vc(
+        &mut self,
+        face: &Face,
+        text: &str,
+        x: f32,
+        cy: f32,
+        px: f32,
+        color: Rgba,
+        max_w: Option<f32>,
+    ) -> f32 {
         let (top, bottom) = face.ink(px);
         self.text(face, text, x, cy - (top + bottom) / 2.0, px, color, max_w)
     }
 
     /// Text whose ink top sits at `top_y`.
-    pub fn text_top(&mut self, face: &Face, text: &str, x: f32, top_y: f32, px: f32, color: Rgba, max_w: Option<f32>) -> f32 {
+    pub fn text_top(
+        &mut self,
+        face: &Face,
+        text: &str,
+        x: f32,
+        top_y: f32,
+        px: f32,
+        color: Rgba,
+        max_w: Option<f32>,
+    ) -> f32 {
         let (top, _) = face.ink(px);
         self.text(face, text, x, top_y - top, px, color, max_w)
     }
@@ -1009,10 +1235,15 @@ impl Canvas {
     fn glyph(&mut self, face: &Face, id: GlyphId, scale: PxScale, x: f32, baseline: f32, ink: Ink) {
         let quarter = |v: f32| {
             let q = (v * SUBPIXELS).round();
-            ((q / SUBPIXELS).floor() as i32, q.rem_euclid(SUBPIXELS) as u8)
+            (
+                (q / SUBPIXELS).floor() as i32,
+                q.rem_euclid(SUBPIXELS) as u8,
+            )
         };
         let ((ix, qx), (iy, qy)) = (quarter(x), quarter(baseline));
-        let Some(art) = face.ink_of(id, scale, qx, qy) else { return };
+        let Some(art) = face.ink_of(id, scale, qx, qy) else {
+            return;
+        };
         let (ox, oy) = (ix + art.x, iy + art.y);
         let (from, to) = self.columns(ox, ox + art.w as i32);
         let (x0, x1) = (from - ox, to - ox);
@@ -1022,9 +1253,12 @@ impl Canvas {
         let (first, last) = self.rows(oy, oy + art.h as i32);
         for py in first..last {
             let gy = py - oy;
-            let covs = &art.cov[(gy * art.w as i32 + x0) as usize..(gy * art.w as i32 + x1) as usize];
+            let covs =
+                &art.cov[(gy * art.w as i32 + x0) as usize..(gy * art.w as i32 + x1) as usize];
             let start = self.at(ox + x0, py);
-            let row = self.data[start..start + covs.len() * 4].as_chunks_mut::<4>().0;
+            let row = self.data[start..start + covs.len() * 4]
+                .as_chunks_mut::<4>()
+                .0;
             for (k, (&c, p)) in covs.iter().zip(row).enumerate() {
                 if c == 0 {
                     continue;
@@ -1055,7 +1289,11 @@ impl Drop for Canvas {
             let mut kept = KEPT.lock().expect("no one panics holding the kept memory");
             if kept.len() < KEEP {
                 kept.push(data);
-            } else if let Some(least) = kept.iter_mut().min_by_key(|v| v.capacity()).filter(|v| v.capacity() < data.capacity()) {
+            } else if let Some(least) = kept
+                .iter_mut()
+                .min_by_key(|v| v.capacity())
+                .filter(|v| v.capacity() < data.capacity())
+            {
                 *least = data;
             }
         }
@@ -1067,7 +1305,8 @@ impl Drop for Canvas {
 #[inline]
 fn mix(d: [u8; 4], s: [u8; 4], a: u32) -> [u8; 4] {
     let (dv, sv) = (u32::from_le_bytes(d), u32::from_le_bytes(s));
-    let rb = (((sv & 0x00ff_00ff) * a + (dv & 0x00ff_00ff) * (256 - a) + 0x0080_0080) >> 8) & 0x00ff_00ff;
+    let rb = (((sv & 0x00ff_00ff) * a + (dv & 0x00ff_00ff) * (256 - a) + 0x0080_0080) >> 8)
+        & 0x00ff_00ff;
     let g = ((((sv >> 8) & 0xff) * a + ((dv >> 8) & 0xff) * (256 - a) + 0x80) >> 8) & 0xff;
     (rb | (g << 8) | (dv & 0xff00_0000)).to_le_bytes()
 }
@@ -1089,7 +1328,11 @@ fn front_cover(x: i32, y: i32, front: i32, h: i32, radius: f32) -> f32 {
     let (px, py, half) = (x as f32 + 0.5, y as f32 + 0.5, h as f32 / 2.0);
     let qx = front as f32 + radius - px;
     let qy = (py - half).abs() - (half - radius);
-    let d = if qx > 0.0 && qy > 0.0 { qx.hypot(qy) - radius } else { qx.max(qy) - radius };
+    let d = if qx > 0.0 && qy > 0.0 {
+        qx.hypot(qy) - radius
+    } else {
+        qx.max(qy) - radius
+    };
     (0.5 - d).clamp(0.0, 1.0)
 }
 
@@ -1154,7 +1397,10 @@ fn near_segment(x0: f32, y0: f32, x1: f32, y1: f32, y: f32, reach: f32) -> Optio
             (lo <= hi).then_some((x0 + lo, x0 + hi))
         })
         .flatten();
-    [end(x0, y0), end(x1, y1), side].into_iter().flatten().reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    [end(x0, y0), end(x1, y1), side]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
 }
 
 /// How many deviations out a shadow reaches: beyond, under a 255th of its
@@ -1165,7 +1411,9 @@ const SHADOW_REACH: f32 = 3.0;
 /// approximation good to 1.5e-7.
 fn erfc(x: f32) -> f32 {
     let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = t * (0.254_829_6 + t * (-0.284_496_74 + t * (1.421_413_8 + t * (-1.453_152 + t * 1.061_405_4))));
+    let poly = t
+        * (0.254_829_6
+            + t * (-0.284_496_74 + t * (1.421_413_8 + t * (-1.453_152 + t * 1.061_405_4))));
     poly * (-x * x).exp()
 }
 
@@ -1188,11 +1436,20 @@ mod tests {
         c.data[20..24].copy_from_slice(&[200, 100, 50, 128]);
         let mut png = Vec::new();
         c.write_png(&mut png).unwrap();
-        let mut read = png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap();
+        let mut read = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .unwrap();
         let mut pixels = vec![0; read.output_buffer_size()];
         let info = read.next_frame(&mut pixels).unwrap();
-        assert_eq!((info.width, info.height, info.color_type), (3, 2, png::ColorType::Rgb));
-        assert_eq!(&pixels[..3], &[10, 20, 30], "the color whatever the alpha, as the panel shows it");
+        assert_eq!(
+            (info.width, info.height, info.color_type),
+            (3, 2, png::ColorType::Rgb)
+        );
+        assert_eq!(
+            &pixels[..3],
+            &[10, 20, 30],
+            "the color whatever the alpha, as the panel shows it"
+        );
         assert_eq!(&pixels[15..18], &[200, 100, 50]);
         assert_eq!(&pixels[3..6], &[243, 243, 243]);
     }
@@ -1205,14 +1462,34 @@ mod tests {
         // The 17 Ultra's list over its grey page, 3 pixels a dp: the grey
         // it took on 0, 10, 20 … 60 pixels out from its right edge.
         let mut c = Canvas::filled(400, 300, Rgba::rgb(243, 243, 243));
-        c.shadow_round_rect(50.0, 50.0, 200.0, 200.0, 72.0, 32.1, Rgba::rgb(0, 0, 0).with_alpha(27));
+        c.shadow_round_rect(
+            50.0,
+            50.0,
+            200.0,
+            200.0,
+            72.0,
+            32.1,
+            Rgba::rgb(0, 0, 0).with_alpha(27),
+        );
         let stock = [230.0, 233.1, 235.9, 238.2, 239.9, 241.0, 242.2];
         for (k, want) in stock.into_iter().enumerate() {
             let got = c.px(250 + 10 * k as i32, 150).expect("on the canvas")[0] as f32;
-            assert!((got - want).abs() <= 1.5, "{} px out: {got}, the stock list {want}", 10 * k);
+            assert!(
+                (got - want).abs() <= 1.5,
+                "{} px out: {got}, the stock list {want}",
+                10 * k
+            );
         }
-        assert_eq!(c.px(150, 150).expect("on the canvas")[0], 243, "inside is left for the rectangle");
-        assert_eq!(c.px(360, 150).expect("on the canvas")[0], 243, "it reaches no further than three deviations");
+        assert_eq!(
+            c.px(150, 150).expect("on the canvas")[0],
+            243,
+            "inside is left for the rectangle"
+        );
+        assert_eq!(
+            c.px(360, 150).expect("on the canvas")[0],
+            243,
+            "it reaches no further than three deviations"
+        );
     }
 
     /// A canvas two pixels wide whose row k is grey k.
@@ -1238,10 +1515,18 @@ mod tests {
         assert_eq!(greys(&c), [0, 2, 3, 4]);
         let mut c = Canvas::new(2, 4);
         c.put_rows(&src, -2, 3, 0);
-        assert_eq!(greys(&c), [0, 0, 0, 1], "rows above the source's top are not there to copy");
+        assert_eq!(
+            greys(&c),
+            [0, 0, 0, 1],
+            "rows above the source's top are not there to copy"
+        );
         let mut c = Canvas::new(2, 4);
         c.put_rows(&src, 6, 10, -1);
-        assert_eq!(greys(&c), [7, 8, 9, 0], "rows above this canvas's top are left out");
+        assert_eq!(
+            greys(&c),
+            [7, 8, 9, 0],
+            "rows above this canvas's top are left out"
+        );
     }
 
     #[test]
@@ -1254,8 +1539,12 @@ mod tests {
             c.data.copy_from_slice(&[grey, grey, grey, a, 0, 0, 0, 255]);
             c
         };
-        for (was, is) in [(card(255, 255), card(225, 255)), (card(255, 36), card(255, 62))] {
-            let ground = |c: &mut Canvas| c.data.copy_from_slice(&[20, 20, 20, 255, 90, 90, 90, 255]);
+        for (was, is) in [
+            (card(255, 255), card(225, 255)),
+            (card(255, 36), card(255, 62)),
+        ] {
+            let ground =
+                |c: &mut Canvas| c.data.copy_from_slice(&[20, 20, 20, 255, 90, 90, 90, 255]);
             let (mut shown, mut wanted) = (Canvas::new(2, 1), Canvas::new(2, 1));
             ground(&mut shown);
             ground(&mut wanted);
@@ -1271,7 +1560,11 @@ mod tests {
             half.data.copy_from_slice(&before);
             half.relay(&was, &is, 0, 0, 0.5);
             let mid = (before[0] as f32 + wanted.data[0] as f32) / 2.0;
-            assert!((half.data[0] as f32 - mid).abs() <= 1.0, "half way: {} for {mid}", half.data[0]);
+            assert!(
+                (half.data[0] as f32 - mid).abs() <= 1.0,
+                "half way: {} for {mid}",
+                half.data[0]
+            );
         }
     }
 
@@ -1287,7 +1580,9 @@ mod tests {
 
     /// The grey of each pixel along row `y`.
     fn row_greys(c: &Canvas, y: u32) -> Vec<u8> {
-        (0..c.w).map(|x| c.data[((y * c.w + x) * 4) as usize]).collect()
+        (0..c.w)
+            .map(|x| c.data[((y * c.w + x) * 4) as usize])
+            .collect()
     }
 
     #[test]
@@ -1295,9 +1590,15 @@ mod tests {
         let (front, behind) = (columns(10, 4, 100), columns(10, 4, 0));
         let mut c = Canvas::new(10, 4);
         c.slide(&front, &behind, 4, 2, 0.5, 0.0);
-        assert_eq!(row_greys(&c, 1), [10, 15, 20, 25, 100, 110, 120, 130, 140, 150]);
+        assert_eq!(
+            row_greys(&c, 1),
+            [10, 15, 20, 25, 100, 110, 120, 130, 140, 150]
+        );
         c.slide(&front, &behind, 6, 1, 0.5, 0.0);
-        assert_eq!(row_greys(&c, 2), [5, 10, 15, 20, 25, 30, 100, 110, 120, 130]);
+        assert_eq!(
+            row_greys(&c, 2),
+            [5, 10, 15, 20, 25, 30, 100, 110, 120, 130]
+        );
         // The page behind, shifted far left, is black past its right edge.
         c.slide(&front, &behind, 8, 3, 0.0, 0.0);
         assert_eq!(row_greys(&c, 0), [30, 40, 50, 60, 70, 80, 90, 0, 100, 110]);
@@ -1315,7 +1616,11 @@ mod tests {
             assert_eq!(at(5, y), 0, "the corner's tip is cut away");
             assert_eq!(at(5 + 6, y), 50 + 60, "past the corner the page is whole");
         }
-        assert!(at(6, 2) > 0 && at(6, 2) < 60, "the curve is smoothed: {}", at(6, 2));
+        assert!(
+            at(6, 2) > 0 && at(6, 2) < 60,
+            "the curve is smoothed: {}",
+            at(6, 2)
+        );
     }
 
     #[test]
@@ -1323,7 +1628,9 @@ mod tests {
         let src = graded(6);
         let part = src.crop(1, 2, 1, 3);
         assert_eq!((part.w, part.h), (1, 3));
-        assert_eq!(part.data.chunks(4).map(|p| p[0]).collect::<Vec<_>>(), [2, 3, 4]);
+        assert_eq!(
+            part.data.chunks(4).map(|p| p[0]).collect::<Vec<_>>(),
+            [2, 3, 4]
+        );
     }
 }
-

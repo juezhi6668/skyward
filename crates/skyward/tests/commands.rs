@@ -27,9 +27,14 @@ fn noise(len: usize) -> Vec<u8> {
 fn rom(dir: &Path, super_zst: &[u8]) -> PathBuf {
     let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let script = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    w.start_file("META-INF/com/google/android/update-binary", script).unwrap();
+    w.start_file("META-INF/com/google/android/update-binary", script)
+        .unwrap();
     w.write_all(b"#!/sbin/sh\n").unwrap();
-    w.start_file("images/super.img.zst", SimpleFileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+    w.start_file(
+        "images/super.img.zst",
+        SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+    )
+    .unwrap();
     w.write_all(super_zst).unwrap();
     let path = dir.join("rom.zip");
     fs::write(&path, w.finish().unwrap().into_inner()).unwrap();
@@ -81,6 +86,9 @@ fn a_super_image_cut_short_in_the_zip_fails_the_pipe() {
     let whole = zstd::encode_all(noise(1 << 20).as_slice(), 3).unwrap();
     let zip = rom(dir.path(), &whole[..whole.len() / 2]);
     for flash in FLASH_SUPER {
-        assert!(!script(dir.path(), flash, &zip, &dir.path().join("super")).success(), "{flash}");
+        assert!(
+            !script(dir.path(), flash, &zip, &dir.path().join("super")).success(),
+            "{flash}"
+        );
     }
 }

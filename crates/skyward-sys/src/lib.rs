@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 pub mod bcb;
 pub mod clock;
 pub mod control;
+pub mod cpu;
+#[cfg(target_os = "android")]
+pub mod sleep;
+#[cfg(target_os = "android")]
+pub mod uevent;
 pub mod ueventd;
 pub mod usb;
 
@@ -21,7 +26,11 @@ pub fn prop(name: &str) -> Option<String> {
     if n <= 0 {
         return None;
     }
-    Some(unsafe { CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Hosts have no property area.
@@ -52,20 +61,35 @@ pub fn props(prefix: &str) -> Vec<(String, String)> {
     extern "C" {
         fn __system_property_read_callback(
             pi: *const libc::prop_info,
-            callback: unsafe extern "C" fn(cookie: *mut c_void, name: *const c_char, value: *const c_char, serial: u32),
+            callback: unsafe extern "C" fn(
+                cookie: *mut c_void,
+                name: *const c_char,
+                value: *const c_char,
+                serial: u32,
+            ),
             cookie: *mut c_void,
         );
     }
-    unsafe extern "C" fn take(cookie: *mut c_void, name: *const c_char, value: *const c_char, _serial: u32) {
+    unsafe extern "C" fn take(
+        cookie: *mut c_void,
+        name: *const c_char,
+        value: *const c_char,
+        _serial: u32,
+    ) {
         let all = unsafe { &mut *cookie.cast::<Vec<(String, String)>>() };
         let (name, value) = unsafe { (CStr::from_ptr(name), CStr::from_ptr(value)) };
-        all.push((name.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()));
+        all.push((
+            name.to_string_lossy().into_owned(),
+            value.to_string_lossy().into_owned(),
+        ));
     }
     unsafe extern "C" fn each(pi: *const libc::prop_info, cookie: *mut c_void) {
         unsafe { __system_property_read_callback(pi, take, cookie) };
     }
     let mut all: Vec<(String, String)> = Vec::new();
-    unsafe { libc::__system_property_foreach(each, (&mut all as *mut Vec<(String, String)>).cast()) };
+    unsafe {
+        libc::__system_property_foreach(each, (&mut all as *mut Vec<(String, String)>).cast())
+    };
     all.retain(|(name, _)| name.starts_with(prefix));
     all
 }
@@ -104,7 +128,10 @@ pub fn wait_prop(name: &str, value: &str, timeout: Duration) -> Result<()> {
             return Ok(());
         }
         if Instant::now() >= until {
-            bail!("{name} is {now:?} after {} ms, not {value:?}", timeout.as_millis());
+            bail!(
+                "{name} is {now:?} after {} ms, not {value:?}",
+                timeout.as_millis()
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -173,8 +200,13 @@ static KEPT: OnceLock<Mutex<File>> = OnceLock::new();
 /// Keep every line [`kmsg`] writes from now on in the file at `path` as
 /// well, after what an earlier run left there.
 pub fn keep_log(path: &Path) -> Result<()> {
-    let file = OpenOptions::new().create(true).append(true).open(path).with_context(|| format!("open {}", path.display()))?;
-    KEPT.set(Mutex::new(file)).map_err(|_| anyhow!("the log is kept in a file already"))
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))?;
+    KEPT.set(Mutex::new(file))
+        .map_err(|_| anyhow!("the log is kept in a file already"))
 }
 
 /// Append a line to the kernel log, where it survives until the next boot
@@ -185,7 +217,8 @@ pub fn kmsg(line: &str) -> Result<()> {
     f.write_all(format!("<6>skyward: {line}\n").as_bytes())?;
     if let Some(kept) = KEPT.get() {
         let mut kept = kept.lock().expect("nothing panics while writing the log");
-        writeln!(kept, "[{:>12.6}] {line}", since_boot()?.as_secs_f64()).with_context(|| format!("write {LOG}"))?;
+        writeln!(kept, "[{:>12.6}] {line}", since_boot()?.as_secs_f64())
+            .with_context(|| format!("write {LOG}"))?;
     }
     Ok(())
 }
@@ -193,9 +226,13 @@ pub fn kmsg(line: &str) -> Result<()> {
 /// How long the phone has been running, on the clock the kernel stamps its
 /// log with.
 fn since_boot() -> Result<Duration> {
-    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("read the time since the phone started");
+        return Err(std::io::Error::last_os_error())
+            .context("read the time since the phone started");
     }
     Ok(Duration::new(t.tv_sec as u64, t.tv_nsec as u32))
 }
@@ -208,7 +245,8 @@ pub fn kernel_log() -> Result<String> {
     const SIZE_BUFFER: libc::c_int = 10;
     let size = unsafe { libc::klogctl(SIZE_BUFFER, std::ptr::null_mut(), 0) };
     if size < 0 {
-        return Err(std::io::Error::last_os_error()).context("ask the kernel how much log it holds");
+        return Err(std::io::Error::last_os_error())
+            .context("ask the kernel how much log it holds");
     }
     let mut held = vec![0u8; size as usize];
     let n = unsafe { libc::klogctl(READ_ALL, held.as_mut_ptr().cast(), size) };
@@ -223,14 +261,17 @@ pub fn kernel_log() -> Result<String> {
 /// was written at.
 #[cfg(any(target_os = "android", test))]
 fn without_levels(log: &str) -> String {
-    log.lines().map(|line| line.strip_prefix('<').and_then(|l| l.split_once('>')).map_or(line, |(_, rest)| rest)).fold(
-        String::with_capacity(log.len()),
-        |mut out, line| {
+    log.lines()
+        .map(|line| {
+            line.strip_prefix('<')
+                .and_then(|l| l.split_once('>'))
+                .map_or(line, |(_, rest)| rest)
+        })
+        .fold(String::with_capacity(log.len()), |mut out, line| {
             out.push_str(line);
             out.push('\n');
             out
-        },
-    )
+        })
 }
 
 #[cfg(test)]
@@ -266,7 +307,11 @@ mod tests {
         for no in ["0", "n", "no", "off", "false"] {
             assert_eq!(yes_or_no(Some(no)), Some(false), "{no}");
         }
-        assert_eq!(yes_or_no(Some("True")), None, "the words are read as written");
+        assert_eq!(
+            yes_or_no(Some("True")),
+            None,
+            "the words are read as written"
+        );
         assert_eq!(yes_or_no(Some("")), None);
         assert_eq!(yes_or_no(None), None);
     }

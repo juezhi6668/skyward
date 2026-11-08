@@ -52,7 +52,11 @@ fn find_kv(haystack: &str, key: &str) -> Option<String> {
     for line in haystack.lines() {
         if let Some((k, v)) = line.split_once('=') {
             if k.trim() == key {
-                let val = v.trim().trim_matches('"').trim_end_matches(',').trim_matches('"');
+                let val = v
+                    .trim()
+                    .trim_matches('"')
+                    .trim_end_matches(',')
+                    .trim_matches('"');
                 if !val.is_empty() {
                     return Some(val.to_string());
                 }
@@ -92,7 +96,11 @@ pub fn size_bytes(path: impl AsRef<Path>) -> Result<u64> {
         .with_context(|| format!("open {}", path.as_ref().display()))?;
     let mut size: u64 = 0;
     let rc = unsafe {
-        libc::ioctl(f.as_raw_fd(), BLKGETSIZE64 as libc::c_int, &mut size as *mut u64)
+        libc::ioctl(
+            f.as_raw_fd(),
+            BLKGETSIZE64 as libc::c_int,
+            &mut size as *mut u64,
+        )
     };
     if rc != 0 {
         return Err(std::io::Error::last_os_error()).context("BLKGETSIZE64");
@@ -111,7 +119,11 @@ pub fn devnum(path: impl AsRef<Path>) -> Result<(u32, u32)> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let p = path.as_ref();
     let meta = fs::metadata(p).with_context(|| format!("stat {}", p.display()))?;
-    anyhow::ensure!(meta.file_type().is_block_device(), "{} is not a block device", p.display());
+    anyhow::ensure!(
+        meta.file_type().is_block_device(),
+        "{} is not a block device",
+        p.display()
+    );
     let rdev = meta.rdev() as libc::dev_t;
     Ok((libc::major(rdev) as u32, libc::minor(rdev) as u32))
 }
@@ -128,12 +140,18 @@ mod tests {
     #[test]
     fn parses_slot_from_cmdline() {
         let line = "console=ttyMSM0 androidboot.slot_suffix=_b androidboot.hardware=qcom";
-        assert_eq!(find_kv(line, "androidboot.slot_suffix").as_deref(), Some("_b"));
+        assert_eq!(
+            find_kv(line, "androidboot.slot_suffix").as_deref(),
+            Some("_b")
+        );
     }
 
     #[test]
     fn parses_slot_from_bootconfig() {
         let line = "androidboot.slot_suffix = \"_a\"\nandroidboot.force_normal_boot = \"1\"";
-        assert_eq!(find_kv(line, "androidboot.slot_suffix").as_deref(), Some("_a"));
+        assert_eq!(
+            find_kv(line, "androidboot.slot_suffix").as_deref(),
+            Some("_a")
+        );
     }
 }

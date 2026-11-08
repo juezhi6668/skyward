@@ -22,11 +22,12 @@ mod ffs;
 #[cfg(target_os = "android")]
 mod run;
 
-pub use image::{ImageKind, Ramdisk};
+pub use image::{Filesystem, ImageKind, Ramdisk};
 #[cfg(target_os = "android")]
 pub use run::{Detach, Installer};
 use skyward_info::{Battery, Charge};
 use skyward_vab::{Slot, SnapshotState};
+use std::path::PathBuf;
 
 /// The least charge to install on, without and with a charger, as
 /// Android's recovery asks.
@@ -46,8 +47,14 @@ pub fn least_charge(charging: bool) -> u8 {
 /// charger is in while the battery charges, is full, or is held from
 /// charging.
 pub fn battery_refusal(battery: &Battery) -> Option<Refusal> {
-    let charging = matches!(battery.charge, Charge::Charging | Charge::Full | Charge::NotCharging);
-    (battery.level < least_charge(charging)).then_some(Refusal::Battery { level: battery.level, charging })
+    let charging = matches!(
+        battery.charge,
+        Charge::Charging | Charge::Full | Charge::NotCharging
+    );
+    (battery.level < least_charge(charging)).then_some(Refusal::Battery {
+        level: battery.level,
+        charging,
+    })
 }
 
 /// Where the installer keeps what update_engine wrote while it last
@@ -77,23 +84,34 @@ pub enum Event {
     Waiting,
     /// A package of this many bytes is being looked at: one the computer
     /// started sending, or a file on the phone.
-    Checking { size: u64 },
+    Checking {
+        size: u64,
+    },
     /// An update package passed the checks and waits for
     /// [`Command::Install`] before anything is written: the version it
     /// brings, and whether all user data is to be erased before that
     /// system starts. One that erases always waits, and so does one from a
     /// file on the phone, which a single tap picks.
-    Ready { version: Option<String>, wipe: bool },
+    Ready {
+        version: Option<String>,
+        wipe: bool,
+    },
     /// An update package passed the checks and is being installed; the
     /// version it brings.
-    Installing { version: Option<String> },
+    Installing {
+        version: Option<String>,
+    },
     /// Super has no room to keep the running system beside the new one, so
     /// the update writes over it: until it finishes, the phone may not
     /// start.
     Overwriting,
     /// A partition image, held until [`Command::Flash`] says where it goes:
     /// the partitions of this phone it fits, the likeliest first.
-    Image { kind: ImageKind, size: u64, partitions: Vec<&'static str> },
+    Image {
+        kind: ImageKind,
+        size: u64,
+        partitions: Vec<&'static str>,
+    },
     /// A zip that installs itself by running the script inside it, held
     /// until [`Command::Install`]: a script may write over any partition,
     /// so it always waits.
@@ -136,7 +154,11 @@ pub enum Stage {
     /// so far.
     Writing { done: u64, total: u64 },
     /// It reads back what it wrote, one partition after another.
-    Verifying { index: usize, count: usize, partition: String },
+    Verifying {
+        index: usize,
+        count: usize,
+        partition: String,
+    },
     /// It runs the package's own last steps and switches slots.
     Finishing,
     /// An image is written and read back: bytes so far, of all.
@@ -155,12 +177,22 @@ pub enum Stage {
 pub enum Outcome {
     /// The update is in `slot`, which starts next; `wipe` when all user data
     /// is to be erased before it does.
-    Installed { slot: Slot, wipe: bool },
-    /// The image is in the partition of these slots.
-    Flashed { partition: &'static str, slots: Vec<Slot> },
+    Installed {
+        slot: Slot,
+        wipe: bool,
+    },
+    /// The image is written to these partitions, by the links it went
+    /// through: one of each slot where the phone keeps a set per slot, and
+    /// one of its own name where it has a single set.
+    Flashed {
+        partition: &'static str,
+        devices: Vec<PathBuf>,
+    },
     /// The install script ran to its end; `wipe_cache` when it asked for
     /// the cache partition to be erased after.
-    Ran { wipe_cache: bool },
+    Ran {
+        wipe_cache: bool,
+    },
     /// Stopped before anything was written.
     Cancelled,
     /// Not installed, for this reason; nothing was written.
@@ -242,9 +274,12 @@ pub enum Failure {
 /// What the screen tells the installer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Write the image held in [`Event::Image`] to `partition` in these
-    /// slots.
-    Flash { partition: &'static str, slots: Vec<Slot> },
+    /// Write the image held in [`Event::Image`] to `partition` at these
+    /// devices.
+    Flash {
+        partition: &'static str,
+        devices: Vec<PathBuf>,
+    },
     /// Install the update held in [`Event::Ready`], or run the script held
     /// in [`Event::Script`].
     Install,

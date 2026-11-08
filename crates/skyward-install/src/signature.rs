@@ -44,14 +44,26 @@ const EC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1
 /// MD5 have always been taken as signed with SHA-1.
 const DIGESTS: [(ObjectIdentifier, Hash); 6] = [
     // md5WithRSAEncryption, md5WithRSA
-    (ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.4"), Hash::Sha1),
+    (
+        ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.4"),
+        Hash::Sha1,
+    ),
     (ObjectIdentifier::new_unwrap("1.3.14.3.2.3"), Hash::Sha1),
     // sha1WithRSAEncryption, sha1WithRSA
-    (ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5"), Hash::Sha1),
+    (
+        ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.5"),
+        Hash::Sha1,
+    ),
     (ObjectIdentifier::new_unwrap("1.3.14.3.2.29"), Hash::Sha1),
     // sha256WithRSAEncryption, ecdsa-with-SHA256
-    (ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11"), Hash::Sha256),
-    (ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2"), Hash::Sha256),
+    (
+        ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11"),
+        Hash::Sha256,
+    ),
+    (
+        ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2"),
+        Hash::Sha256,
+    ),
 ];
 
 /// A key packages may be signed with, and the digest of a package its
@@ -92,13 +104,17 @@ pub fn keys<R: Read + Seek>(zip: R) -> Result<Vec<Key>> {
     let mut zip = ZipArchive::new(zip).context("read the certificates' zip")?;
     let mut keys = Vec::new();
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).context("open an entry of the certificates' zip")?;
+        let mut entry = zip
+            .by_index(i)
+            .context("open an entry of the certificates' zip")?;
         if !entry.name().ends_with(".x509.pem") {
             continue;
         }
         let name = entry.name().to_string();
         let mut pem = Vec::new();
-        entry.read_to_end(&mut pem).with_context(|| format!("read {name}"))?;
+        entry
+            .read_to_end(&mut pem)
+            .with_context(|| format!("read {name}"))?;
         keys.push(key(&pem).with_context(|| format!("take the key of {name}"))?);
     }
     ensure!(!keys.is_empty(), "the zip holds no certificate");
@@ -119,11 +135,22 @@ fn key(pem: &[u8]) -> Result<Key> {
         RSA_KEY => {
             let rsa = RsaPublicKey::from_public_key_der(&der).context("read the RSA key")?;
             let bits = rsa.n().bits();
-            ensure!(bits == 2048 || bits == 4096, "an RSA key of {bits} bits is not taken");
-            ensure!([3u32, 65537].map(BigUint::from).contains(rsa.e()), "an RSA key with the exponent {} is not taken", rsa.e());
+            ensure!(
+                bits == 2048 || bits == 4096,
+                "an RSA key of {bits} bits is not taken"
+            );
+            ensure!(
+                [3u32, 65537].map(BigUint::from).contains(rsa.e()),
+                "an RSA key with the exponent {} is not taken",
+                rsa.e()
+            );
             Public::Rsa(rsa)
         }
-        EC_KEY => Public::Ec(p256::PublicKey::from_public_key_der(&der).context("read the key as a P-256 key")?.into()),
+        EC_KEY => Public::Ec(
+            p256::PublicKey::from_public_key_der(&der)
+                .context("read the key as a P-256 key")?
+                .into(),
+        ),
         other => bail!("a key of the algorithm {other} is not taken"),
     };
     Ok(Key { public, hash })
@@ -133,13 +160,20 @@ fn key(pem: &[u8]) -> Result<Key> {
 /// `keys`. `read` hears, as it is read, how much of what the signature is
 /// of has been read, and of how much; the check stops when it answers
 /// false.
-pub fn verify<R: Read + Seek>(mut file: R, size: u64, keys: &[Key], mut read: impl FnMut(u64, u64) -> bool) -> Result<Verdict> {
+pub fn verify<R: Read + Seek>(
+    mut file: R,
+    size: u64,
+    keys: &[Key],
+    mut read: impl FnMut(u64, u64) -> bool,
+) -> Result<Verdict> {
     if size < FOOTER as u64 {
         return Ok(Verdict::Unsigned);
     }
     let mut footer = [0u8; FOOTER];
-    file.seek(SeekFrom::Start(size - FOOTER as u64)).context("seek to the package's last bytes")?;
-    file.read_exact(&mut footer).context("read the package's last bytes")?;
+    file.seek(SeekFrom::Start(size - FOOTER as u64))
+        .context("seek to the package's last bytes")?;
+    file.read_exact(&mut footer)
+        .context("read the package's last bytes")?;
     if footer[2..4] != [0xff, 0xff] {
         return Ok(Verdict::Unsigned);
     }
@@ -154,8 +188,10 @@ pub fn verify<R: Read + Seek>(mut file: R, size: u64, keys: &[Key], mut read: im
         return Ok(Verdict::Unverified);
     }
     let mut eocd = vec![0u8; tail];
-    file.seek(SeekFrom::Start(size - tail as u64)).context("seek to the end of the zip's directory")?;
-    file.read_exact(&mut eocd).context("read the end of the zip's directory")?;
+    file.seek(SeekFrom::Start(size - tail as u64))
+        .context("seek to the end of the zip's directory")?;
+    file.read_exact(&mut eocd)
+        .context("read the end of the zip's directory")?;
     if !eocd.starts_with(EOCD_MAGIC) || eocd[4..].windows(4).any(|w| w == EOCD_MAGIC) {
         return Ok(Verdict::Unverified);
     }
@@ -163,13 +199,18 @@ pub fn verify<R: Read + Seek>(mut file: R, size: u64, keys: &[Key], mut read: im
     // The signature is of all but the comment and its length.
     let signed = size - comment as u64 - 2;
     let wanted = |hash: Hash| keys.iter().any(|k| k.hash == hash);
-    let (mut sha1, mut sha256) = (wanted(Hash::Sha1).then(Sha1::new), wanted(Hash::Sha256).then(Sha256::new));
-    file.seek(SeekFrom::Start(0)).context("rewind the package")?;
+    let (mut sha1, mut sha256) = (
+        wanted(Hash::Sha1).then(Sha1::new),
+        wanted(Hash::Sha256).then(Sha256::new),
+    );
+    file.seek(SeekFrom::Start(0))
+        .context("rewind the package")?;
     let mut chunk = vec![0u8; CHUNK];
     let mut done = 0;
     while done < signed {
         let n = CHUNK.min((signed - done) as usize);
-        file.read_exact(&mut chunk[..n]).context("read the package")?;
+        file.read_exact(&mut chunk[..n])
+            .context("read the package")?;
         if let Some(h) = &mut sha1 {
             h.update(&chunk[..n]);
         }
@@ -184,17 +225,26 @@ pub fn verify<R: Read + Seek>(mut file: R, size: u64, keys: &[Key], mut read: im
     let sha1 = sha1.map(|h| h.finalize().to_vec()).unwrap_or_default();
     let sha256 = sha256.map(|h| h.finalize().to_vec()).unwrap_or_default();
 
-    let Some(signature) = signature(&eocd[tail - start..tail - FOOTER]) else { return Ok(Verdict::Unverified) };
+    let Some(signature) = signature(&eocd[tail - start..tail - FOOTER]) else {
+        return Ok(Verdict::Unverified);
+    };
     let made_with = |key: &Key| match (&key.public, key.hash) {
-        (Public::Rsa(rsa), Hash::Sha1) => rsa.verify(Pkcs1v15Sign::new::<Sha1>(), &sha1, &signature).is_ok(),
-        (Public::Rsa(rsa), Hash::Sha256) => rsa.verify(Pkcs1v15Sign::new::<Sha256>(), &sha256, &signature).is_ok(),
-        (Public::Ec(ec), Hash::Sha256) => {
-            p256::ecdsa::Signature::from_der(&signature).is_ok_and(|s| ec.verify_prehash(&sha256, &s).is_ok())
-        }
+        (Public::Rsa(rsa), Hash::Sha1) => rsa
+            .verify(Pkcs1v15Sign::new::<Sha1>(), &sha1, &signature)
+            .is_ok(),
+        (Public::Rsa(rsa), Hash::Sha256) => rsa
+            .verify(Pkcs1v15Sign::new::<Sha256>(), &sha256, &signature)
+            .is_ok(),
+        (Public::Ec(ec), Hash::Sha256) => p256::ecdsa::Signature::from_der(&signature)
+            .is_ok_and(|s| ec.verify_prehash(&sha256, &s).is_ok()),
         // An EC key signs only SHA-256 digests.
         (Public::Ec(_), Hash::Sha1) => false,
     };
-    Ok(if keys.iter().any(made_with) { Verdict::Signed } else { Verdict::Unverified })
+    Ok(if keys.iter().any(made_with) {
+        Verdict::Signed
+    } else {
+        Verdict::Unverified
+    })
 }
 
 /// The signature in a PKCS#7 signed-data block, its first signer's; none
@@ -205,7 +255,11 @@ fn signature(block: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let data: SignedData = info.content.decode_as().ok()?;
-    data.signer_infos.0.iter().next().map(|s| s.signature.as_bytes().to_vec())
+    data.signer_infos
+        .0
+        .iter()
+        .next()
+        .map(|s| s.signature.as_bytes().to_vec())
 }
 
 #[cfg(test)]
@@ -234,20 +288,33 @@ mod tests {
     fn certificates(entries: &[(&str, &str)]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, text) in entries {
-            w.start_file(*name, SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)).unwrap();
+            w.start_file(
+                *name,
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
+            )
+            .unwrap();
             w.write_all(text.as_bytes()).unwrap();
         }
         w.finish().unwrap().into_inner()
     }
 
     fn keys_of(pems: &[&str]) -> Vec<Key> {
-        let names: Vec<String> = (0..pems.len()).map(|k| format!("keys/{k}.x509.pem")).collect();
-        let entries: Vec<(&str, &str)> = names.iter().map(String::as_str).zip(pems.iter().copied()).collect();
+        let names: Vec<String> = (0..pems.len())
+            .map(|k| format!("keys/{k}.x509.pem"))
+            .collect();
+        let entries: Vec<(&str, &str)> = names
+            .iter()
+            .map(String::as_str)
+            .zip(pems.iter().copied())
+            .collect();
         keys(Cursor::new(certificates(&entries))).unwrap()
     }
 
     fn check(package: &[u8], keys: &[Key]) -> Verdict {
-        verify(Cursor::new(package), package.len() as u64, keys, |_, _| true).unwrap()
+        verify(Cursor::new(package), package.len() as u64, keys, |_, _| {
+            true
+        })
+        .unwrap()
     }
 
     /// Where the signature's footer says the comment starts.
@@ -258,10 +325,18 @@ mod tests {
 
     #[test]
     fn each_key_verifies_the_package_it_signed_and_no_other() {
-        let signed = [(SIGNED_TESTKEY, TESTKEY), (SIGNED_SHA1, SHA1), (SIGNED_EC, EC)];
+        let signed = [
+            (SIGNED_TESTKEY, TESTKEY),
+            (SIGNED_SHA1, SHA1),
+            (SIGNED_EC, EC),
+        ];
         let all = keys_of(&[TESTKEY, SHA1, EC]);
         for (package, cert) in signed {
-            assert_eq!(package::identify(Cursor::new(package)).unwrap(), Package::Script, "a signed zip still installs as one");
+            assert_eq!(
+                package::identify(Cursor::new(package)).unwrap(),
+                Package::Script,
+                "a signed zip still installs as one"
+            );
             assert_eq!(check(package, &keys_of(&[cert])), Verdict::Signed);
             assert_eq!(check(package, &all), Verdict::Signed);
             for (_, other) in signed.iter().filter(|(_, c)| *c != cert) {
@@ -274,7 +349,10 @@ mod tests {
     fn a_package_changed_after_it_was_signed_is_not_verified_but_its_comments_text_is_not_signed() {
         let keys = keys_of(&[TESTKEY]);
         let mut changed = SIGNED_TESTKEY.to_vec();
-        let at = changed.windows(20).position(|w| w == b"Skyward test package").expect("the script's text");
+        let at = changed
+            .windows(20)
+            .position(|w| w == b"Skyward test package")
+            .expect("the script's text");
         changed[at] = b's';
         assert_eq!(check(&changed, &keys), Verdict::Unverified);
         let mut renamed = SIGNED_TESTKEY.to_vec();
@@ -300,24 +378,34 @@ mod tests {
         for start in [6u16, 0xfff0] {
             let mut moved = SIGNED_TESTKEY.to_vec();
             moved[n - 6..n - 4].copy_from_slice(&start.to_le_bytes());
-            assert_eq!(check(&moved, &keys), Verdict::Unverified, "a signature {start} bytes from the end");
+            assert_eq!(
+                check(&moved, &keys),
+                Verdict::Unverified,
+                "a signature {start} bytes from the end"
+            );
         }
         let mut long = SIGNED_TESTKEY.to_vec();
         long[n - 2..].copy_from_slice(&(n as u16).to_le_bytes());
-        assert_eq!(check(&long, &keys), Verdict::Unverified, "a comment longer than the zip");
+        assert_eq!(
+            check(&long, &keys),
+            Verdict::Unverified,
+            "a comment longer than the zip"
+        );
     }
 
     #[test]
     fn a_zip_without_a_signature_of_all_of_it_is_unsigned() {
         let keys = keys_of(&[TESTKEY]);
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        w.start_file(package::UPDATE_BINARY, SimpleFileOptions::default()).unwrap();
+        w.start_file(package::UPDATE_BINARY, SimpleFileOptions::default())
+            .unwrap();
         w.write_all(b"#!/sbin/sh\n").unwrap();
         let plain = w.finish().unwrap().into_inner();
         assert_eq!(check(&plain, &keys), Verdict::Unsigned);
         let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
         w.set_comment("made by hand").unwrap();
-        w.start_file(package::UPDATE_BINARY, SimpleFileOptions::default()).unwrap();
+        w.start_file(package::UPDATE_BINARY, SimpleFileOptions::default())
+            .unwrap();
         let commented = w.finish().unwrap().into_inner();
         assert_eq!(check(&commented, &keys), Verdict::Unsigned);
         assert_eq!(check(b"PK", &keys), Verdict::Unsigned);
@@ -328,22 +416,49 @@ mod tests {
         let keys = keys_of(&[EC]);
         let signed = (comment_start(SIGNED_EC) - 2) as u64;
         let mut heard = Vec::new();
-        let verdict = verify(Cursor::new(SIGNED_EC), SIGNED_EC.len() as u64, &keys, |done, total| {
-            heard.push((done, total));
-            true
-        });
+        let verdict = verify(
+            Cursor::new(SIGNED_EC),
+            SIGNED_EC.len() as u64,
+            &keys,
+            |done, total| {
+                heard.push((done, total));
+                true
+            },
+        );
         assert_eq!(verdict.unwrap(), Verdict::Signed);
-        assert_eq!(heard.last(), Some(&(signed, signed)), "all before the comment's length is read");
-        let stopped = verify(Cursor::new(SIGNED_EC), SIGNED_EC.len() as u64, &keys, |_, _| false);
+        assert_eq!(
+            heard.last(),
+            Some(&(signed, signed)),
+            "all before the comment's length is read"
+        );
+        let stopped = verify(
+            Cursor::new(SIGNED_EC),
+            SIGNED_EC.len() as u64,
+            &keys,
+            |_, _| false,
+        );
         assert_eq!(stopped.unwrap(), Verdict::Stopped);
     }
 
     #[test]
     fn only_the_keys_androids_recovery_takes_are_read_from_certificates_named_as_it_names_them() {
-        let other = certificates(&[("keys/testkey.x509.pem", TESTKEY), ("README", "not a certificate"), ("keys/ec.pem", EC)]);
-        assert_eq!(keys(Cursor::new(other)).unwrap().len(), 1, "only *.x509.pem");
-        let short = keys(Cursor::new(certificates(&[("short.x509.pem", RSA1024)]))).err().expect("a 1024-bit key is refused");
+        let other = certificates(&[
+            ("keys/testkey.x509.pem", TESTKEY),
+            ("README", "not a certificate"),
+            ("keys/ec.pem", EC),
+        ]);
+        assert_eq!(
+            keys(Cursor::new(other)).unwrap().len(),
+            1,
+            "only *.x509.pem"
+        );
+        let short = keys(Cursor::new(certificates(&[("short.x509.pem", RSA1024)])))
+            .err()
+            .expect("a 1024-bit key is refused");
         assert!(format!("{short:#}").contains("1024 bits"), "{short:#}");
-        assert!(keys(Cursor::new(certificates(&[("README", "")]))).is_err(), "a zip without certificates");
+        assert!(
+            keys(Cursor::new(certificates(&[("README", "")]))).is_err(),
+            "a zip without certificates"
+        );
     }
 }

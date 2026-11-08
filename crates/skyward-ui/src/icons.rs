@@ -11,7 +11,9 @@ use crate::color::Rgba;
 use crate::theme::Theme;
 use std::sync::{Arc, Mutex};
 use svgtypes::{SimplePathSegment, SimplifyingPathParser};
-use tiny_skia::{BlendMode, Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    BlendMode, Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
@@ -193,7 +195,10 @@ const GEAR: &[Part] = &[
     )),
 ];
 
-const POWER: &[Part] = &[add(Shape::Line("M10.14,9.48A6.9,6.9 0 1 0 17.86,9.48", 2.4)), add(Shape::Line("M14,5.9V13", 2.4))];
+const POWER: &[Part] = &[
+    add(Shape::Line("M10.14,9.48A6.9,6.9 0 1 0 17.86,9.48", 2.4)),
+    add(Shape::Line("M14,5.9V13", 2.4)),
+];
 
 const GLOBE: &[Part] = &[add(Shape::Fill(
     "M14,5.168C18.877,5.168 22.83,9.122 22.83,14C22.83,18.878 18.877,22.832 14,22.832C9.123,22.832 5.17,18.878 5.17,14\
@@ -209,7 +214,9 @@ const GLOBE: &[Part] = &[add(Shape::Fill(
 ))];
 
 const CLOCK: &[Part] = &[
-    add(Shape::Fill("M14,5.3A8.7,8.7 0 1 1 14,22.7A8.7,8.7 0 1 1 14,5.3Z")),
+    add(Shape::Fill(
+        "M14,5.3A8.7,8.7 0 1 1 14,22.7A8.7,8.7 0 1 1 14,5.3Z",
+    )),
     cut(Shape::Line("M14,8.9V14.3L17.4,16.4", 2.0)),
 ];
 
@@ -408,11 +415,20 @@ static DRAWN: Mutex<Vec<Made>> = Mutex::new(Vec::new());
 /// the part of the canvas held is drawn, and nothing at all is made when
 /// none of it does.
 fn draw(c: &mut Canvas, art: Art, cx: f32, cy: f32, size: f32, ink: Rgba) {
-    let (left, top) = ((cx - size / 2.0).round() as i32, (cy - size / 2.0).round() as i32);
+    let (left, top) = (
+        (cx - size / 2.0).round() as i32,
+        (cy - size / 2.0).round() as i32,
+    );
     let side = size.ceil() as i32;
     let (rows, cols) = (c.held(), c.cols());
-    let (y0, y1) = (top.max(rows.start as i32), (top + side).min(rows.end as i32));
-    let (x0, x1) = (left.max(cols.start as i32), (left + side).min(cols.end as i32));
+    let (y0, y1) = (
+        top.max(rows.start as i32),
+        (top + side).min(rows.end as i32),
+    );
+    let (x0, x1) = (
+        left.max(cols.start as i32),
+        (left + side).min(cols.end as i32),
+    );
     if y0 >= y1 || x0 >= x1 {
         return;
     }
@@ -430,7 +446,12 @@ fn draw(c: &mut Canvas, art: Art, cx: f32, cy: f32, size: f32, ink: Rgba) {
 /// What `art` covers of its box `size` across, made the first time it is
 /// asked for at that size.
 fn coverage(art: Art, size: f32) -> Arc<Coverage> {
-    let found = DRAWN.lock().expect("no one panics holding the drawings").iter().find(|m| m.art == art && m.size == size).map(|m| m.cover.clone());
+    let found = DRAWN
+        .lock()
+        .expect("no one panics holding the drawings")
+        .iter()
+        .find(|m| m.art == art && m.size == size)
+        .map(|m| m.cover.clone());
     if let Some(cover) = found {
         return cover;
     }
@@ -439,7 +460,14 @@ fn coverage(art: Art, size: f32) -> Arc<Coverage> {
         Art::Glyph(icon) => outline(icon),
     };
     let cover = Arc::new(rasterize(parts, scale, size));
-    DRAWN.lock().expect("no one panics holding the drawings").push(Made { art, size, cover: cover.clone() });
+    DRAWN
+        .lock()
+        .expect("no one panics holding the drawings")
+        .push(Made {
+            art,
+            size,
+            cover: cover.clone(),
+        });
     cover
 }
 
@@ -451,21 +479,35 @@ fn rasterize(parts: &[Part], scale: f32, size: f32) -> Coverage {
     let side = size.ceil() as u32;
     let mut art = Pixmap::new(side, side).expect("a glyph's box holds pixels");
     let k = size / BOX * scale;
-    let at = Transform::from_translate(size / 2.0, size / 2.0).pre_scale(k, k).pre_translate(-BOX / 2.0, -BOX / 2.0);
+    let at = Transform::from_translate(size / 2.0, size / 2.0)
+        .pre_scale(k, k)
+        .pre_translate(-BOX / 2.0, -BOX / 2.0);
     for part in parts {
         let mut paint = Paint::default();
         paint.set_color(Color::WHITE);
-        paint.blend_mode = if part.cut { BlendMode::Clear } else { BlendMode::SourceOver };
+        paint.blend_mode = if part.cut {
+            BlendMode::Clear
+        } else {
+            BlendMode::SourceOver
+        };
         match part.shape {
             Shape::Fill(d) => art.fill_path(&path(d), &paint, FillRule::Winding, at, None),
             Shape::EvenOdd(d) => art.fill_path(&path(d), &paint, FillRule::EvenOdd, at, None),
             Shape::Line(d, width) => {
-                let stroke = Stroke { width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
+                let stroke = Stroke {
+                    width,
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Stroke::default()
+                };
                 art.stroke_path(&path(d), &paint, &stroke, at, None);
             }
         }
     }
-    Coverage { side, alpha: art.pixels().iter().map(|px| px.alpha()).collect() }
+    Coverage {
+        side,
+        alpha: art.pixels().iter().map(|px| px.alpha()).collect(),
+    }
 }
 
 /// The outline SVG path data `d` describes.
@@ -475,14 +517,24 @@ fn path(d: &str) -> tiny_skia::Path {
         match segment.unwrap_or_else(|e| panic!("an icon's outline {d:?} does not read: {e}")) {
             SimplePathSegment::MoveTo { x, y } => b.move_to(x as f32, y as f32),
             SimplePathSegment::LineTo { x, y } => b.line_to(x as f32, y as f32),
-            SimplePathSegment::Quadratic { x1, y1, x, y } => b.quad_to(x1 as f32, y1 as f32, x as f32, y as f32),
-            SimplePathSegment::CurveTo { x1, y1, x2, y2, x, y } => {
-                b.cubic_to(x1 as f32, y1 as f32, x2 as f32, y2 as f32, x as f32, y as f32)
+            SimplePathSegment::Quadratic { x1, y1, x, y } => {
+                b.quad_to(x1 as f32, y1 as f32, x as f32, y as f32)
             }
+            SimplePathSegment::CurveTo {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            } => b.cubic_to(
+                x1 as f32, y1 as f32, x2 as f32, y2 as f32, x as f32, y as f32,
+            ),
             SimplePathSegment::ClosePath => b.close(),
         }
     }
-    b.finish().unwrap_or_else(|| panic!("an icon's outline {d:?} encloses nothing"))
+    b.finish()
+        .unwrap_or_else(|| panic!("an icon's outline {d:?} encloses nothing"))
 }
 
 #[cfg(test)]
@@ -522,7 +574,14 @@ mod tests {
         let side = (BOX * UNIT) as u32;
         let mut c = Canvas::new(side, side);
         c.clear(Rgba::rgb(0, 0, 0));
-        glyph(&mut c, icon, side as f32 / 2.0, side as f32 / 2.0, side as f32, Rgba::rgb(255, 255, 255));
+        glyph(
+            &mut c,
+            icon,
+            side as f32 / 2.0,
+            side as f32 / 2.0,
+            side as f32,
+            Rgba::rgb(255, 255, 255),
+        );
         c
     }
 
@@ -551,9 +610,15 @@ mod tests {
             assert!(r > l && b > t, "{icon:?} covers nothing");
             // As the stock glyphs keep within the tile's middle 23 units,
             // and stand within three quarters of one of its middle.
-            assert!(l >= 2.5 && t >= 2.5 && r <= 25.5 && b <= 25.5, "{icon:?} reaches {l}, {t} to {r}, {b}");
+            assert!(
+                l >= 2.5 && t >= 2.5 && r <= 25.5 && b <= 25.5,
+                "{icon:?} reaches {l}, {t} to {r}, {b}"
+            );
             let (x, y) = ((l + r) / 2.0, (t + b) / 2.0);
-            assert!((x - 14.0).abs() <= 0.75 && (y - 14.0).abs() <= 0.75, "{icon:?} stands at {x}, {y}");
+            assert!(
+                (x - 14.0).abs() <= 0.75 && (y - 14.0).abs() <= 0.75,
+                "{icon:?} stands at {x}, {y}"
+            );
         }
     }
 
@@ -579,10 +644,26 @@ mod tests {
         let black = Rgba::rgb(0, 0, 0);
         c.clear(black);
         tile(&mut c, &t, 1.0, 1.0, Rgba::rgb(0, 0, 255), Icon::More);
-        let px = |x: f32, y: f32| -> [u8; 4] { c.data[(((y as u32) * c.w + x as u32) * 4) as usize..][..4].try_into().unwrap() };
+        let px = |x: f32, y: f32| -> [u8; 4] {
+            c.data[(((y as u32) * c.w + x as u32) * 4) as usize..][..4]
+                .try_into()
+                .unwrap()
+        };
         assert_eq!(px(1.0, 1.0), [0, 0, 0, 255], "its corners are clear");
-        assert_eq!(px(1.0 + s / 2.0, 2.0)[2], 255, "the middle of its edge is the tile's");
-        assert_eq!(px(1.0 + s / 2.0, 1.0 + s * 8.0 / BOX), [255, 255, 255, 255], "the glyph is white over it");
-        assert_eq!(px(1.0 + s / 2.0, 1.0 + s / 2.0)[2], 255, "and the tile shows through what is cut out of the glyph");
+        assert_eq!(
+            px(1.0 + s / 2.0, 2.0)[2],
+            255,
+            "the middle of its edge is the tile's"
+        );
+        assert_eq!(
+            px(1.0 + s / 2.0, 1.0 + s * 8.0 / BOX),
+            [255, 255, 255, 255],
+            "the glyph is white over it"
+        );
+        assert_eq!(
+            px(1.0 + s / 2.0, 1.0 + s / 2.0)[2],
+            255,
+            "and the tile shows through what is cut out of the glyph"
+        );
     }
 }

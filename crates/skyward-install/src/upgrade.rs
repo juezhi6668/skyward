@@ -15,10 +15,20 @@ const PARTITION: &str = "recovery";
 /// The image the zip at `path` holds, its only entry, read whole.
 pub fn unzip(path: &Path) -> Result<Vec<u8>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut zip = zip::ZipArchive::new(file).with_context(|| format!("read {} as a zip", path.display()))?;
-    ensure!(zip.len() == 1, "{} holds {} entries, and a release's zip holds its image alone", path.display(), zip.len());
+    let mut zip =
+        zip::ZipArchive::new(file).with_context(|| format!("read {} as a zip", path.display()))?;
+    ensure!(
+        zip.len() == 1,
+        "{} holds {} entries, and a release's zip holds its image alone",
+        path.display(),
+        zip.len()
+    );
     let mut entry = zip.by_index(0).context("open the image in the zip")?;
-    ensure!(entry.name().ends_with(".img"), "the zip holds {}, which is not an image", entry.name());
+    ensure!(
+        entry.name().ends_with(".img"),
+        "the zip holds {}, which is not an image",
+        entry.name()
+    );
     let mut image = Vec::with_capacity(entry.size() as usize);
     entry.read_to_end(&mut image).context("unzip the image")?;
     Ok(image)
@@ -26,10 +36,17 @@ pub fn unzip(path: &Path) -> Result<Vec<u8>> {
 
 /// Check that `image` is Skyward, packed for the phone `codename` names.
 pub fn check(image: &[u8], codename: &str) -> Result<()> {
-    let config = image::device_config(&mut Cursor::new(image)).context("look into the image")?.context("the image is not Skyward")?;
-    let config = std::str::from_utf8(&config).context("the image's device configuration is not text")?;
-    let named = skyward_config::codename(config).context("read the image's device configuration")?;
-    ensure!(named == codename, "the image is Skyward for {named}, not for {codename}");
+    let config = image::device_config(&mut Cursor::new(image))
+        .context("look into the image")?
+        .context("the image is not Skyward")?;
+    let config =
+        std::str::from_utf8(&config).context("the image's device configuration is not text")?;
+    let named =
+        skyward_config::codename(config).context("read the image's device configuration")?;
+    ensure!(
+        named == codename,
+        "the image is Skyward for {named}, not for {codename}"
+    );
     Ok(())
 }
 
@@ -41,8 +58,12 @@ pub fn slots(dir: &Path, next: Slot) -> Result<Vec<Slot>> {
     for slot in [Slot::A, Slot::B] {
         let path = image::device(dir, PARTITION, slot);
         let mut file = File::open(&path).with_context(|| format!("open {}", path.display()))?;
-        image::drop_cache(&file).with_context(|| format!("drop the cached pages of {}", path.display()))?;
-        if slot == next || image::is_skyward(&mut file).with_context(|| format!("look into {}", path.display()))? {
+        image::drop_cache(&file)
+            .with_context(|| format!("drop the cached pages of {}", path.display()))?;
+        if slot == next
+            || image::is_skyward(&mut file)
+                .with_context(|| format!("look into {}", path.display()))?
+        {
             slots.push(slot);
         }
     }
@@ -51,9 +72,22 @@ pub fn slots(dir: &Path, next: Slot) -> Result<Vec<Slot>> {
 
 /// Write `image` into the recovery partitions of `slots`, among the links
 /// in `dir`, and read each back; `progress` hears the bytes so far, of all.
-pub fn write(dir: &Path, image: &[u8], slots: &[Slot], progress: &mut dyn FnMut(u64, u64)) -> Result<()> {
-    let devices: Vec<PathBuf> = slots.iter().map(|&slot| image::device(dir, PARTITION, slot)).collect();
-    image::flash(&mut Cursor::new(image), image.len() as u64, &devices, progress)
+pub fn write(
+    dir: &Path,
+    image: &[u8],
+    slots: &[Slot],
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<()> {
+    let devices: Vec<PathBuf> = slots
+        .iter()
+        .map(|&slot| image::device(dir, PARTITION, slot))
+        .collect();
+    image::flash(
+        &mut Cursor::new(image),
+        image.len() as u64,
+        &devices,
+        progress,
+    )
 }
 
 #[cfg(test)]
@@ -67,7 +101,8 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut zip = zip::ZipWriter::new(file.reopen().unwrap());
         for (name, data) in entries {
-            zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
             zip.write_all(data).unwrap();
         }
         zip.finish().unwrap();
@@ -85,16 +120,28 @@ mod tests {
         assert!(unzip(other.path()).is_err());
         let unzipped = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(unzipped.path(), &image).unwrap();
-        assert!(unzip(unzipped.path()).is_err(), "an image that is not zipped");
+        assert!(
+            unzip(unzipped.path()).is_err(),
+            "an image that is not zipped"
+        );
     }
 
     #[test]
     fn only_skyward_for_this_phone_goes_in() {
         assert!(check(&skyward_for("ishtar"), "ishtar").is_ok());
         let e = check(&skyward_for("nezha"), "ishtar").unwrap_err();
-        assert_eq!(e.to_string(), "the image is Skyward for nezha, not for ishtar");
-        assert_eq!(check(&recovery(false), "ishtar").unwrap_err().to_string(), "the image is not Skyward");
-        assert!(check(&recovery(true), "ishtar").is_err(), "a device configuration that names no phone");
+        assert_eq!(
+            e.to_string(),
+            "the image is Skyward for nezha, not for ishtar"
+        );
+        assert_eq!(
+            check(&recovery(false), "ishtar").unwrap_err().to_string(),
+            "the image is not Skyward"
+        );
+        assert!(
+            check(&recovery(true), "ishtar").is_err(),
+            "a device configuration that names no phone"
+        );
     }
 
     /// Recovery partitions of `size` bytes holding `a` and `b`.
@@ -112,10 +159,24 @@ mod tests {
     fn the_build_goes_where_the_phone_starts_next_and_where_skyward_is() {
         let (skyward, stock) = (skyward_for("ishtar"), recovery(false));
         let size = skyward.len().max(stock.len()) + 4096;
-        assert_eq!(slots(partitions(&skyward, &stock, size).path(), Slot::A).unwrap(), [Slot::A]);
-        assert_eq!(slots(partitions(&skyward, &skyward, size).path(), Slot::A).unwrap(), [Slot::A, Slot::B], "an older build in the other slot");
-        assert_eq!(slots(partitions(&stock, &skyward, size).path(), Slot::A).unwrap(), [Slot::A, Slot::B], "Skyward started without being flashed");
-        assert_eq!(slots(partitions(&stock, &stock, size).path(), Slot::B).unwrap(), [Slot::B]);
+        assert_eq!(
+            slots(partitions(&skyward, &stock, size).path(), Slot::A).unwrap(),
+            [Slot::A]
+        );
+        assert_eq!(
+            slots(partitions(&skyward, &skyward, size).path(), Slot::A).unwrap(),
+            [Slot::A, Slot::B],
+            "an older build in the other slot"
+        );
+        assert_eq!(
+            slots(partitions(&stock, &skyward, size).path(), Slot::A).unwrap(),
+            [Slot::A, Slot::B],
+            "Skyward started without being flashed"
+        );
+        assert_eq!(
+            slots(partitions(&stock, &stock, size).path(), Slot::B).unwrap(),
+            [Slot::B]
+        );
     }
 
     #[test]
@@ -124,10 +185,20 @@ mod tests {
         let size = older.len().max(newer.len()) + 4096;
         let dir = partitions(&older, &stock, size);
         let mut told = Vec::new();
-        write(dir.path(), &newer, &[Slot::A], &mut |done, total| told.push((done, total))).unwrap();
+        write(dir.path(), &newer, &[Slot::A], &mut |done, total| {
+            told.push((done, total))
+        })
+        .unwrap();
         let total = 2 * newer.len() as u64;
         assert_eq!(told.last(), Some(&(total, total)), "written and read back");
-        assert_eq!(&std::fs::read(dir.path().join("recovery_a")).unwrap()[..newer.len()], &newer[..]);
-        assert_eq!(&std::fs::read(dir.path().join("recovery_b")).unwrap()[..stock.len()], &stock[..], "the other slot left alone");
+        assert_eq!(
+            &std::fs::read(dir.path().join("recovery_a")).unwrap()[..newer.len()],
+            &newer[..]
+        );
+        assert_eq!(
+            &std::fs::read(dir.path().join("recovery_b")).unwrap()[..stock.len()],
+            &stock[..],
+            "the other slot left alone"
+        );
     }
 }

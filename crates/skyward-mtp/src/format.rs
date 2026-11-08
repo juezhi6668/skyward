@@ -140,7 +140,9 @@ pub fn of(name: &OsStr, folder: bool) -> u16 {
     if folder {
         return format::ASSOCIATION;
     }
-    let Some(ext) = Path::new(name).extension().and_then(OsStr::to_str) else { return format::UNDEFINED };
+    let Some(ext) = Path::new(name).extension().and_then(OsStr::to_str) else {
+        return format::UNDEFINED;
+    };
     let ext = ext.to_ascii_lowercase();
     BY_EXTENSION
         .iter()
@@ -158,7 +160,10 @@ mod tests {
         assert_eq!(of(OsStr::new("IMG_0001.JPG"), false), format::EXIF_JPEG);
         assert_eq!(of(OsStr::new("song.mp3"), false), format::MP3);
         assert_eq!(of(OsStr::new("clip.Mp4"), false), format::MP4_CONTAINER);
-        assert_eq!(of(OsStr::new("report.docx"), false), format::MS_WORD_DOCUMENT);
+        assert_eq!(
+            of(OsStr::new("report.docx"), false),
+            format::MS_WORD_DOCUMENT
+        );
         assert_eq!(of(OsStr::new("voice.m4a"), false), format::UNDEFINED_AUDIO);
         assert_eq!(of(OsStr::new("film.mkv"), false), format::UNDEFINED_VIDEO);
         assert_eq!(of(OsStr::new("sticker.webp"), false), format::DEFINED);

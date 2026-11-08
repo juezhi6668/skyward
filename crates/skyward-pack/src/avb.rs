@@ -19,9 +19,22 @@ const RELEASE: &[u8] = b"skyward-pack";
 /// `image` grown to fill a `partition_size`-byte partition named
 /// `partition`: the image, its vbmeta image from the next block on, and the
 /// footer locating that in the partition's last bytes, zeros between.
-pub fn footed(image: &[u8], partition: &str, partition_size: usize, salt: &[u8]) -> Result<Vec<u8>> {
-    let digest = Sha256::new().chain_update(salt).chain_update(image).finalize();
-    let vbmeta = vbmeta(&hash_descriptor(image.len() as u64, partition, salt, &digest));
+pub fn footed(
+    image: &[u8],
+    partition: &str,
+    partition_size: usize,
+    salt: &[u8],
+) -> Result<Vec<u8>> {
+    let digest = Sha256::new()
+        .chain_update(salt)
+        .chain_update(image)
+        .finalize();
+    let vbmeta = vbmeta(&hash_descriptor(
+        image.len() as u64,
+        partition,
+        salt,
+        &digest,
+    ));
     let offset = image.len().next_multiple_of(BLOCK);
     let end = offset + vbmeta.len().next_multiple_of(BLOCK);
     ensure!(
@@ -126,7 +139,10 @@ mod tests {
     #[test]
     fn an_image_that_leaves_no_room_for_its_vbmeta_and_footer_is_refused() {
         let image = vec![b'S'; 8192];
-        assert!(footed(&image, "recovery", 16384, &SALT).is_ok(), "a block each for the vbmeta image and the footer");
+        assert!(
+            footed(&image, "recovery", 16384, &SALT).is_ok(),
+            "a block each for the vbmeta image and the footer"
+        );
         assert!(footed(&image, "recovery", 12288, &SALT).is_err());
     }
 }

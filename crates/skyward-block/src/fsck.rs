@@ -20,7 +20,14 @@ const CHECK_F2FS: [&str; 5] = ["-a", "--no-kernel-check", "-c", "10000", "--debu
 
 /// What repairs f2fs: every part of the partition checked, and all that is
 /// found fixed.
-const REPAIR_F2FS: [&str; 6] = ["-f", "-y", "--no-kernel-check", "-c", "10000", "--debug-cache"];
+const REPAIR_F2FS: [&str; 6] = [
+    "-f",
+    "-y",
+    "--no-kernel-check",
+    "-c",
+    "10000",
+    "--debug-cache",
+];
 
 /// What repairs ext4: the whole filesystem checked, and every fix made
 /// without asking.
@@ -50,9 +57,15 @@ pub fn check(device: &Path, filesystem: &str) -> Result<Checked> {
     match filesystem {
         "f2fs" => {
             let ran = tools::find(FSCK_F2FS)?.run(&arguments(&CHECK_F2FS, device)?)?;
-            Ok(Checked { status: ran.status, said: ran.said })
+            Ok(Checked {
+                status: ran.status,
+                said: ran.said,
+            })
         }
-        other => bail!("{} holds {other}, which the recovery does not check before writing to it", device.display()),
+        other => bail!(
+            "{} holds {other}, which the recovery does not check before writing to it",
+            device.display()
+        ),
     }
 }
 
@@ -74,7 +87,10 @@ pub fn repair(device: &Path, filesystem: &str) -> Result<(Fixed, Ran)> {
     let ran = match filesystem {
         "f2fs" => tools::find(FSCK_F2FS)?.run(&arguments(&REPAIR_F2FS, device)?)?,
         "ext4" | "ext3" | "ext2" => tools::find(E2FSCK)?.run(&arguments(&REPAIR_EXT, device)?)?,
-        other => bail!("{} holds {other}, which the recovery does not repair", device.display()),
+        other => bail!(
+            "{} holds {other}, which the recovery does not repair",
+            device.display()
+        ),
     };
     Ok((left_by(ran.status), ran))
 }
@@ -111,13 +127,34 @@ mod tests {
     #[test]
     fn f2fs_is_checked_as_the_phone_checks_it_less_the_monthly_whole_check() {
         let args = arguments(&CHECK_F2FS, Path::new("/dev/block/dm-8")).unwrap();
-        assert_eq!(args, ["-a", "--no-kernel-check", "-c", "10000", "--debug-cache", "/dev/block/dm-8"]);
+        assert_eq!(
+            args,
+            [
+                "-a",
+                "--no-kernel-check",
+                "-c",
+                "10000",
+                "--debug-cache",
+                "/dev/block/dm-8"
+            ]
+        );
     }
 
     #[test]
     fn a_repair_goes_through_the_whole_partition_and_fixes_without_asking() {
         let f2fs = arguments(&REPAIR_F2FS, Path::new("/dev/block/dm-8")).unwrap();
-        assert_eq!(f2fs, ["-f", "-y", "--no-kernel-check", "-c", "10000", "--debug-cache", "/dev/block/dm-8"]);
+        assert_eq!(
+            f2fs,
+            [
+                "-f",
+                "-y",
+                "--no-kernel-check",
+                "-c",
+                "10000",
+                "--debug-cache",
+                "/dev/block/dm-8"
+            ]
+        );
         let ext = arguments(&REPAIR_EXT, Path::new("/dev/block/dm-9")).unwrap();
         assert_eq!(ext, ["-f", "-y", "/dev/block/dm-9"]);
         let unshare = arguments(&UNSHARE_EXT, Path::new("/dev/block/dm-3")).unwrap();
@@ -126,7 +163,10 @@ mod tests {
 
     #[test]
     fn a_filesystem_the_recovery_does_not_check_or_repair_is_refused() {
-        assert!(check(Path::new("/dev/x"), "ext4").is_err(), "only f2fs is checked before mounting");
+        assert!(
+            check(Path::new("/dev/x"), "ext4").is_err(),
+            "only f2fs is checked before mounting"
+        );
         assert!(repair(Path::new("/dev/x"), "erofs").is_err());
     }
 

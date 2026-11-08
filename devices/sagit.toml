@@ -1,0 +1,80 @@
+[device]
+codename = "sagit"
+brand = "Xiaomi"
+model = "MI 6"
+ab = false
+
+[display]
+# The panel's own mode, read from the framebuffer rather than guessed: the
+# recovery's fb0 gives 1080x1920 visible over 1080x3840 virtual at 32 bits.
+# The density is the one this phone's system runs the panel at; it scales
+# the pages alone, and is worth checking against ro.sf.lcd_density.
+width = 1080
+height = 1920
+density = 420
+
+# What a backup is chosen by, in the order the page offers it: the set the
+# recovery's own list of this phone backs up. The boot partitions are read
+# whole, and so are those the phone's table only ever holds one of; the
+# others go by the name the table reaches them under, which is why the
+# vendor's files are `cust` here. The four the phone keeps its baseband's
+# identity and calibration in are offered under their own names, since each
+# is a partition of its own and a phone whose radio is dead has use for one
+# of them back.
+[backup]
+partitions = [
+    "boot",
+    "recovery",
+    "system",
+    "cust",
+    "cache",
+    "persist",
+    "modem",
+    "data",
+    "modemst1",
+    "modemst2",
+    "fsg",
+    "fsc",
+]
+efs = ["modemst1", "modemst2", "fsg", "fsc"]
+
+# The vibration motor is the PMI8998's haptics driver, reached through
+# /sys/class/leds/vibrator rather than through the kernel's force-feedback
+# events: all four of this phone's input devices read their `ff` capability
+# as 0, so no click of samples can be loaded here at all. The driver plays a
+# timed drive -- `duration` takes how long to drive for, in milliseconds, and
+# `activate` starts it, or stops it when told 0 -- and its `brightness` file
+# does nothing, so the slider's share falls on the length of the drive. The
+# motor is driven at the 2830 mV the driver's own `vmax_mv` says; 40 ms at
+# the fullest is a click under the finger rather than a buzz.
+[haptics]
+timed = "/sys/class/leds/vibrator"
+drive = 40
+strength = { lightest = 0.4, strongest = 1.0 }
+
+# What the wipe page offers to make afresh, in the order it lists it. The
+# metadata row is this phone's `oops` partition, which the table below says
+# is where its metadata is; its vendor files are the partition named `cust`,
+# which the table mounts at /vendor, and the system it mounts at /, which is
+# where the recovery looks for it under its own name.
+[wipe]
+formats = ["data", "cache", "metadata", "system", "vendor"]
+
+# This phone's own table has no metadata line: it has no metadata partition.
+# Its `oops` partition -- 16 MiB, and an ext4 filesystem with a UUID on it
+# already -- answers for one, and is where the recovery keeps its settings,
+# which every phone puts on /metadata. Read-only as the phone's own metadata
+# is, and writable only while a settings file is moved into it.
+[[fstab]]
+device = "/dev/block/bootdevice/by-name/oops"
+mount_point = "/metadata"
+filesystem = "ext4"
+options = "ro,nosuid,nodev,noatime"
+extras = "defaults"
+
+# Nothing else. Of the older Qualcomm kernels this phone runs, the panel,
+# the Synaptics DSX touch and the keys are all built into the recovery
+# kernel rather than modules, and the boot loader leaves the panel lit, so
+# there is no [modules], no [touch] and no [firmware] to write. The data
+# partition is not encrypted, so no decryption is asked of the system's own
+# key services either.

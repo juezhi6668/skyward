@@ -10,9 +10,9 @@ mod partitions;
 pub mod snapshots;
 
 pub use partitions::{
-    check_merge, map_slot, map_whole, mount_one, mount_partitions, mount_point, mounted_partitions, release_partitions, slot_bases,
-    slot_sizes, snapshots_mapped, start_merge, unmap_slot, unmap_whole, unmount_one, unmount_partitions, Mounted, Mounts, SlotMaps,
-    Whole,
+    check_merge, map_slot, map_whole, mount_one, mount_partitions, mount_point, mounted_partitions,
+    release_partitions, slot_bases, slot_sizes, snapshots_mapped, start_merge, unmap_slot,
+    unmap_whole, unmount_one, unmount_partitions, Mounted, Mounts, SlotMaps, Whole,
 };
 pub use snapshots::Merge;
 
@@ -76,7 +76,9 @@ pub struct BootSlots {
 pub fn current_slot() -> Result<Option<Slot>> {
     match skyward_block::slot_suffix()? {
         None => Ok(None),
-        Some(s) => Slot::from_suffix(&s).map(Some).ok_or_else(|| anyhow!("slot suffix {s:?}")),
+        Some(s) => Slot::from_suffix(&s)
+            .map(Some)
+            .ok_or_else(|| anyhow!("slot suffix {s:?}")),
     }
 }
 
@@ -215,7 +217,9 @@ pub enum UpdateState {
 impl UpdateState {
     fn phase(self) -> SnapshotState {
         match self {
-            UpdateState::None | UpdateState::MergeCompleted | UpdateState::Cancelled => SnapshotState::None,
+            UpdateState::None | UpdateState::MergeCompleted | UpdateState::Cancelled => {
+                SnapshotState::None
+            }
             UpdateState::Initiated | UpdateState::Unverified => SnapshotState::Snapshotted,
             UpdateState::Merging | UpdateState::MergeNeedsReboot => SnapshotState::Merging,
             UpdateState::MergeFailed => SnapshotState::MergeFailed,
@@ -255,7 +259,9 @@ impl Update {
     /// /metadata.
     pub fn holds_wipe(&self, current: Slot) -> Option<Hold> {
         match self.state {
-            UpdateState::Unverified if self.source.is_some_and(|source| source != current) => Some(Hold::Unconfirmed),
+            UpdateState::Unverified if self.source.is_some_and(|source| source != current) => {
+                Some(Hold::Unconfirmed)
+            }
             UpdateState::Merging => Some(Hold::Merging),
             UpdateState::MergeFailed => Some(Hold::MergeFailed),
             _ => None,
@@ -283,7 +289,10 @@ fn read_update(dir: &Path) -> Result<Update> {
     let state = read_state(dir)?;
     let path = dir.join(SOURCE);
     let source = match fs::read_to_string(&path) {
-        Ok(suffix) => Some(Slot::from_suffix(suffix.trim()).with_context(|| format!("{} names the slot {suffix:?}", path.display()))?),
+        Ok(suffix) => Some(
+            Slot::from_suffix(suffix.trim())
+                .with_context(|| format!("{} names the slot {suffix:?}", path.display()))?,
+        ),
         Err(e) if e.kind() == ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
     };
@@ -311,7 +320,9 @@ fn decode_status(bytes: &[u8]) -> Result<UpdateStatus> {
     if let Ok(status) = UpdateStatus::decode(bytes) {
         return Ok(status);
     }
-    let state = match std::str::from_utf8(bytes).map_err(|_| anyhow!("neither SnapshotUpdateStatus nor an update state's name"))? {
+    let state = match std::str::from_utf8(bytes)
+        .map_err(|_| anyhow!("neither SnapshotUpdateStatus nor an update state's name"))?
+    {
         "" | "none" => UpdateState::None,
         "initiated" => UpdateState::Initiated,
         "unverified" => UpdateState::Unverified,
@@ -322,7 +333,10 @@ fn decode_status(bytes: &[u8]) -> Result<UpdateStatus> {
         "cancelled" => UpdateState::Cancelled,
         other => bail!("update state {other:?}"),
     };
-    Ok(UpdateStatus { state: state as i32, ..UpdateStatus::default() })
+    Ok(UpdateStatus {
+        state: state as i32,
+        ..UpdateStatus::default()
+    })
 }
 
 fn state_of(status: &UpdateStatus) -> Result<UpdateState> {
@@ -370,7 +384,9 @@ pub fn standing(current: Slot) -> Result<Standing> {
     if !skyward_block::mount::is_mount_point(Path::new(METADATA))? {
         return Ok(Standing::Unknown);
     }
-    let Some(snaps) = snapshots::Snapshots::lock(false)? else { return Ok(Standing::None) };
+    let Some(snaps) = snapshots::Snapshots::lock(false)? else {
+        return Ok(Standing::None);
+    };
     let update = snaps.update()?;
     Ok(match state_of(&update)? {
         UpdateState::None | UpdateState::Cancelled => Standing::None,
@@ -383,7 +399,9 @@ pub fn standing(current: Slot) -> Result<Standing> {
         },
         UpdateState::Merging if update.using_snapuserd => Standing::Compressed,
         UpdateState::Merging => Standing::Merging(snaps.progress()?),
-        UpdateState::MergeFailed => Standing::Failed(FailureCode::try_from(update.merge_failure_code).unwrap_or(FailureCode::Ok)),
+        UpdateState::MergeFailed => Standing::Failed(
+            FailureCode::try_from(update.merge_failure_code).unwrap_or(FailureCode::Ok),
+        ),
         UpdateState::MergeNeedsReboot | UpdateState::MergeCompleted => Standing::Merged,
     })
 }
@@ -408,7 +426,11 @@ mod tests {
     }
 
     fn encoded(state: UpdateState) -> Vec<u8> {
-        UpdateStatus { state: state as i32, ..UpdateStatus::default() }.encode_to_vec()
+        UpdateStatus {
+            state: state as i32,
+            ..UpdateStatus::default()
+        }
+        .encode_to_vec()
     }
 
     fn decode_state(bytes: &[u8]) -> Result<UpdateState> {
@@ -427,24 +449,49 @@ mod tests {
 
     #[test]
     fn update_states_map_to_phases() {
-        assert_eq!(phase(&encoded(UpdateState::Unverified)), SnapshotState::Snapshotted);
-        assert_eq!(phase(&encoded(UpdateState::Initiated)), SnapshotState::Snapshotted);
-        assert_eq!(phase(&encoded(UpdateState::Merging)), SnapshotState::Merging);
-        assert_eq!(phase(&encoded(UpdateState::MergeNeedsReboot)), SnapshotState::Merging);
-        assert_eq!(phase(&encoded(UpdateState::MergeFailed)), SnapshotState::MergeFailed);
-        assert_eq!(phase(&encoded(UpdateState::MergeCompleted)), SnapshotState::None);
+        assert_eq!(
+            phase(&encoded(UpdateState::Unverified)),
+            SnapshotState::Snapshotted
+        );
+        assert_eq!(
+            phase(&encoded(UpdateState::Initiated)),
+            SnapshotState::Snapshotted
+        );
+        assert_eq!(
+            phase(&encoded(UpdateState::Merging)),
+            SnapshotState::Merging
+        );
+        assert_eq!(
+            phase(&encoded(UpdateState::MergeNeedsReboot)),
+            SnapshotState::Merging
+        );
+        assert_eq!(
+            phase(&encoded(UpdateState::MergeFailed)),
+            SnapshotState::MergeFailed
+        );
+        assert_eq!(
+            phase(&encoded(UpdateState::MergeCompleted)),
+            SnapshotState::None
+        );
     }
 
     #[test]
     fn unknown_state_value_is_an_error() {
-        let bytes = UpdateStatus { state: 42, ..UpdateStatus::default() }.encode_to_vec();
+        let bytes = UpdateStatus {
+            state: 42,
+            ..UpdateStatus::default()
+        }
+        .encode_to_vec();
         assert!(decode_state(&bytes).is_err());
     }
 
     #[test]
     fn a_state_written_by_name_as_libsnapshot_once_wrote_it_is_read() {
         assert_eq!(decode_state(b"merging").unwrap(), UpdateState::Merging);
-        assert_eq!(decode_state(b"merge-needs-reboot").unwrap(), UpdateState::MergeNeedsReboot);
+        assert_eq!(
+            decode_state(b"merge-needs-reboot").unwrap(),
+            UpdateState::MergeNeedsReboot
+        );
         assert_eq!(decode_state(b"initiated").unwrap(), UpdateState::Initiated);
         assert_eq!(decode_state(b"none").unwrap(), UpdateState::None);
         assert!(decode_state(b"half-merged").is_err());
@@ -458,7 +505,9 @@ mod tests {
             total_sectors: 4_225_024,
             metadata_sectors: 33_024,
             merge_phase: MergePhase::SecondPhase as i32,
-            source_build_fingerprint: "Xiaomi/ishtar/ishtar:13/TKQ1.221114.001/OS3.0.305.0.WMACNXM:user/release-keys".into(),
+            source_build_fingerprint:
+                "Xiaomi/ishtar/ishtar:13/TKQ1.221114.001/OS3.0.305.0.WMACNXM:user/release-keys"
+                    .into(),
             ..UpdateStatus::default()
         };
         assert_eq!(decode_status(&status.encode_to_vec()).unwrap(), status);
@@ -474,12 +523,31 @@ mod tests {
     #[test]
     fn an_update_is_read_with_the_slot_it_came_from_once_that_is_written() {
         let dir = scratch("read");
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::None, source: None }, "no update yet");
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::None,
+                source: None
+            },
+            "no update yet"
+        );
         fs::write(dir.join(STATE), encoded(UpdateState::Initiated)).unwrap();
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::Initiated, source: None });
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::Initiated,
+                source: None
+            }
+        );
         fs::write(dir.join(STATE), encoded(UpdateState::Unverified)).unwrap();
         fs::write(dir.join(SOURCE), "_a").unwrap();
-        assert_eq!(read_update(&dir).unwrap(), Update { state: UpdateState::Unverified, source: Some(Slot::A) });
+        assert_eq!(
+            read_update(&dir).unwrap(),
+            Update {
+                state: UpdateState::Unverified,
+                source: Some(Slot::A)
+            }
+        );
         fs::write(dir.join(SOURCE), "_c").unwrap();
         assert!(read_update(&dir).is_err(), "a slot that is neither");
         fs::remove_dir_all(&dir).unwrap();
@@ -500,8 +568,17 @@ mod tests {
         for u in free {
             assert_eq!(u.holds_wipe(Slot::B), None, "{u:?} from slot B");
         }
-        assert_eq!(update(UpdateState::Unverified, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::Unconfirmed));
-        assert_eq!(update(UpdateState::Merging, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::Merging));
-        assert_eq!(update(UpdateState::MergeFailed, Some(Slot::A)).holds_wipe(Slot::B), Some(Hold::MergeFailed));
+        assert_eq!(
+            update(UpdateState::Unverified, Some(Slot::A)).holds_wipe(Slot::B),
+            Some(Hold::Unconfirmed)
+        );
+        assert_eq!(
+            update(UpdateState::Merging, Some(Slot::A)).holds_wipe(Slot::B),
+            Some(Hold::Merging)
+        );
+        assert_eq!(
+            update(UpdateState::MergeFailed, Some(Slot::A)).holds_wipe(Slot::B),
+            Some(Hold::MergeFailed)
+        );
     }
 }

@@ -24,15 +24,36 @@ const STALL: Duration = Duration::from_secs(30);
 struct Lookup(Servers);
 
 impl Resolver for Lookup {
-    fn resolve(&self, uri: &Uri, _config: &Config, _timeout: NextTimeout) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        let host = uri.host().ok_or_else(|| ureq::Error::BadUri(format!("{uri} names no host")))?;
-        let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("http") { 80 } else { 443 });
-        let servers = self.0.lock().expect("the DNS servers are not held by a thread that panicked").clone();
-        let found = dns::lookup(host, &servers).map_err(|e| ureq::Error::Io(std::io::Error::other(format!("{e:#}"))))?;
+    fn resolve(
+        &self,
+        uri: &Uri,
+        _config: &Config,
+        _timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let host = uri
+            .host()
+            .ok_or_else(|| ureq::Error::BadUri(format!("{uri} names no host")))?;
+        let port = uri
+            .port_u16()
+            .unwrap_or(if uri.scheme_str() == Some("http") {
+                80
+            } else {
+                443
+            });
+        let servers = self
+            .0
+            .lock()
+            .expect("the DNS servers are not held by a thread that panicked")
+            .clone();
+        let found = dns::lookup(host, &servers)
+            .map_err(|e| ureq::Error::Io(std::io::Error::other(format!("{e:#}"))))?;
         let mut out = self.empty();
         // As many as it holds; the rest are not tried.
         for address in found {
-            if out.try_push(SocketAddr::new(IpAddr::V4(address), port)).is_err() {
+            if out
+                .try_push(SocketAddr::new(IpAddr::V4(address), port))
+                .is_err()
+            {
                 break;
             }
         }

@@ -26,7 +26,10 @@ pub struct Lease {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     /// `server` offers `address`.
-    Offer { address: Ipv4Addr, server: Ipv4Addr },
+    Offer {
+        address: Ipv4Addr,
+        server: Ipv4Addr,
+    },
     Ack(Lease),
     /// The address asked for is not to be had.
     Nak,
@@ -46,7 +49,13 @@ const ASKED: [OptionCode; 6] = [
 /// an hour.
 const LEASE_UNSAID: u32 = 3600;
 
-fn question(xid: u32, mac: [u8; 6], kind: MessageType, broadcast: bool, ciaddr: Ipv4Addr) -> Message {
+fn question(
+    xid: u32,
+    mac: [u8; 6],
+    kind: MessageType,
+    broadcast: bool,
+    ciaddr: Ipv4Addr,
+) -> Message {
     let unspecified = Ipv4Addr::UNSPECIFIED;
     let mut m = Message::new_with_id(xid, ciaddr, unspecified, unspecified, unspecified, &mac);
     m.set_opcode(Opcode::BootRequest);
@@ -54,7 +63,8 @@ fn question(xid: u32, mac: [u8; 6], kind: MessageType, broadcast: bool, ciaddr: 
         m.set_flags(Flags::default().set_broadcast());
     }
     m.opts_mut().insert(DhcpOption::MessageType(kind));
-    m.opts_mut().insert(DhcpOption::ParameterRequestList(ASKED.to_vec()));
+    m.opts_mut()
+        .insert(DhcpOption::ParameterRequestList(ASKED.to_vec()));
     m
 }
 
@@ -65,7 +75,13 @@ fn bytes(m: &Message) -> Result<Vec<u8>> {
 /// Ask any server for an address. Answers are asked to be broadcast: until
 /// it has an address, the interface takes nothing sent to one.
 pub fn discover(xid: u32, mac: [u8; 6]) -> Result<Vec<u8>> {
-    bytes(&question(xid, mac, MessageType::Discover, true, Ipv4Addr::UNSPECIFIED))
+    bytes(&question(
+        xid,
+        mac,
+        MessageType::Discover,
+        true,
+        Ipv4Addr::UNSPECIFIED,
+    ))
 }
 
 /// Take the address `server` offered.
@@ -96,7 +112,10 @@ pub fn reply(packet: &[u8], xid: u32, mac: [u8; 6]) -> Option<Reply> {
         _ => m.siaddr(),
     };
     match opts.msg_type()? {
-        MessageType::Offer => Some(Reply::Offer { address: m.yiaddr(), server }),
+        MessageType::Offer => Some(Reply::Offer {
+            address: m.yiaddr(),
+            server,
+        }),
         MessageType::Nak => Some(Reply::Nak),
         MessageType::Ack => {
             let seconds = match opts.get(OptionCode::AddressLeaseTime) {
@@ -125,7 +144,16 @@ pub fn reply(packet: &[u8], xid: u32, mac: [u8; 6]) -> Option<Reply> {
                 Some(DhcpOption::DomainNameServer(servers)) => servers.clone(),
                 _ => Vec::new(),
             };
-            Some(Reply::Ack(Lease { address: m.yiaddr(), mask, router, dns, server, seconds, renew, rebind }))
+            Some(Reply::Ack(Lease {
+                address: m.yiaddr(),
+                mask,
+                router,
+                dns,
+                server,
+                seconds,
+                renew,
+                rebind,
+            }))
         }
         _ => None,
     }
@@ -141,7 +169,7 @@ fn natural_mask(address: Ipv4Addr) -> Ipv4Addr {
 }
 
 #[cfg(target_os = "android")]
-pub use client::{obtain, keep, Kept};
+pub use client::{keep, obtain, Kept};
 
 #[cfg(target_os = "android")]
 mod client {
@@ -176,10 +204,27 @@ mod client {
             Ok(())
         };
         let len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-        set(libc::SOL_SOCKET, libc::SO_REUSEADDR, (&on as *const libc::c_int).cast(), len).context("share the DHCP port")?;
-        set(libc::SOL_SOCKET, libc::SO_BROADCAST, (&on as *const libc::c_int).cast(), len).context("let the DHCP socket broadcast")?;
-        set(libc::SOL_SOCKET, libc::SO_BINDTODEVICE, interface.as_ptr().cast(), interface.len() as libc::socklen_t)
-            .with_context(|| format!("keep the DHCP socket to {interface}"))?;
+        set(
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            (&on as *const libc::c_int).cast(),
+            len,
+        )
+        .context("share the DHCP port")?;
+        set(
+            libc::SOL_SOCKET,
+            libc::SO_BROADCAST,
+            (&on as *const libc::c_int).cast(),
+            len,
+        )
+        .context("let the DHCP socket broadcast")?;
+        set(
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            interface.as_ptr().cast(),
+            interface.len() as libc::socklen_t,
+        )
+        .with_context(|| format!("keep the DHCP socket to {interface}"))?;
         let at = libc::sockaddr_in {
             sin_family: libc::AF_INET as libc::sa_family_t,
             sin_port: CLIENT_PORT.to_be(),
@@ -187,22 +232,33 @@ mod client {
             sin_zero: [0; 8],
         };
         let len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-        if unsafe { libc::bind(s.as_raw_fd(), (&at as *const libc::sockaddr_in).cast(), len) } != 0 {
+        if unsafe { libc::bind(s.as_raw_fd(), (&at as *const libc::sockaddr_in).cast(), len) } != 0
+        {
             return Err(std::io::Error::last_os_error()).context("take the DHCP client port");
         }
-        s.set_read_timeout(Some(LOOK)).context("time the DHCP socket")?;
+        s.set_read_timeout(Some(LOOK))
+            .context("time the DHCP socket")?;
         Ok(s)
     }
 
     /// A transaction's number, different from one question to the next.
     fn xid() -> u32 {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
         now.subsec_nanos() ^ (now.as_secs() as u32).rotate_left(13) ^ std::process::id()
     }
 
     /// Send `question` to `to` and wait for an answer to transaction `xid`,
     /// sending it again as long as none comes; give up after the last wait.
-    fn exchange(s: &UdpSocket, to: SocketAddrV4, question: &[u8], xid: u32, mac: [u8; 6], stop: &AtomicBool) -> Result<Option<Reply>> {
+    fn exchange(
+        s: &UdpSocket,
+        to: SocketAddrV4,
+        question: &[u8],
+        xid: u32,
+        mac: [u8; 6],
+        stop: &AtomicBool,
+    ) -> Result<Option<Reply>> {
         let mut buf = [0u8; 1500];
         for wait in WAITS {
             s.send_to(question, to).context("send a DHCP question")?;
@@ -217,7 +273,11 @@ mod client {
                             return Ok(Some(r));
                         }
                     }
-                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {}
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
                     Err(e) => return Err(e).context("read a DHCP answer"),
                 }
             }
@@ -236,12 +296,20 @@ mod client {
         let s = socket(interface)?;
         for _ in 0..3 {
             let id = xid();
-            let (address, server) = match exchange(&s, broadcast(), &discover(id, mac)?, id, mac, stop)? {
-                Some(Reply::Offer { address, server }) => (address, server),
-                Some(_) => continue,
-                None => bail!("no DHCP server offered an address"),
-            };
-            match exchange(&s, broadcast(), &request(id, mac, address, server)?, id, mac, stop)? {
+            let (address, server) =
+                match exchange(&s, broadcast(), &discover(id, mac)?, id, mac, stop)? {
+                    Some(Reply::Offer { address, server }) => (address, server),
+                    Some(_) => continue,
+                    None => bail!("no DHCP server offered an address"),
+                };
+            match exchange(
+                &s,
+                broadcast(),
+                &request(id, mac, address, server)?,
+                id,
+                mac,
+                stop,
+            )? {
                 Some(Reply::Ack(lease)) => return Ok(lease),
                 Some(_) => continue,
                 None => bail!("the DHCP server at {server} did not give the address it offered"),
@@ -261,15 +329,27 @@ mod client {
 
     /// Ask to keep `lease`: of the server that gave it, or, `anyone`, of
     /// any server.
-    pub fn keep(interface: &str, mac: [u8; 6], lease: &Lease, anyone: bool, stop: &AtomicBool) -> Result<Kept> {
+    pub fn keep(
+        interface: &str,
+        mac: [u8; 6],
+        lease: &Lease,
+        anyone: bool,
+        stop: &AtomicBool,
+    ) -> Result<Kept> {
         let s = socket(interface)?;
         let id = xid();
-        let to = if anyone { broadcast() } else { SocketAddrV4::new(lease.server, SERVER_PORT) };
-        Ok(match exchange(&s, to, &extend(id, mac, lease.address)?, id, mac, stop)? {
-            Some(Reply::Ack(kept)) => Kept::Kept(kept),
-            Some(_) => Kept::Refused,
-            None => Kept::Unanswered,
-        })
+        let to = if anyone {
+            broadcast()
+        } else {
+            SocketAddrV4::new(lease.server, SERVER_PORT)
+        };
+        Ok(
+            match exchange(&s, to, &extend(id, mac, lease.address)?, id, mac, stop)? {
+                Some(Reply::Ack(kept)) => Kept::Kept(kept),
+                Some(_) => Kept::Refused,
+                None => Kept::Unanswered,
+            },
+        )
     }
 }
 
@@ -282,7 +362,14 @@ mod tests {
     /// What a home router answers, put together as one would.
     fn answer(kind: MessageType, xid: u32, mac: [u8; 6], with: &[DhcpOption]) -> Vec<u8> {
         let server = Ipv4Addr::new(192, 168, 1, 1);
-        let mut m = Message::new_with_id(xid, Ipv4Addr::UNSPECIFIED, Ipv4Addr::new(192, 168, 1, 23), server, Ipv4Addr::UNSPECIFIED, &mac);
+        let mut m = Message::new_with_id(
+            xid,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Addr::new(192, 168, 1, 23),
+            server,
+            Ipv4Addr::UNSPECIFIED,
+            &mac,
+        );
         m.set_opcode(Opcode::BootReply);
         m.opts_mut().insert(DhcpOption::MessageType(kind));
         m.opts_mut().insert(DhcpOption::ServerIdentifier(server));
@@ -295,53 +382,155 @@ mod tests {
     #[test]
     fn questions_say_who_asks_and_what_they_want() {
         let asked = Message::from_bytes(&discover(7, MAC).unwrap()).unwrap();
-        assert_eq!((asked.opcode(), asked.xid(), &asked.chaddr()[..6]), (Opcode::BootRequest, 7, &MAC[..]));
-        assert!(asked.flags().broadcast(), "answers come broadcast before the interface has an address");
+        assert_eq!(
+            (asked.opcode(), asked.xid(), &asked.chaddr()[..6]),
+            (Opcode::BootRequest, 7, &MAC[..])
+        );
+        assert!(
+            asked.flags().broadcast(),
+            "answers come broadcast before the interface has an address"
+        );
         assert_eq!(asked.opts().msg_type(), Some(MessageType::Discover));
-        let taken = Message::from_bytes(&request(7, MAC, Ipv4Addr::new(192, 168, 1, 23), Ipv4Addr::new(192, 168, 1, 1)).unwrap()).unwrap();
-        assert_eq!(taken.opts().get(OptionCode::RequestedIpAddress), Some(&DhcpOption::RequestedIpAddress(Ipv4Addr::new(192, 168, 1, 23))));
-        assert_eq!(taken.opts().get(OptionCode::ServerIdentifier), Some(&DhcpOption::ServerIdentifier(Ipv4Addr::new(192, 168, 1, 1))));
-        let kept = Message::from_bytes(&extend(8, MAC, Ipv4Addr::new(192, 168, 1, 23)).unwrap()).unwrap();
+        let taken = Message::from_bytes(
+            &request(
+                7,
+                MAC,
+                Ipv4Addr::new(192, 168, 1, 23),
+                Ipv4Addr::new(192, 168, 1, 1),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            taken.opts().get(OptionCode::RequestedIpAddress),
+            Some(&DhcpOption::RequestedIpAddress(Ipv4Addr::new(
+                192, 168, 1, 23
+            )))
+        );
+        assert_eq!(
+            taken.opts().get(OptionCode::ServerIdentifier),
+            Some(&DhcpOption::ServerIdentifier(Ipv4Addr::new(192, 168, 1, 1)))
+        );
+        let kept =
+            Message::from_bytes(&extend(8, MAC, Ipv4Addr::new(192, 168, 1, 23)).unwrap()).unwrap();
         assert_eq!(kept.ciaddr(), Ipv4Addr::new(192, 168, 1, 23));
-        assert!(!kept.flags().broadcast(), "an interface with an address takes answers sent to it");
+        assert!(
+            !kept.flags().broadcast(),
+            "an interface with an address takes answers sent to it"
+        );
         assert_eq!(kept.opts().get(OptionCode::ServerIdentifier), None);
     }
 
     #[test]
     fn an_answer_gives_the_lease_and_what_came_with_it() {
         let offer = answer(MessageType::Offer, 7, MAC, &[]);
-        assert_eq!(reply(&offer, 7, MAC), Some(Reply::Offer { address: Ipv4Addr::new(192, 168, 1, 23), server: Ipv4Addr::new(192, 168, 1, 1) }));
-        let ack = answer(MessageType::Ack, 7, MAC, &[
-            DhcpOption::SubnetMask(Ipv4Addr::new(255, 255, 255, 0)),
-            DhcpOption::Router(vec![Ipv4Addr::new(192, 168, 1, 1)]),
-            DhcpOption::DomainNameServer(vec![Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(114, 114, 114, 114)]),
-            DhcpOption::AddressLeaseTime(86400),
-        ]);
-        let Some(Reply::Ack(lease)) = reply(&ack, 7, MAC) else { panic!("an ACK gives a lease") };
+        assert_eq!(
+            reply(&offer, 7, MAC),
+            Some(Reply::Offer {
+                address: Ipv4Addr::new(192, 168, 1, 23),
+                server: Ipv4Addr::new(192, 168, 1, 1)
+            })
+        );
+        let ack = answer(
+            MessageType::Ack,
+            7,
+            MAC,
+            &[
+                DhcpOption::SubnetMask(Ipv4Addr::new(255, 255, 255, 0)),
+                DhcpOption::Router(vec![Ipv4Addr::new(192, 168, 1, 1)]),
+                DhcpOption::DomainNameServer(vec![
+                    Ipv4Addr::new(192, 168, 1, 1),
+                    Ipv4Addr::new(114, 114, 114, 114),
+                ]),
+                DhcpOption::AddressLeaseTime(86400),
+            ],
+        );
+        let Some(Reply::Ack(lease)) = reply(&ack, 7, MAC) else {
+            panic!("an ACK gives a lease")
+        };
         assert_eq!(lease.address, Ipv4Addr::new(192, 168, 1, 23));
         assert_eq!(lease.router, Some(Ipv4Addr::new(192, 168, 1, 1)));
         assert_eq!(lease.dns.len(), 2);
-        assert_eq!((lease.seconds, lease.renew, lease.rebind), (86400, 43200, 75600), "times not said are the standard shares");
+        assert_eq!(
+            (lease.seconds, lease.renew, lease.rebind),
+            (86400, 43200, 75600),
+            "times not said are the standard shares"
+        );
         let bare = answer(MessageType::Ack, 7, MAC, &[]);
-        let Some(Reply::Ack(lease)) = reply(&bare, 7, MAC) else { panic!() };
-        assert_eq!((lease.mask, lease.router, lease.seconds), (Ipv4Addr::new(255, 255, 255, 0), None, LEASE_UNSAID));
-        let zero = answer(MessageType::Ack, 7, MAC, &[DhcpOption::AddressLeaseTime(7200), DhcpOption::Renewal(0), DhcpOption::Rebinding(0)]);
-        let Some(Reply::Ack(lease)) = reply(&zero, 7, MAC) else { panic!() };
-        assert_eq!((lease.renew, lease.rebind), (3600, 6300), "times of zero are the standard shares");
-        let late = answer(MessageType::Ack, 7, MAC, &[DhcpOption::AddressLeaseTime(600), DhcpOption::Renewal(900), DhcpOption::Rebinding(200)]);
-        let Some(Reply::Ack(lease)) = reply(&late, 7, MAC) else { panic!() };
-        assert_eq!((lease.renew, lease.rebind), (300, 525), "and so are times past the lease's end or out of order");
+        let Some(Reply::Ack(lease)) = reply(&bare, 7, MAC) else {
+            panic!()
+        };
+        assert_eq!(
+            (lease.mask, lease.router, lease.seconds),
+            (Ipv4Addr::new(255, 255, 255, 0), None, LEASE_UNSAID)
+        );
+        let zero = answer(
+            MessageType::Ack,
+            7,
+            MAC,
+            &[
+                DhcpOption::AddressLeaseTime(7200),
+                DhcpOption::Renewal(0),
+                DhcpOption::Rebinding(0),
+            ],
+        );
+        let Some(Reply::Ack(lease)) = reply(&zero, 7, MAC) else {
+            panic!()
+        };
+        assert_eq!(
+            (lease.renew, lease.rebind),
+            (3600, 6300),
+            "times of zero are the standard shares"
+        );
+        let late = answer(
+            MessageType::Ack,
+            7,
+            MAC,
+            &[
+                DhcpOption::AddressLeaseTime(600),
+                DhcpOption::Renewal(900),
+                DhcpOption::Rebinding(200),
+            ],
+        );
+        let Some(Reply::Ack(lease)) = reply(&late, 7, MAC) else {
+            panic!()
+        };
+        assert_eq!(
+            (lease.renew, lease.rebind),
+            (300, 525),
+            "and so are times past the lease's end or out of order"
+        );
         let none = answer(MessageType::Ack, 7, MAC, &[DhcpOption::AddressLeaseTime(0)]);
-        let Some(Reply::Ack(lease)) = reply(&none, 7, MAC) else { panic!() };
-        assert_eq!(lease.seconds, LEASE_UNSAID, "a lease of no time is taken as one that does not say");
-        assert_eq!(reply(&answer(MessageType::Nak, 7, MAC, &[]), 7, MAC), Some(Reply::Nak));
+        let Some(Reply::Ack(lease)) = reply(&none, 7, MAC) else {
+            panic!()
+        };
+        assert_eq!(
+            lease.seconds, LEASE_UNSAID,
+            "a lease of no time is taken as one that does not say"
+        );
+        assert_eq!(
+            reply(&answer(MessageType::Nak, 7, MAC, &[]), 7, MAC),
+            Some(Reply::Nak)
+        );
     }
 
     #[test]
     fn answers_to_others_are_not_taken() {
-        assert_eq!(reply(&answer(MessageType::Offer, 8, MAC, &[]), 7, MAC), None, "another transaction");
-        assert_eq!(reply(&answer(MessageType::Offer, 7, [0; 6], &[]), 7, MAC), None, "another client");
-        assert_eq!(reply(&discover(7, MAC).unwrap(), 7, MAC), None, "a question");
+        assert_eq!(
+            reply(&answer(MessageType::Offer, 8, MAC, &[]), 7, MAC),
+            None,
+            "another transaction"
+        );
+        assert_eq!(
+            reply(&answer(MessageType::Offer, 7, [0; 6], &[]), 7, MAC),
+            None,
+            "another client"
+        );
+        assert_eq!(
+            reply(&discover(7, MAC).unwrap(), 7, MAC),
+            None,
+            "a question"
+        );
         assert_eq!(reply(b"not dhcp", 7, MAC), None);
     }
 }

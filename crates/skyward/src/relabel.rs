@@ -43,7 +43,10 @@ impl std::error::Error for Unmounted {}
 /// be mounted, and the system's own are always there.
 pub fn rule_files(slot: Slot) -> Result<Vec<PathBuf>> {
     let bases = skyward_vab::slot_bases(slot)?;
-    let mounted: Vec<PathBuf> = skyward_vab::mounted_partitions(slot)?.into_iter().map(|m| m.mount_point).collect();
+    let mounted: Vec<PathBuf> = skyward_vab::mounted_partitions(slot)?
+        .into_iter()
+        .map(|m| m.mount_point)
+        .collect();
     let mut found = Vec::new();
     for (base, file) in RULES {
         if !bases.iter().any(|b| b == base) {
@@ -59,7 +62,11 @@ pub fn rule_files(slot: Slot) -> Result<Vec<PathBuf>> {
         }
     }
     let system = skyward_vab::mount_point("system").join(RULES[0].1);
-    ensure!(found.first() == Some(&system), "the system keeps no rules at {}", system.display());
+    ensure!(
+        found.first() == Some(&system),
+        "the system keeps no rules at {}",
+        system.display()
+    );
     Ok(found)
 }
 
@@ -93,31 +100,58 @@ impl Rules {
     /// one's for the same path, as Android reads them.
     fn open(files: &[PathBuf]) -> Result<Rules> {
         let lib = unsafe { libc::dlopen(c"libselinux.so".as_ptr(), libc::RTLD_NOW) };
-        ensure!(!lib.is_null(), "load libselinux.so: {}", unsafe { CStr::from_ptr(libc::dlerror()) }.to_string_lossy());
+        ensure!(
+            !lib.is_null(),
+            "load libselinux.so: {}",
+            unsafe { CStr::from_ptr(libc::dlerror()) }.to_string_lossy()
+        );
         let find = |name: &CStr| -> Result<*mut c_void> {
             let symbol = unsafe { libc::dlsym(lib, name.as_ptr()) };
-            ensure!(!symbol.is_null(), "find {} in libselinux.so", name.to_string_lossy());
+            ensure!(
+                !symbol.is_null(),
+                "find {} in libselinux.so",
+                name.to_string_lossy()
+            );
             Ok(symbol)
         };
-        let open: Open = unsafe { std::mem::transmute::<*mut c_void, Open>(find(c"selabel_open")?) };
-        let lookup = unsafe { std::mem::transmute::<*mut c_void, Lookup>(find(c"selabel_lookup")?) };
+        let open: Open =
+            unsafe { std::mem::transmute::<*mut c_void, Open>(find(c"selabel_open")?) };
+        let lookup =
+            unsafe { std::mem::transmute::<*mut c_void, Lookup>(find(c"selabel_lookup")?) };
         let close = unsafe { std::mem::transmute::<*mut c_void, Close>(find(c"selabel_close")?) };
         let free = unsafe { std::mem::transmute::<*mut c_void, Free>(find(c"freecon")?) };
-        let paths = files.iter().map(|f| CString::new(f.as_os_str().as_bytes())).collect::<Result<Vec<_>, _>>().context("a rules path holds a NUL")?;
-        let opts: Vec<SelinuxOpt> = paths.iter().map(|p| SelinuxOpt { kind: SELABEL_OPT_PATH, value: p.as_ptr() }).collect();
+        let paths = files
+            .iter()
+            .map(|f| CString::new(f.as_os_str().as_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .context("a rules path holds a NUL")?;
+        let opts: Vec<SelinuxOpt> = paths
+            .iter()
+            .map(|p| SelinuxOpt {
+                kind: SELABEL_OPT_PATH,
+                value: p.as_ptr(),
+            })
+            .collect();
         let handle = unsafe { open(SELABEL_CTX_FILE, opts.as_ptr(), opts.len() as c_uint) };
         if handle.is_null() {
             let e = std::io::Error::last_os_error();
             unsafe { libc::dlclose(lib) };
             return Err(e).with_context(|| format!("read the labeling rules in {files:?}"));
         }
-        Ok(Rules { lib, handle, lookup, close, free })
+        Ok(Rules {
+            lib,
+            handle,
+            lookup,
+            close,
+            free,
+        })
     }
 
     /// The label the rules give the entry the system names `path`, of the
     /// type in `mode`, as the attribute stores it; none where no rule does.
     fn lookup(&self, path: &Path, mode: u32) -> Result<Option<Vec<u8>>> {
-        let key = CString::new(path.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", path.display()))?;
+        let key = CString::new(path.as_os_str().as_bytes())
+            .with_context(|| format!("{} holds a NUL", path.display()))?;
         let mut found: *mut c_char = std::ptr::null_mut();
         if unsafe { (self.lookup)(self.handle, &mut found, key.as_ptr(), mode as c_int) } < 0 {
             let e = std::io::Error::last_os_error();
@@ -126,7 +160,9 @@ impl Rules {
             }
             return Err(e).with_context(|| format!("look up the label of {}", path.display()));
         }
-        let label = unsafe { CStr::from_ptr(found) }.to_bytes_with_nul().to_vec();
+        let label = unsafe { CStr::from_ptr(found) }
+            .to_bytes_with_nul()
+            .to_vec();
         unsafe { (self.free)(found) };
         Ok(Some(label))
     }
@@ -144,9 +180,17 @@ impl Drop for Rules {
 /// The label an entry carries, without the NUL it is stored with; none on
 /// an entry that has none.
 fn label(path: &Path) -> Result<Option<Vec<u8>>> {
-    let c = CString::new(path.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", path.display()))?;
+    let c = CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", path.display()))?;
     let mut buf = vec![0u8; 256];
-    let n = unsafe { libc::lgetxattr(c.as_ptr(), LABEL.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+    let n = unsafe {
+        libc::lgetxattr(
+            c.as_ptr(),
+            LABEL.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+        )
+    };
     if n < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ENODATA) {
@@ -164,21 +208,42 @@ fn label(path: &Path) -> Result<Option<Vec<u8>>> {
 /// Give an entry, a link its own, the label `value`, stored with its NUL
 /// as libselinux stores one.
 fn set_label(path: &Path, value: &[u8]) -> Result<()> {
-    let c = CString::new(path.as_os_str().as_bytes()).with_context(|| format!("{} holds a NUL", path.display()))?;
-    if unsafe { libc::lsetxattr(c.as_ptr(), LABEL.as_ptr(), value.as_ptr().cast(), value.len(), 0) } != 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| format!("label {}", path.display()));
+    let c = CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("{} holds a NUL", path.display()))?;
+    if unsafe {
+        libc::lsetxattr(
+            c.as_ptr(),
+            LABEL.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("label {}", path.display()));
     }
     Ok(())
 }
 
 /// Give each entry of the data partition the label the rules in `files`
 /// give it, as [`skyward_files::relabel`] goes through them.
-pub fn run(files: &[PathBuf], cancel: &AtomicBool, progress: &mut dyn FnMut(Relabeling)) -> Result<()> {
+pub fn run(
+    files: &[PathBuf],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Relabeling),
+) -> Result<()> {
     let rules = Rules::open(files)?;
     let root = Path::new(DATA);
     let mut give = |path: &Path, rel: &Path, meta: &std::fs::Metadata| -> Result<bool> {
-        let named = if rel.as_os_str().is_empty() { root.to_path_buf() } else { root.join(rel) };
-        let Some(wanted) = rules.lookup(&named, meta.mode())? else { return Ok(false) };
+        let named = if rel.as_os_str().is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(rel)
+        };
+        let Some(wanted) = rules.lookup(&named, meta.mode())? else {
+            return Ok(false);
+        };
         if label(path)?.is_some_and(|had| had == wanted[..wanted.len() - 1]) {
             return Ok(false);
         }

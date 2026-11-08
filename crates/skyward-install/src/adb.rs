@@ -95,13 +95,22 @@ pub struct Packet {
 
 impl Packet {
     pub fn new(command: u32, arg0: u32, arg1: u32, payload: impl Into<Vec<u8>>) -> Packet {
-        Packet { command, arg0, arg1, payload: payload.into() }
+        Packet {
+            command,
+            arg0,
+            arg1,
+            payload: payload.into(),
+        }
     }
 
     /// The packet's header; `version` decides whether it carries the
     /// payload's checksum.
     pub fn header(&self, version: u32) -> [u8; HEADER_LEN] {
-        let check = if version < VERSION { checksum(&self.payload) } else { 0 };
+        let check = if version < VERSION {
+            checksum(&self.payload)
+        } else {
+            0
+        };
         let len = u32::try_from(self.payload.len()).expect("payloads stay under MAX_PAYLOAD");
         let message = Message {
             command: U32::new(self.command),
@@ -111,7 +120,10 @@ impl Packet {
             data_check: U32::new(check),
             magic: U32::new(!self.command),
         };
-        message.as_bytes().try_into().expect("a message is HEADER_LEN bytes")
+        message
+            .as_bytes()
+            .try_into()
+            .expect("a message is HEADER_LEN bytes")
     }
 }
 
@@ -130,7 +142,9 @@ impl Header {
         let m = Message::read_from_bytes(bytes).expect("a message is HEADER_LEN bytes");
         let (command, magic) = (m.command.get(), m.magic.get());
         if magic != !command {
-            return Err(Error::Protocol(format!("magic {magic:#010x} does not match command {command:#010x}")));
+            return Err(Error::Protocol(format!(
+                "magic {magic:#010x} does not match command {command:#010x}"
+            )));
         }
         if ![SYNC, CNXN, AUTH, OPEN, OKAY, CLSE, WRTE, STLS].contains(&command) {
             return Err(Error::Protocol(format!("unknown command {command:#010x}")));
@@ -139,14 +153,21 @@ impl Header {
         if len > MAX_PAYLOAD {
             return Err(Error::Protocol(format!("a payload of {len} bytes")));
         }
-        Ok(Header { command, arg0: m.arg0.get(), arg1: m.arg1.get(), len, check: m.data_check.get() })
+        Ok(Header {
+            command,
+            arg0: m.arg0.get(),
+            arg1: m.arg1.get(),
+            len,
+            check: m.data_check.get(),
+        })
     }
 }
 
 /// The payload checksum of the first protocol version: the sum of its
 /// bytes.
 pub fn checksum(data: &[u8]) -> u32 {
-    data.iter().fold(0u32, |sum, &b| sum.wrapping_add(u32::from(b)))
+    data.iter()
+        .fold(0u32, |sum, &b| sum.wrapping_add(u32::from(b)))
 }
 
 /// The modes the phone tells the computer it is in: waiting for `adb
@@ -185,7 +206,10 @@ impl Offer {
             return Err(Error::Protocol("an empty package".into()));
         }
         if !(MIN_BLOCK..=MAX_BLOCK).contains(&self.block_size) {
-            return Err(Error::Protocol(format!("a block size of {} bytes", self.block_size)));
+            return Err(Error::Protocol(format!(
+                "a block size of {} bytes",
+                self.block_size
+            )));
         }
         if self.blocks() > MAX_BLOCKS {
             return Err(Error::Protocol(format!("{} blocks", self.blocks())));
@@ -210,7 +234,10 @@ pub enum Service {
     RescueGetprop(String),
     /// `rescue-wipe:<target>:<size>`: erase what `target` names, the
     /// answer padded to `size` bytes.
-    RescueWipe { target: String, size: usize },
+    RescueWipe {
+        target: String,
+        size: usize,
+    },
     /// `reboot:<target>`: leave for that target, or for the system where
     /// it is empty.
     Reboot(String),
@@ -229,9 +256,12 @@ pub fn service(payload: &[u8]) -> Service {
         return Service::RescueGetprop(prop.to_string());
     }
     if let Some(args) = name.strip_prefix("rescue-wipe:") {
-        let asked = args
-            .split_once(':')
-            .and_then(|(target, size)| Some(Service::RescueWipe { target: target.to_string(), size: size.parse().ok()? }));
+        let asked = args.split_once(':').and_then(|(target, size)| {
+            Some(Service::RescueWipe {
+                target: target.to_string(),
+                size: size.parse().ok()?,
+            })
+        });
         return asked.unwrap_or(Service::Other(name));
     }
     if let Some(target) = name.strip_prefix("reboot:") {
@@ -268,9 +298,15 @@ pub fn rescue_getprop(asked: &str, read: impl Fn(&str) -> Option<String>) -> Str
     let answer = match asked {
         "" => RESCUE_PROPERTIES
             .iter()
-            .filter_map(|name| read(name).filter(|v| !v.is_empty()).map(|v| format!("[{name}]: [{v}]\n")))
+            .filter_map(|name| {
+                read(name)
+                    .filter(|v| !v.is_empty())
+                    .map(|v| format!("[{name}]: [{v}]\n"))
+            })
             .collect(),
-        name if RESCUE_PROPERTIES.contains(&name) => read(name).map(|v| v + "\n").unwrap_or_default(),
+        name if RESCUE_PROPERTIES.contains(&name) => {
+            read(name).map(|v| v + "\n").unwrap_or_default()
+        }
         _ => String::new(),
     };
     if answer.is_empty() {
@@ -291,7 +327,10 @@ pub fn rescue_wiped(erased: bool, size: usize) -> Vec<u8> {
 /// What a service's `<size>:<block size>` offers to send.
 fn offered(args: &str) -> Option<Offer> {
     let (size, block_size) = args.split_once(':')?;
-    Some(Offer { size: size.parse().ok()?, block_size: block_size.parse().ok()? })
+    Some(Offer {
+        size: size.parse().ok()?,
+        block_size: block_size.parse().ok()?,
+    })
 }
 
 /// The USB endpoints the protocol runs over. A read fails with
@@ -326,7 +365,14 @@ pub struct Connection<L> {
 
 impl<L: Link> Connection<L> {
     pub fn new(link: L, banner: Vec<u8>) -> Connection<L> {
-        Connection { link, inbox: Vec::new(), chunk: vec![0; READ_CHUNK], version: VERSION, banner, stream: None }
+        Connection {
+            link,
+            inbox: Vec::new(),
+            chunk: vec![0; READ_CHUNK],
+            version: VERSION,
+            banner,
+            stream: None,
+        }
     }
 
     /// The endpoints back, once the connection is done with.
@@ -360,11 +406,18 @@ impl<L: Link> Connection<L> {
         if self.version < VERSION && checksum(&payload) != header.check {
             return Err(Error::Protocol("payload checksum mismatch".into()));
         }
-        Ok(Packet::new(header.command, header.arg0, header.arg1, payload))
+        Ok(Packet::new(
+            header.command,
+            header.arg0,
+            header.arg1,
+            payload,
+        ))
     }
 
     pub fn send(&mut self, packet: &Packet) -> Result<(), Error> {
-        self.link.write(&packet.header(self.version)).map_err(Error::Io)?;
+        self.link
+            .write(&packet.header(self.version))
+            .map_err(Error::Io)?;
         if !packet.payload.is_empty() {
             self.link.write(&packet.payload).map_err(Error::Io)?;
         }
@@ -391,7 +444,10 @@ impl<L: Link> Connection<L> {
         loop {
             match self.accept_service()? {
                 (Service::SideloadHost(offer), remote) => {
-                    self.stream = Some(Stream { remote, writable: true });
+                    self.stream = Some(Stream {
+                        remote,
+                        writable: true,
+                    });
                     self.send(&Packet::new(OKAY, LOCAL_ID, remote, []))?;
                     return Ok(offer);
                 }
@@ -430,7 +486,10 @@ impl<L: Link> Connection<L> {
     /// Take the stream a service was opened on, so what the service says
     /// goes over it.
     pub fn take(&mut self, remote: u32) -> Result<(), Error> {
-        self.stream = Some(Stream { remote, writable: true });
+        self.stream = Some(Stream {
+            remote,
+            writable: true,
+        });
         self.send(&Packet::new(OKAY, LOCAL_ID, remote, []))
     }
 
@@ -443,7 +502,9 @@ impl<L: Link> Connection<L> {
 
     /// Close the stream, the service on it done.
     pub fn end(&mut self) -> Result<(), Error> {
-        let Some(stream) = self.stream.take() else { return Ok(()) };
+        let Some(stream) = self.stream.take() else {
+            return Ok(());
+        };
         self.send(&Packet::new(CLSE, LOCAL_ID, stream.remote, []))
     }
 
@@ -452,7 +513,9 @@ impl<L: Link> Connection<L> {
     fn incoming(&mut self) -> Result<Incoming, Error> {
         loop {
             let p = self.receive()?;
-            let Some(stream) = self.stream else { return Err(Error::Closed) };
+            let Some(stream) = self.stream else {
+                return Err(Error::Closed);
+            };
             match p.command {
                 WRTE if p.arg1 == LOCAL_ID => {
                     self.send(&Packet::new(OKAY, LOCAL_ID, stream.remote, []))?;
@@ -486,7 +549,9 @@ impl<L: Link> Connection<L> {
                 Some(s) if s.writable => break,
                 Some(_) => match self.incoming()? {
                     Incoming::Ready => self.mark_writable(),
-                    Incoming::Data(_) => return Err(Error::Protocol("data nobody asked for".into())),
+                    Incoming::Data(_) => {
+                        return Err(Error::Protocol("data nobody asked for".into()))
+                    }
                 },
             }
         }
@@ -507,7 +572,10 @@ impl<L: Link> Connection<L> {
                 Incoming::Data(data) => {
                     let end = got + data.len();
                     if end > out.len() {
-                        return Err(Error::Protocol(format!("block {index}: {end} bytes for {}", out.len())));
+                        return Err(Error::Protocol(format!(
+                            "block {index}: {end} bytes for {}",
+                            out.len()
+                        )));
                     }
                     out[got..end].copy_from_slice(&data);
                     got = end;
@@ -551,9 +619,21 @@ mod tests {
         assert_eq!(u32::from_le_bytes(h[16..20].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(h[20..24].try_into().unwrap()), !WRTE);
         let old = p.header(VERSION_MIN);
-        assert_eq!(u32::from_le_bytes(old[16..20].try_into().unwrap()), 8 * u32::from(b'0') + 4 + 2);
+        assert_eq!(
+            u32::from_le_bytes(old[16..20].try_into().unwrap()),
+            8 * u32::from(b'0') + 4 + 2
+        );
         let back = Header::parse(&h).unwrap();
-        assert_eq!(back, Header { command: WRTE, arg0: 1, arg1: 7, len: 8, check: 0 });
+        assert_eq!(
+            back,
+            Header {
+                command: WRTE,
+                arg0: 1,
+                arg1: 7,
+                len: 8,
+                check: 0
+            }
+        );
     }
 
     #[test]
@@ -581,21 +661,52 @@ mod tests {
     fn services_are_read_as_adb_names_them() {
         assert_eq!(
             service(b"sideload-host:7340032000:65536\0"),
-            Service::SideloadHost(Offer { size: 7_340_032_000, block_size: 65536 })
+            Service::SideloadHost(Offer {
+                size: 7_340_032_000,
+                block_size: 65536
+            })
         );
         assert_eq!(service(b"sideload:123456\0"), Service::Sideload);
         assert_eq!(service(b"shell:ls\0"), Service::Other("shell:ls".into()));
-        assert_eq!(service(b"sideload-host:x:1\0"), Service::Other("sideload-host:x:1".into()));
+        assert_eq!(
+            service(b"sideload-host:x:1\0"),
+            Service::Other("sideload-host:x:1".into())
+        );
     }
 
     #[test]
     fn the_services_of_rescue_are_read_too() {
-        assert_eq!(service(b"rescue-install:4096:4096\0"), Service::RescueInstall(Offer { size: 4096, block_size: 4096 }));
-        assert_eq!(service(b"rescue-getprop:ro.build.fingerprint\0"), Service::RescueGetprop("ro.build.fingerprint".into()));
-        assert_eq!(service(b"rescue-getprop:\0"), Service::RescueGetprop(String::new()), "all that rescue answers for");
-        assert_eq!(service(b"rescue-wipe:userdata:8\0"), Service::RescueWipe { target: "userdata".into(), size: 8 });
-        assert_eq!(service(b"rescue-wipe:userdata\0"), Service::Other("rescue-wipe:userdata".into()));
-        assert_eq!(service(b"reboot:bootloader\0"), Service::Reboot("bootloader".into()));
+        assert_eq!(
+            service(b"rescue-install:4096:4096\0"),
+            Service::RescueInstall(Offer {
+                size: 4096,
+                block_size: 4096
+            })
+        );
+        assert_eq!(
+            service(b"rescue-getprop:ro.build.fingerprint\0"),
+            Service::RescueGetprop("ro.build.fingerprint".into())
+        );
+        assert_eq!(
+            service(b"rescue-getprop:\0"),
+            Service::RescueGetprop(String::new()),
+            "all that rescue answers for"
+        );
+        assert_eq!(
+            service(b"rescue-wipe:userdata:8\0"),
+            Service::RescueWipe {
+                target: "userdata".into(),
+                size: 8
+            }
+        );
+        assert_eq!(
+            service(b"rescue-wipe:userdata\0"),
+            Service::Other("rescue-wipe:userdata".into())
+        );
+        assert_eq!(
+            service(b"reboot:bootloader\0"),
+            Service::Reboot("bootloader".into())
+        );
         assert_eq!(service(b"reboot:\0"), Service::Reboot(String::new()));
     }
 
@@ -613,13 +724,24 @@ mod tests {
     fn rescue_answers_only_for_what_it_may_tell() {
         assert_eq!(rescue_getprop("ro.product.device", props), "ishtar\n");
         assert_eq!(rescue_getprop(BATTERY_LEVEL, props), "76\n");
-        assert_eq!(rescue_getprop("ro.serialno", props), "\n", "the serial is not rescue's to give");
-        assert_eq!(rescue_getprop("ro.build.id", props), "\n", "a name with no value");
+        assert_eq!(
+            rescue_getprop("ro.serialno", props),
+            "\n",
+            "the serial is not rescue's to give"
+        );
+        assert_eq!(
+            rescue_getprop("ro.build.id", props),
+            "\n",
+            "a name with no value"
+        );
     }
 
     #[test]
     fn rescue_gives_all_it_may_tell_for_an_empty_name() {
-        assert_eq!(rescue_getprop("", props), "[rescue.battery_level]: [76]\n[ro.product.device]: [ishtar]\n");
+        assert_eq!(
+            rescue_getprop("", props),
+            "[rescue.battery_level]: [76]\n[ro.product.device]: [ishtar]\n"
+        );
         assert_eq!(rescue_getprop("", |_| None), "\n");
     }
 
@@ -631,13 +753,31 @@ mod tests {
 
     #[test]
     fn offers_are_cut_into_blocks_and_checked() {
-        let offer = Offer { size: 65536 * 3 + 100, block_size: 65536 };
+        let offer = Offer {
+            size: 65536 * 3 + 100,
+            block_size: 65536,
+        };
         assert_eq!(offer.blocks(), 4);
         assert_eq!(offer.block_len(0), 65536);
         assert_eq!(offer.block_len(3), 100);
         assert!(offer.check().is_ok());
-        assert!(Offer { size: 0, block_size: 65536 }.check().is_err());
-        assert!(Offer { size: 10, block_size: 512 }.check().is_err());
-        assert!(Offer { size: 65536 * (MAX_BLOCKS + 1), block_size: 65536 }.check().is_err());
+        assert!(Offer {
+            size: 0,
+            block_size: 65536
+        }
+        .check()
+        .is_err());
+        assert!(Offer {
+            size: 10,
+            block_size: 512
+        }
+        .check()
+        .is_err());
+        assert!(Offer {
+            size: 65536 * (MAX_BLOCKS + 1),
+            block_size: 65536
+        }
+        .check()
+        .is_err());
     }
 }

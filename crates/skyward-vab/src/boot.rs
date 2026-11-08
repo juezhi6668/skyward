@@ -65,7 +65,12 @@ pub fn next_slot() -> Result<Slot> {
 
 /// Call `method` of the newer kind with what `args` writes, and read what
 /// it answered with `answer`.
-fn newer<T>(control: &Handle, method: u32, args: impl FnOnce(&mut Parcel), answer: impl FnOnce(&mut Reader) -> Result<T>) -> Result<T> {
+fn newer<T>(
+    control: &Handle,
+    method: u32,
+    args: impl FnOnce(&mut Parcel),
+    answer: impl FnOnce(&mut Reader) -> Result<T>,
+) -> Result<T> {
     let mut call = Parcel::call(INTERFACE);
     args(&mut call);
     let reply = control.transact(method, &call)?;
@@ -96,12 +101,15 @@ impl<'a> BootControl<'a> {
     /// where the phone describes one, the older kind through `hardware`
     /// otherwise. Say so where it is not running.
     pub fn open(binder: &'a Binder, hardware: &'a Binder) -> Result<BootControl<'a>> {
-        let not_running = |name: &str| format!("{name} is not running; the phone's boot control has to be started first");
+        let not_running = |name: &str| {
+            format!("{name} is not running; the phone's boot control has to be started first")
+        };
         if service::declared(binder, SERVICE)? {
             let control = service::find(binder, SERVICE)?.with_context(|| not_running(SERVICE))?;
             return Ok(BootControl::Newer(control));
         }
-        let control = hidl::find(hardware, HARDWARE_SERVICE, INSTANCE)?.with_context(|| not_running(HARDWARE_SERVICE))?;
+        let control = hidl::find(hardware, HARDWARE_SERVICE, INSTANCE)?
+            .with_context(|| not_running(HARDWARE_SERVICE))?;
         Ok(BootControl::Older(control))
     }
 
@@ -121,26 +129,46 @@ impl<'a> BootControl<'a> {
 
     /// What it holds of the slots now.
     pub fn slots(&self) -> Result<BootSlots> {
-        let mut slots = BootSlots { active: self.active()?, bootable: [false; 2], successful: [false; 2] };
+        let mut slots = BootSlots {
+            active: self.active()?,
+            bootable: [false; 2],
+            successful: [false; 2],
+        };
         for slot in [Slot::A, Slot::B] {
             let at = slot.number() as usize;
-            slots.bootable[at] = self.bootable(slot).with_context(|| format!("ask whether slot {} starts", slot.letter()))?;
-            slots.successful[at] = self.successful(slot).with_context(|| format!("ask whether slot {} has started fully", slot.letter()))?;
+            slots.bootable[at] = self
+                .bootable(slot)
+                .with_context(|| format!("ask whether slot {} starts", slot.letter()))?;
+            slots.successful[at] = self
+                .successful(slot)
+                .with_context(|| format!("ask whether slot {} has started fully", slot.letter()))?;
         }
         Ok(slots)
     }
 
     fn bootable(&self, slot: Slot) -> Result<bool> {
         match self {
-            BootControl::Newer(c) => newer(c, IS_BOOTABLE, |p| p.i32(slot.number() as i32), |r| r.bool()),
+            BootControl::Newer(c) => newer(
+                c,
+                IS_BOOTABLE,
+                |p| p.i32(slot.number() as i32),
+                |r| r.bool(),
+            ),
             BootControl::Older(c) => older(c, FIRST, BOOTABLE, |m| m.u32(slot.number()), answered),
         }
     }
 
     fn successful(&self, slot: Slot) -> Result<bool> {
         match self {
-            BootControl::Newer(c) => newer(c, IS_SUCCESSFUL, |p| p.i32(slot.number() as i32), |r| r.bool()),
-            BootControl::Older(c) => older(c, FIRST, SUCCESSFUL, |m| m.u32(slot.number()), answered),
+            BootControl::Newer(c) => newer(
+                c,
+                IS_SUCCESSFUL,
+                |p| p.i32(slot.number() as i32),
+                |r| r.bool(),
+            ),
+            BootControl::Older(c) => {
+                older(c, FIRST, SUCCESSFUL, |m| m.u32(slot.number()), answered)
+            }
         }
     }
 
@@ -165,8 +193,19 @@ impl<'a> BootControl<'a> {
     pub fn set_merge_status(&self, status: MergeStatus) -> Result<()> {
         let what = || format!("tell the bootloader an update stands at {status:?}");
         let done = match self {
-            BootControl::Newer(c) => newer(c, SET_SNAPSHOT_MERGE_STATUS, |p| p.i32(status as i32), |_| Ok(true)),
-            BootControl::Older(c) => older(c, MERGE, SET_MERGE_STATUS, |m| m.u32(status as u32), |r| r.bool()),
+            BootControl::Newer(c) => newer(
+                c,
+                SET_SNAPSHOT_MERGE_STATUS,
+                |p| p.i32(status as i32),
+                |_| Ok(true),
+            ),
+            BootControl::Older(c) => older(
+                c,
+                MERGE,
+                SET_MERGE_STATUS,
+                |m| m.u32(status as u32),
+                |r| r.bool(),
+            ),
         }
         .with_context(what)?;
         if !done {
@@ -180,18 +219,35 @@ impl<'a> BootControl<'a> {
     pub fn set_active(&self, slot: Slot) -> Result<()> {
         let what = || format!("have slot {} start next", slot.letter());
         match self {
-            BootControl::Newer(c) => newer(c, SET_ACTIVE_SLOT, |p| p.i32(slot.number() as i32), |_| Ok(())).with_context(what),
+            BootControl::Newer(c) => newer(
+                c,
+                SET_ACTIVE_SLOT,
+                |p| p.i32(slot.number() as i32),
+                |_| Ok(()),
+            )
+            .with_context(what),
             BootControl::Older(c) => {
                 // The answer is whether it worked, and why not in text it
                 // points at.
-                let why = older(c, FIRST, SET_ACTIVE, |m| m.u32(slot.number()), |r| {
-                    let done = r.pointed()?;
-                    if done.first().is_some_and(|&b| b != 0) {
-                        return Ok(None);
-                    }
-                    let why = r.pointed()?;
-                    Ok(Some(String::from_utf8_lossy(why.split(|&b| b == 0).next().unwrap_or_default()).into_owned()))
-                })
+                let why = older(
+                    c,
+                    FIRST,
+                    SET_ACTIVE,
+                    |m| m.u32(slot.number()),
+                    |r| {
+                        let done = r.pointed()?;
+                        if done.first().is_some_and(|&b| b != 0) {
+                            return Ok(None);
+                        }
+                        let why = r.pointed()?;
+                        Ok(Some(
+                            String::from_utf8_lossy(
+                                why.split(|&b| b == 0).next().unwrap_or_default(),
+                            )
+                            .into_owned(),
+                        ))
+                    },
+                )
                 .with_context(what)?;
                 match why {
                     None => Ok(()),

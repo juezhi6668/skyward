@@ -158,8 +158,14 @@ pub struct Partition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extent {
     /// `sectors` sectors starting at `sector` on block device `device`.
-    Linear { sectors: u64, device: usize, sector: u64 },
-    Zero { sectors: u64 },
+    Linear {
+        sectors: u64,
+        device: usize,
+        sector: u64,
+    },
+    Zero {
+        sectors: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,12 +236,22 @@ pub fn read(super_dev: &Path, slot: u32) -> Result<Metadata> {
     );
 
     let size = geometry.metadata_max_size as usize;
-    let mut metadata = match parse_metadata(&geometry, &at(geometry.primary_offset(slot), size)?, Some(slot)) {
+    let mut metadata = match parse_metadata(
+        &geometry,
+        &at(geometry.primary_offset(slot), size)?,
+        Some(slot),
+    ) {
         Ok(m) => m,
         Err(e) => {
             damaged.push(format!("primary metadata for slot {slot}: {e:#}"));
-            parse_metadata(&geometry, &at(geometry.backup_offset(slot), size)?, Some(slot))
-                .with_context(|| format!("both metadata copies for slot {slot} are damaged; primary: {e:#}"))?
+            parse_metadata(
+                &geometry,
+                &at(geometry.backup_offset(slot), size)?,
+                Some(slot),
+            )
+            .with_context(|| {
+                format!("both metadata copies for slot {slot} are damaged; primary: {e:#}")
+            })?
         }
     };
     metadata.damaged = damaged;
@@ -247,20 +263,32 @@ pub fn read(super_dev: &Path, slot: u32) -> Result<Metadata> {
 /// the metadata, its names taken as they are.
 pub fn read_image(path: &Path) -> Result<Metadata> {
     let data = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let geometry = data.get(..GEOMETRY_SIZE as usize).with_context(|| format!("{} ends inside its geometry", path.display()))?;
-    let geometry = Geometry::parse(geometry).with_context(|| format!("read the geometry of {}", path.display()))?;
-    parse_metadata(&geometry, &data[GEOMETRY_SIZE as usize..], None).with_context(|| format!("read the metadata of {}", path.display()))
+    let geometry = data
+        .get(..GEOMETRY_SIZE as usize)
+        .with_context(|| format!("{} ends inside its geometry", path.display()))?;
+    let geometry = Geometry::parse(geometry)
+        .with_context(|| format!("read the geometry of {}", path.display()))?;
+    parse_metadata(&geometry, &data[GEOMETRY_SIZE as usize..], None)
+        .with_context(|| format!("read the metadata of {}", path.display()))
 }
 
 impl Geometry {
     fn parse(block: &[u8]) -> Result<Geometry> {
-        let (raw, _) = RawGeometry::read_from_prefix(block).map_err(|_| anyhow!("short geometry block"))?;
-        ensure!(raw.magic.get() == GEOMETRY_MAGIC, "bad magic {:#x}", raw.magic.get());
+        let (raw, _) =
+            RawGeometry::read_from_prefix(block).map_err(|_| anyhow!("short geometry block"))?;
+        ensure!(
+            raw.magic.get() == GEOMETRY_MAGIC,
+            "bad magic {:#x}",
+            raw.magic.get()
+        );
         let size = raw.struct_size.get() as usize;
         ensure!(size == size_of::<RawGeometry>(), "struct size {size}");
         let mut unsummed = raw.clone();
         unsummed.checksum = [0; 32];
-        ensure!(sha256(&unsummed.as_bytes()[..size]) == raw.checksum, "bad checksum");
+        ensure!(
+            sha256(&unsummed.as_bytes()[..size]) == raw.checksum,
+            "bad checksum"
+        );
         let g = Geometry {
             metadata_max_size: raw.metadata_max_size.get(),
             metadata_slot_count: raw.metadata_slot_count.get(),
@@ -280,13 +308,16 @@ impl Geometry {
     }
 
     fn backup_offset(&self, slot: u32) -> u64 {
-        self.primary_offset(slot) + u64::from(self.metadata_max_size) * u64::from(self.metadata_slot_count)
+        self.primary_offset(slot)
+            + u64::from(self.metadata_max_size) * u64::from(self.metadata_slot_count)
     }
 
     /// Bytes from the start of super to the end of the last metadata copy.
     fn metadata_region(&self) -> u64 {
         RESERVED_BYTES
-            + (GEOMETRY_SIZE + u64::from(self.metadata_max_size) * u64::from(self.metadata_slot_count)) * 2
+            + (GEOMETRY_SIZE
+                + u64::from(self.metadata_max_size) * u64::from(self.metadata_slot_count))
+                * 2
     }
 }
 
@@ -307,7 +338,8 @@ impl RawTable {
         (0..self.num_entries.get() as usize)
             .map(|i| {
                 let start = offset + i * entry;
-                T::read_from_bytes(&tables[start..start + size_of::<T>()]).expect("slice has the entry's size")
+                T::read_from_bytes(&tables[start..start + size_of::<T>()])
+                    .expect("slice has the entry's size")
             })
             .collect()
     }
@@ -316,20 +348,26 @@ impl RawTable {
 /// A NUL-padded name; a name filling the whole field has no terminator.
 fn name(field: &[u8; NAME_LEN]) -> Result<String> {
     let end = field.iter().position(|&b| b == 0).unwrap_or(NAME_LEN);
-    String::from_utf8(field[..end].to_vec()).map_err(|_| anyhow!("name {:?} is not text", &field[..end]))
+    String::from_utf8(field[..end].to_vec())
+        .map_err(|_| anyhow!("name {:?} is not text", &field[..end]))
 }
 
 /// Names flagged as slot-suffixed (retrofit devices) get the suffix of the
 /// slot read, where one is.
 fn suffixed(name: String, flagged: bool, slot: Option<u32>) -> Result<String> {
-    let Some(slot) = slot.filter(|_| flagged) else { return Ok(name) };
+    let Some(slot) = slot.filter(|_| flagged) else {
+        return Ok(name);
+    };
     let suffix = match slot {
         0 => "_a",
         1 => "_b",
         _ => bail!("{name} needs a slot suffix, and slot {slot} has none"),
     };
     let full = name + suffix;
-    ensure!(full.len() <= NAME_LEN, "{full} is longer than {NAME_LEN} bytes");
+    ensure!(
+        full.len() <= NAME_LEN,
+        "{full} is longer than {NAME_LEN} bytes"
+    );
     Ok(full)
 }
 
@@ -337,16 +375,34 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
     ensure!(buf.len() >= size_of::<RawHeader>(), "short metadata copy");
     let mut header = RawHeader::new_zeroed();
     header.as_mut_bytes()[..HEADER_V1_0_SIZE].copy_from_slice(&buf[..HEADER_V1_0_SIZE]);
-    ensure!(header.magic.get() == HEADER_MAGIC, "bad magic {:#x}", header.magic.get());
+    ensure!(
+        header.magic.get() == HEADER_MAGIC,
+        "bad magic {:#x}",
+        header.magic.get()
+    );
     let (major, minor) = (header.major_version.get(), header.minor_version.get());
-    ensure!(major == MAJOR_VERSION && minor <= MINOR_VERSION_MAX, "unsupported version {major}.{minor}");
-    let expected = if minor < VERSION_FOR_EXPANDED_HEADER { HEADER_V1_0_SIZE } else { size_of::<RawHeader>() };
+    ensure!(
+        major == MAJOR_VERSION && minor <= MINOR_VERSION_MAX,
+        "unsupported version {major}.{minor}"
+    );
+    let expected = if minor < VERSION_FOR_EXPANDED_HEADER {
+        HEADER_V1_0_SIZE
+    } else {
+        size_of::<RawHeader>()
+    };
     let header_size = header.header_size.get() as usize;
-    ensure!(header_size == expected, "header size {header_size} for version {major}.{minor}");
-    header.as_mut_bytes()[HEADER_V1_0_SIZE..header_size].copy_from_slice(&buf[HEADER_V1_0_SIZE..header_size]);
+    ensure!(
+        header_size == expected,
+        "header size {header_size} for version {major}.{minor}"
+    );
+    header.as_mut_bytes()[HEADER_V1_0_SIZE..header_size]
+        .copy_from_slice(&buf[HEADER_V1_0_SIZE..header_size]);
     let mut unsummed = header.clone();
     unsummed.header_checksum = [0; 32];
-    ensure!(sha256(&unsummed.as_bytes()[..header_size]) == header.header_checksum, "bad header checksum");
+    ensure!(
+        sha256(&unsummed.as_bytes()[..header_size]) == header.header_checksum,
+        "bad header checksum"
+    );
 
     let tables_size = header.tables_size.get();
     for (what, table) in [
@@ -362,18 +418,28 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
         ("extent", &header.extents, size_of::<RawExtent>()),
         ("group", &header.groups, size_of::<RawGroup>()),
     ] {
-        ensure!(table.entry_size.get() as usize == size, "{what} entries take {} bytes", table.entry_size.get());
+        ensure!(
+            table.entry_size.get() as usize == size,
+            "{what} entries take {} bytes",
+            table.entry_size.get()
+        );
     }
     ensure!(
         header.block_devices.entry_size.get() as usize >= size_of::<RawBlockDevice>(),
         "block device entries take {} bytes",
         header.block_devices.entry_size.get()
     );
-    ensure!(tables_size <= geometry.metadata_max_size, "tables take {tables_size} bytes");
+    ensure!(
+        tables_size <= geometry.metadata_max_size,
+        "tables take {tables_size} bytes"
+    );
     let tables = buf
         .get(header_size..header_size + tables_size as usize)
         .context("tables run past the metadata copy")?;
-    ensure!(sha256(tables) == header.tables_checksum, "bad tables checksum");
+    ensure!(
+        sha256(tables) == header.tables_checksum,
+        "bad tables checksum"
+    );
 
     let block_devices = header
         .block_devices
@@ -381,7 +447,11 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
         .iter()
         .map(|d| {
             Ok(BlockDevice {
-                partition_name: suffixed(name(&d.partition_name)?, d.flags.get() & BLOCK_DEVICE_SLOT_SUFFIXED != 0, slot)?,
+                partition_name: suffixed(
+                    name(&d.partition_name)?,
+                    d.flags.get() & BLOCK_DEVICE_SLOT_SUFFIXED != 0,
+                    slot,
+                )?,
                 first_logical_sector: d.first_logical_sector.get(),
                 alignment: d.alignment.get(),
                 alignment_offset: d.alignment_offset.get(),
@@ -405,8 +475,15 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
             Ok(match e.target_type.get() {
                 TARGET_LINEAR => {
                     let device = e.target_source.get() as usize;
-                    ensure!(device < block_devices.len(), "extent {i} is on block device {device}");
-                    Extent::Linear { sectors, device, sector: e.target_data.get() }
+                    ensure!(
+                        device < block_devices.len(),
+                        "extent {i} is on block device {device}"
+                    );
+                    Extent::Linear {
+                        sectors,
+                        device,
+                        sector: e.target_data.get(),
+                    }
                 }
                 TARGET_ZERO => Extent::Zero { sectors },
                 t => bail!("extent {i} has target type {t}"),
@@ -420,7 +497,11 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
         .iter()
         .map(|g| {
             Ok(Group {
-                name: suffixed(name(&g.name)?, g.flags.get() & GROUP_SLOT_SUFFIXED != 0, slot)?,
+                name: suffixed(
+                    name(&g.name)?,
+                    g.flags.get() & GROUP_SLOT_SUFFIXED != 0,
+                    slot,
+                )?,
                 maximum_size: g.maximum_size.get(),
             })
         })
@@ -438,9 +519,19 @@ fn parse_metadata(geometry: &Geometry, buf: &[u8], slot: Option<u32>) -> Result<
         .map(|p| {
             let name = name(&p.name)?;
             let attributes = p.attributes.get();
-            ensure!(attributes & !valid == 0, "{name} has attributes {attributes:#x}");
-            let (first, count) = (p.first_extent_index.get() as usize, p.num_extents.get() as usize);
-            ensure!(first + count <= extents.len(), "{name} owns extents {first}..{}", first + count);
+            ensure!(
+                attributes & !valid == 0,
+                "{name} has attributes {attributes:#x}"
+            );
+            let (first, count) = (
+                p.first_extent_index.get() as usize,
+                p.num_extents.get() as usize,
+            );
+            ensure!(
+                first + count <= extents.len(),
+                "{name} owns extents {first}..{}",
+                first + count
+            );
             let group = p.group_index.get() as usize;
             ensure!(group < groups.len(), "{name} is in group {group}");
             Ok(Partition {

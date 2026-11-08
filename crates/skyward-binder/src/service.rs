@@ -34,8 +34,16 @@ const LOOKUPS_DECLARED: u32 = 36;
 /// its methods.
 fn methods_of(sdk: u32) -> Methods {
     match sdk >= LOOKUPS_DECLARED {
-        true => Methods { check_service: 3, list_services: 6, is_declared: 9 },
-        false => Methods { check_service: 2, list_services: 4, is_declared: 7 },
+        true => Methods {
+            check_service: 3,
+            list_services: 6,
+            is_declared: 9,
+        },
+        false => Methods {
+            check_service: 2,
+            list_services: 4,
+            is_declared: 7,
+        },
     }
 }
 
@@ -44,7 +52,9 @@ const SDK: &str = "ro.build.version.sdk";
 
 fn methods() -> Result<Methods> {
     let sdk = skyward_sys::prop(SDK).with_context(|| format!("the recovery says no {SDK}"))?;
-    Ok(methods_of(sdk.parse().with_context(|| format!("{SDK} is {sdk:?}"))?))
+    Ok(methods_of(
+        sdk.parse().with_context(|| format!("{SDK} is {sdk:?}"))?,
+    ))
 }
 
 /// Every dump priority a service can register at.
@@ -70,7 +80,9 @@ const INTERFACE_VERSION: u32 = 0x00ff_ffff;
 #[cfg(target_os = "android")]
 pub fn version(service: &crate::driver::Handle, interface: &str) -> Result<i32> {
     let what = format!("ask which version of {interface} is served");
-    let reply = service.transact(INTERFACE_VERSION, &Parcel::call(interface)).with_context(|| what.clone())?;
+    let reply = service
+        .transact(INTERFACE_VERSION, &Parcel::call(interface))
+        .with_context(|| what.clone())?;
     let mut read = reply.read();
     status::ok(&mut read).with_context(|| what.clone())?;
     read.i32().with_context(|| what)
@@ -79,14 +91,22 @@ pub fn version(service: &crate::driver::Handle, interface: &str) -> Result<i32> 
 /// The service registered under `name`, or `None` while nothing has
 /// registered it.
 #[cfg(target_os = "android")]
-pub fn find<'a>(binder: &'a crate::driver::Binder, name: &str) -> Result<Option<crate::driver::Handle<'a>>> {
+pub fn find<'a>(
+    binder: &'a crate::driver::Binder,
+    name: &str,
+) -> Result<Option<crate::driver::Handle<'a>>> {
     let directory = binder.directory()?;
     let mut call = Parcel::call(DIRECTORY);
     call.string(name);
-    let reply = directory.transact(methods()?.check_service, &call).with_context(|| format!("look up {name}"))?;
+    let reply = directory
+        .transact(methods()?.check_service, &call)
+        .with_context(|| format!("look up {name}"))?;
     let mut read = reply.read();
     status::ok(&mut read).with_context(|| format!("look up {name}"))?;
-    match read.object().with_context(|| format!("read what the directory answered for {name}"))? {
+    match read
+        .object()
+        .with_context(|| format!("read what the directory answered for {name}"))?
+    {
         Some(handle) => Ok(Some(crate::driver::Handle::hold(binder, handle)?)),
         None => Ok(None),
     }
@@ -99,27 +119,41 @@ pub fn names(binder: &crate::driver::Binder) -> Result<Vec<String>> {
     let directory = binder.directory()?;
     let mut call = Parcel::call(DIRECTORY);
     call.i32(DUMP_PRIORITY_ALL);
-    let reply = directory.transact(methods()?.list_services, &call).context("list what has registered")?;
+    let reply = directory
+        .transact(methods()?.list_services, &call)
+        .context("list what has registered")?;
     let mut read = reply.read();
     status::ok(&mut read).context("list what has registered")?;
     let count = read.i32().context("read how many have registered")?;
     anyhow::ensure!(count >= 0, "the directory says {count} have registered");
-    (0..count).map(|_| read.string().context("read a registered name")).collect()
+    (0..count)
+        .map(|_| read.string().context("read a registered name"))
+        .collect()
 }
 
 /// The process that serves an object.
 #[cfg(target_os = "android")]
 pub fn pid(service: &crate::driver::Handle) -> Result<u32> {
-    let reply = service.transact(DEBUG_PID, &Parcel::default()).context("ask which process serves an object")?;
-    let pid = reply.read().i32().context("read which process serves an object")?;
+    let reply = service
+        .transact(DEBUG_PID, &Parcel::default())
+        .context("ask which process serves an object")?;
+    let pid = reply
+        .read()
+        .i32()
+        .context("read which process serves an object")?;
     u32::try_from(pid).with_context(|| format!("an object says process {pid} serves it"))
 }
 
 /// The interface an object serves, by its full name.
 #[cfg(target_os = "android")]
 pub fn interface(service: &crate::driver::Handle) -> Result<String> {
-    let reply = service.transact(INTERFACE, &Parcel::default()).context("ask which interface an object serves")?;
-    reply.read().string().context("read which interface an object serves")
+    let reply = service
+        .transact(INTERFACE, &Parcel::default())
+        .context("ask which interface an object serves")?;
+    reply
+        .read()
+        .string()
+        .context("read which interface an object serves")
 }
 
 /// Whether the phone's own description says it has this service. The
@@ -131,10 +165,13 @@ pub fn declared(binder: &crate::driver::Binder, name: &str) -> Result<bool> {
     let directory = binder.directory()?;
     let mut call = Parcel::call(DIRECTORY);
     call.string(name);
-    let reply = directory.transact(methods()?.is_declared, &call).with_context(|| format!("ask whether {name} is described"))?;
+    let reply = directory
+        .transact(methods()?.is_declared, &call)
+        .with_context(|| format!("ask whether {name} is described"))?;
     let mut read = reply.read();
     status::ok(&mut read).with_context(|| format!("ask whether {name} is described"))?;
-    read.bool().with_context(|| format!("read whether {name} is described"))
+    read.bool()
+        .with_context(|| format!("read whether {name} is described"))
 }
 
 #[cfg(test)]
@@ -147,9 +184,25 @@ mod tests {
     /// the first and the second of them.
     #[test]
     fn the_directory_of_android_16_numbers_its_methods_two_and_four_further_on() {
-        assert_eq!(methods_of(33), Methods { check_service: 2, list_services: 4, is_declared: 7 }, "the 13 Ultra's recovery");
+        assert_eq!(
+            methods_of(33),
+            Methods {
+                check_service: 2,
+                list_services: 4,
+                is_declared: 7
+            },
+            "the 13 Ultra's recovery"
+        );
         assert_eq!(methods_of(35), methods_of(33));
-        assert_eq!(methods_of(36), Methods { check_service: 3, list_services: 6, is_declared: 9 }, "the 17 Ultra's recovery");
+        assert_eq!(
+            methods_of(36),
+            Methods {
+                check_service: 3,
+                list_services: 6,
+                is_declared: 9
+            },
+            "the 17 Ultra's recovery"
+        );
         assert_eq!(methods_of(37), methods_of(36));
     }
 }

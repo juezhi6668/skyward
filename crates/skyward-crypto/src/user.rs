@@ -85,10 +85,15 @@ pub enum Bound {
 /// The weaver slot a phone recorded for a blob: the layout, then the
 /// number in the order the network uses.
 pub fn weaver_slot(raw: &[u8]) -> Result<u32> {
-    let [layout, number @ ..] = raw else { bail!("the record of the blob's weaver slot is empty") };
+    let [layout, number @ ..] = raw else {
+        bail!("the record of the blob's weaver slot is empty")
+    };
     ensure!(*layout == WEAVER_SLOT_LAYOUT, "the blob's weaver slot is recorded in layout {layout}, and Skyward reads layout {WEAVER_SLOT_LAYOUT}");
     let Ok(number) = <[u8; 4]>::try_from(number) else {
-        bail!("the record of the blob's weaver slot is {} bytes, and one is 5", raw.len());
+        bail!(
+            "the record of the blob's weaver slot is {} bytes, and one is 5",
+            raw.len()
+        );
     };
     let slot = i32::from_be_bytes(number);
     u32::try_from(slot).map_err(|_| anyhow::anyhow!("the blob's weaver slot is recorded as {slot}"))
@@ -125,17 +130,25 @@ impl Lock {
         let cost = [record.u8()?, record.u8()?, record.u8()?];
         let salt = record.counted()?.to_vec();
         let enrolled = record.counted()?.to_vec();
-        Ok(Lock { kind, cost, salt, enrolled })
+        Ok(Lock {
+            kind,
+            cost,
+            salt,
+            enrolled,
+        })
     }
 
     /// Stretch what the user typed into the secret the rest of this works
     /// from. The work is deliberately slow, and the phone chose how slow.
     pub fn stretched(&self, credential: &[u8]) -> Result<Vec<u8>> {
         let [log_n, log_r, log_p] = self.cost;
-        let cost = scrypt::Params::new(log_n, 1 << log_r, 1 << log_p, STRETCHED_BYTES)
-            .map_err(|e| anyhow::anyhow!("the phone asks for stretching this code cannot do: {e}"))?;
+        let cost =
+            scrypt::Params::new(log_n, 1 << log_r, 1 << log_p, STRETCHED_BYTES).map_err(|e| {
+                anyhow::anyhow!("the phone asks for stretching this code cannot do: {e}")
+            })?;
         let mut out = vec![0u8; STRETCHED_BYTES];
-        scrypt::scrypt(credential, &self.salt, &cost, &mut out).map_err(|e| anyhow::anyhow!("stretch the credential: {e}"))?;
+        scrypt::scrypt(credential, &self.salt, &cost, &mut out)
+            .map_err(|e| anyhow::anyhow!("stretch the credential: {e}"))?;
         Ok(out)
     }
 }
@@ -150,7 +163,11 @@ impl<'a> Record<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.at + n;
         if end > self.raw.len() {
-            bail!("the phone's record holds {} bytes, {n} more were read at {}", self.raw.len(), self.at);
+            bail!(
+                "the phone's record holds {} bytes, {n} more were read at {}",
+                self.raw.len(),
+                self.at
+            );
         }
         let out = &self.raw[self.at..end];
         self.at = end;
@@ -162,7 +179,9 @@ impl<'a> Record<'a> {
     }
 
     fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_be_bytes(self.take(4)?.try_into().expect("four bytes")))
+        Ok(i32::from_be_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
     }
 
     /// A run of bytes, as its length and then the bytes.
@@ -214,7 +233,11 @@ pub fn protector_secret(stretched: &[u8], secdiscardable: &[u8]) -> Vec<u8> {
 /// keeps keys at.
 pub fn weaver_key(stretched: &[u8], key_bytes: usize) -> Result<Vec<u8>> {
     let mut key = personalized_hash(WEAVER_KEY, &[stretched]);
-    ensure!(key_bytes <= key.len(), "the weaver keeps keys of {key_bytes} bytes, longer than the {} a hash gives", key.len());
+    ensure!(
+        key_bytes <= key.len(),
+        "the weaver keeps keys of {key_bytes} bytes, longer than the {} a hash gives",
+        key.len()
+    );
     key.truncate(key_bytes);
     Ok(key)
 }
@@ -232,20 +255,29 @@ pub fn weaver_protector_secret(stretched: &[u8], value: &[u8]) -> Vec<u8> {
 /// secret opens. The layer the secure world holds has to come off first.
 pub fn open_inner(secret: &[u8], blob: &[u8]) -> Result<Vec<u8>> {
     if blob.len() < NONCE_BYTES + 16 {
-        bail!("the user's blob is {} bytes, too few to hold anything", blob.len());
+        bail!(
+            "the user's blob is {} bytes, too few to hold anything",
+            blob.len()
+        );
     }
     let mut key = personalized_hash(PROTECTOR_SECRET, &[secret]);
     key.truncate(KEY_BYTES);
     let (nonce, body) = blob.split_at(NONCE_BYTES);
     Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))
         .decrypt(Nonce::from_slice(nonce), body)
-        .map_err(|_| anyhow::anyhow!("the user's blob did not come apart; the secret is not the one it was closed with"))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the user's blob did not come apart; the secret is not the one it was closed with"
+            )
+        })
 }
 
 /// What the phone put in the blob, past the two bytes that say how it is
 /// written.
 pub fn content(blob: &[u8]) -> Result<&[u8]> {
-    let [version, kind, rest @ ..] = blob else { bail!("the user's blob says nothing about itself") };
+    let [version, kind, rest @ ..] = blob else {
+        bail!("the user's blob says nothing about itself")
+    };
     if *version != LATEST {
         bail!("the user's blob is written in layout {version}, and Skyward reads layout {LATEST}");
     }
@@ -271,7 +303,8 @@ pub fn secret_gatekeeper_password(synthetic_password: &[u8]) -> Vec<u8> {
 /// One of the keys that follow from the user's secret, under a fixed name
 /// for what it is for.
 fn derived(synthetic_password: &[u8], purpose: &[u8]) -> Vec<u8> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(synthetic_password).expect("HMAC takes a key of any length");
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(synthetic_password)
+        .expect("HMAC takes a key of any length");
     mac.update(&1u32.to_be_bytes());
     mac.update(purpose);
     mac.update(&[0]);
@@ -290,7 +323,11 @@ mod tests {
         let stretched = stretched_without_credential();
         assert_eq!(stretched.len(), STRETCHED_BYTES);
         assert_eq!(&stretched[..16], NO_CREDENTIAL);
-        assert_eq!(&stretched[16..], [0u8; 16], "it is padded out, not repeated");
+        assert_eq!(
+            &stretched[16..],
+            [0u8; 16],
+            "it is padded out, not repeated"
+        );
     }
 
     /// Checked against SHA-512 taken outside this code.
@@ -326,7 +363,11 @@ mod tests {
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
         let nonce = [4u8; NONCE_BYTES];
         let mut blob = nonce.to_vec();
-        blob.extend_from_slice(&cipher.encrypt(Nonce::from_slice(&nonce), &b"the password"[..]).unwrap());
+        blob.extend_from_slice(
+            &cipher
+                .encrypt(Nonce::from_slice(&nonce), &b"the password"[..])
+                .unwrap(),
+        );
         assert_eq!(open_inner(b"the secret", &blob).unwrap(), b"the password");
         assert!(open_inner(b"another secret", &blob).is_err());
         assert!(open_inner(b"the secret", &blob[..20]).is_err());
@@ -334,24 +375,44 @@ mod tests {
 
     #[test]
     fn the_key_the_secure_world_holds_is_named_after_the_protector() {
-        let p = Protector { id: "08a692c0f39d97c6".into(), blob: Vec::new(), bound: Bound::Weaver(0), lock: None };
+        let p = Protector {
+            id: "08a692c0f39d97c6".into(),
+            blob: Vec::new(),
+            bound: Bound::Weaver(0),
+            lock: None,
+        };
         assert_eq!(p.key_alias(), "synthetic_password_8a692c0f39d97c6");
     }
 
     #[test]
     fn a_protectors_files_are_named_after_the_whole_number_the_phone_records() {
         assert_eq!(protector_name(0x08a6_92c0_f39d_97c6), "08a692c0f39d97c6");
-        assert_eq!(protector_name(5), "0000000000000005", "the digits it is short of are zeros");
-        assert_eq!(protector_name(-1), "ffffffffffffffff", "a number the phone records below zero");
+        assert_eq!(
+            protector_name(5),
+            "0000000000000005",
+            "the digits it is short of are zeros"
+        );
+        assert_eq!(
+            protector_name(-1),
+            "ffffffffffffffff",
+            "a number the phone records below zero"
+        );
     }
 
     #[test]
     fn a_weaver_slot_is_recorded_as_its_layout_and_its_number() {
         assert_eq!(weaver_slot(&[1, 0, 0, 0, 5]).unwrap(), 5);
-        assert_eq!(weaver_slot(&[1, 0, 0, 1, 0]).unwrap(), 256, "the number in the order the network uses");
+        assert_eq!(
+            weaver_slot(&[1, 0, 0, 1, 0]).unwrap(),
+            256,
+            "the number in the order the network uses"
+        );
         assert!(weaver_slot(&[2, 0, 0, 0, 5]).is_err(), "another layout");
         assert!(weaver_slot(&[1, 0, 0, 5]).is_err(), "cut short");
-        assert!(weaver_slot(&[1, 0xFF, 0xFF, 0xFF, 0xFF]).is_err(), "the number of no slot");
+        assert!(
+            weaver_slot(&[1, 0xFF, 0xFF, 0xFF, 0xFF]).is_err(),
+            "the number of no slot"
+        );
         assert!(weaver_slot(&[]).is_err());
     }
 
@@ -361,8 +422,14 @@ mod tests {
     fn the_weaver_key_is_the_named_hash_cut_to_the_weavers_length() {
         let stretched = stretched_without_credential();
         let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        assert_eq!(hex(&weaver_key(&stretched, 16).unwrap()), "ee43b0c0aadc31e0b8ba2843de4910b3");
-        assert_eq!(hex(&weaver_key(&stretched, 32).unwrap()), "ee43b0c0aadc31e0b8ba2843de4910b3ce7b4781a9a8c41050c4cbee46354321");
+        assert_eq!(
+            hex(&weaver_key(&stretched, 16).unwrap()),
+            "ee43b0c0aadc31e0b8ba2843de4910b3"
+        );
+        assert_eq!(
+            hex(&weaver_key(&stretched, 32).unwrap()),
+            "ee43b0c0aadc31e0b8ba2843de4910b3ce7b4781a9a8c41050c4cbee46354321"
+        );
         assert!(weaver_key(&stretched, 65).is_err(), "longer than a hash");
     }
 
@@ -371,11 +438,17 @@ mod tests {
         let secret = weaver_protector_secret(b"stretched", &[0xAB; 16]);
         assert_eq!(&secret[..9], b"stretched");
         assert_eq!(
-            secret[9..].iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            secret[9..]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
             "3ab55b85fd690fe840566368f54c22c3a1bd7d6ac11d75c3174b7be7dd49414e\
              a59a34c8ca70e5f2ef564d1ef8ff02bd47650f8fd34738185f9bd179ab1135fe"
         );
-        assert_ne!(weaver_protector_secret(b"stretched", &[0xAB; 16]), protector_secret(b"stretched", &[0xAB; 16]));
+        assert_ne!(
+            weaver_protector_secret(b"stretched", &[0xAB; 16]),
+            protector_secret(b"stretched", &[0xAB; 16])
+        );
     }
 
     /// The record as a phone writes it: the kind, the three powers of two
@@ -397,7 +470,11 @@ mod tests {
     #[test]
     fn what_the_phone_recorded_about_the_screen_lock_is_read_back() {
         let raw = recorded(Lock::PIN, &[0xCD; 16], &[0xAB; 58]);
-        assert_eq!(raw.len(), 93, "the length a phone writes for a code with a salt and an enrolment");
+        assert_eq!(
+            raw.len(),
+            93,
+            "the length a phone writes for a code with a salt and an enrolment"
+        );
         let lock = Lock::of(&raw).unwrap();
         assert_eq!(lock.kind, Lock::PIN);
         assert_eq!(lock.cost, [11, 3, 1]);
@@ -418,7 +495,12 @@ mod tests {
     /// because the last step of the stretching builds its answer in blocks.
     #[test]
     fn stretching_matches_the_published_answer_for_the_cost_the_phone_names() {
-        let lock = Lock { kind: Lock::PASSWORD, cost: [10, 3, 4], salt: b"NaCl".to_vec(), enrolled: Vec::new() };
+        let lock = Lock {
+            kind: Lock::PASSWORD,
+            cost: [10, 3, 4],
+            salt: b"NaCl".to_vec(),
+            enrolled: Vec::new(),
+        };
         let out = lock.stretched(b"password").unwrap();
         assert_eq!(
             out.iter().map(|b| format!("{b:02x}")).collect::<String>(),
@@ -428,7 +510,12 @@ mod tests {
 
     #[test]
     fn a_cost_no_machine_could_pay_is_an_error_rather_than_a_wait() {
-        let lock = Lock { kind: Lock::PIN, cost: [64, 3, 1], salt: b"salt".to_vec(), enrolled: Vec::new() };
+        let lock = Lock {
+            kind: Lock::PIN,
+            cost: [64, 3, 1],
+            salt: b"salt".to_vec(),
+            enrolled: Vec::new(),
+        };
         assert!(lock.stretched(b"1234").is_err());
     }
 }

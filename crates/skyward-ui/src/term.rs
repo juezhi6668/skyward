@@ -38,7 +38,15 @@ pub enum TermKey {
 }
 
 /// The terminal's own keys, in the order the row shows them.
-pub const TERM_KEYS: [TermKey; 7] = [TermKey::Esc, TermKey::Tab, TermKey::Ctrl, TermKey::Left, TermKey::Up, TermKey::Down, TermKey::Right];
+pub const TERM_KEYS: [TermKey; 7] = [
+    TermKey::Esc,
+    TermKey::Tab,
+    TermKey::Ctrl,
+    TermKey::Left,
+    TermKey::Up,
+    TermKey::Down,
+    TermKey::Right,
+];
 
 /// A shell's screen as it has written it, and whether the shell still runs.
 pub struct Term {
@@ -53,8 +61,15 @@ pub struct Term {
 impl Term {
     /// A blank screen of `rows` by `cols` for a shell that has just started.
     pub fn new(rows: u16, cols: u16) -> Term {
-        let (rows, cols) = (NonZeroU16::new(rows).expect("a screen has rows"), NonZeroU16::new(cols).expect("a screen has columns"));
-        Term { parser: vt100::Parser::new(rows, cols, SCROLLBACK), running: true, ctrl: false }
+        let (rows, cols) = (
+            NonZeroU16::new(rows).expect("a screen has rows"),
+            NonZeroU16::new(cols).expect("a screen has columns"),
+        );
+        Term {
+            parser: vt100::Parser::new(rows, cols, SCROLLBACK),
+            running: true,
+            ctrl: false,
+        }
     }
 
     pub fn screen(&self) -> &vt100::Screen {
@@ -111,7 +126,11 @@ impl Term {
         }
         self.ctrl = false;
         let arrow = |final_byte: u8| {
-            let lead = if self.parser.screen().application_cursor() { b'O' } else { b'[' };
+            let lead = if self.parser.screen().application_cursor() {
+                b'O'
+            } else {
+                b'['
+            };
             vec![0x1b, lead, final_byte]
         };
         match key {
@@ -160,13 +179,28 @@ pub fn layout(t: &Theme, f: &Fonts, top: f32) -> Layout {
     let m = &t.m;
     let px = m.dp(TEXT_DP);
     let keys_top = m.h as f32 - widgets::keyboard_height(t) - m.dp(KEYS_GAP_DP + KEYS_H_DP);
-    let card = Rect::new(m.margin, top, m.w as f32 - m.margin * 2.0, keys_top - m.dp(KEYS_GAP_DP) - top);
+    let card = Rect::new(
+        m.margin,
+        top,
+        m.w as f32 - m.margin * 2.0,
+        keys_top - m.dp(KEYS_GAP_DP) - top,
+    );
     let pad = m.dp(PAD_DP);
     let cell = cell_width(f, px);
     let pitch = m.dp(PITCH_DP);
     let cols = ((card.w - pad * 2.0) / cell).floor().max(1.0) as u16;
     let rows = ((card.h - pad * 2.0) / pitch).floor().max(1.0) as u16;
-    Layout { card, x0: card.x + pad, y0: card.y + pad, px, cell, pitch, rows, cols, keys_top }
+    Layout {
+        card,
+        x0: card.x + pad,
+        y0: card.y + pad,
+        px,
+        cell,
+        pitch,
+        rows,
+        cols,
+        keys_top,
+    }
 }
 
 /// The advance of the monospaced face, one cell.
@@ -240,7 +274,14 @@ fn color(t: &Theme, named: vt100::Color, bold: bool, fallback: Rgba) -> Rgba {
 /// left it while the live screen is in view.
 pub fn draw(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, term: Option<&Term>) {
     let m = &t.m;
-    c.fill_round_rect(l.card.x, l.card.y, l.card.w, l.card.h, m.card_radius, t.pal.card);
+    c.fill_round_rect(
+        l.card.x,
+        l.card.y,
+        l.card.w,
+        l.card.h,
+        m.card_radius,
+        t.pal.card,
+    );
     let Some(term) = term else { return };
     let screen = term.screen();
     let px = l.px;
@@ -251,7 +292,9 @@ pub fn draw(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, term: Option<&Term
     for row in 0..l.rows {
         let y = l.y0 + row as f32 * l.pitch;
         for col in 0..l.cols {
-            let Some(cell) = screen.cell(row, col) else { continue };
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
             if cell.is_wide_continuation() {
                 continue;
             }
@@ -276,7 +319,15 @@ pub fn draw(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, term: Option<&Term
                 let face = if f.mono.has(ch) { &f.mono } else { &f.body };
                 let glyph = cell.contents();
                 let gw = c.text_width(face, glyph, px);
-                c.text(face, glyph, x + (l.cell * span - gw) / 2.0, y + ascent, px, fg, None);
+                c.text(
+                    face,
+                    glyph,
+                    x + (l.cell * span - gw) / 2.0,
+                    y + ascent,
+                    px,
+                    fg,
+                    None,
+                );
             }
             if cell.underline() {
                 c.fill_rect(x, y + l.pitch - m.dp(4.0), l.cell * span, m.dp(1.0), fg);
@@ -287,7 +338,14 @@ pub fn draw(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, term: Option<&Term
 
 /// The row of `keys` above the keyboard, the terminal's or the editor's;
 /// Ctrl shows held while it is.
-pub fn keys(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, keys: &[TermKey], ctrl: bool) -> Vec<(Rect, TermKey)> {
+pub fn keys(
+    c: &mut Canvas,
+    t: &Theme,
+    f: &Fonts,
+    l: &Layout,
+    keys: &[TermKey],
+    ctrl: bool,
+) -> Vec<(Rect, TermKey)> {
     let m = &t.m;
     let n = keys.len() as f32;
     let gap = m.dp(6.0);
@@ -298,7 +356,11 @@ pub fn keys(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, keys: &[TermKey], 
     for (k, &key) in keys.iter().enumerate() {
         let r = Rect::new(m.margin + k as f32 * (w + gap), l.keys_top, w, h);
         let held = key == TermKey::Ctrl && ctrl;
-        let (fill, ink) = if held { (t.pal.accent, t.pal.card) } else { (t.pal.card, t.pal.text) };
+        let (fill, ink) = if held {
+            (t.pal.accent, t.pal.card)
+        } else {
+            (t.pal.card, t.pal.text)
+        };
         c.fill_round_rect(r.x, r.y, r.w, r.h, m.dp(KEY_RADIUS_DP), fill);
         let label = match key {
             TermKey::Esc => "Esc",
@@ -312,7 +374,15 @@ pub fn keys(c: &mut Canvas, t: &Theme, f: &Fonts, l: &Layout, keys: &[TermKey], 
         let face = &f.value;
         let tw = c.text_width(face, label, px);
         let (top, bottom) = face.ink(px);
-        c.text(face, label, r.x + (r.w - tw) / 2.0, r.y + (r.h - (bottom - top)) / 2.0 - top, px, ink, None);
+        c.text(
+            face,
+            label,
+            r.x + (r.w - tw) / 2.0,
+            r.y + (r.h - (bottom - top)) / 2.0 - top,
+            px,
+            ink,
+            None,
+        );
         out.push((r, key));
     }
     out
@@ -342,14 +412,21 @@ mod tests {
         let mut term = Term::new(24, 80);
         assert!(term.key(TermKey::Ctrl).is_empty());
         assert!(term.ctrl);
-        assert!(term.typed(Cap::Show(Layer::Digits), false).is_empty(), "changing the layer keeps it held");
+        assert!(
+            term.typed(Cap::Show(Layer::Digits), false).is_empty(),
+            "changing the layer keeps it held"
+        );
         assert_eq!(term.typed(Cap::Char('c'), false), [0x03]);
         assert!(!term.ctrl, "it lasts one key");
         assert_eq!(term.typed(Cap::Char('c'), false), b"c");
         term.key(TermKey::Ctrl);
         assert_eq!(term.typed(Cap::Char('['), false), [0x1b]);
         term.key(TermKey::Ctrl);
-        assert_eq!(term.typed(Cap::Char('1'), false), b"1", "a digit has no control code");
+        assert_eq!(
+            term.typed(Cap::Char('1'), false),
+            b"1",
+            "a digit has no control code"
+        );
         term.key(TermKey::Ctrl);
         term.key(TermKey::Ctrl);
         assert!(!term.ctrl, "a second press lets it go");
@@ -376,21 +453,45 @@ mod tests {
         term.scroll(2);
         assert_eq!(term.screen().contents(), "ishtar:/ # ls\nbin\netc");
         term.scroll(10);
-        assert_eq!(term.screen().scrollback(), 2, "no further back than the oldest line kept");
+        assert_eq!(
+            term.screen().scrollback(),
+            2,
+            "no further back than the oldest line kept"
+        );
         term.scroll(-1);
         assert_eq!(term.screen().scrollback(), 1);
         term.feed(b"x");
-        assert_eq!(term.screen().scrollback(), 0, "new output brings the live screen back");
+        assert_eq!(
+            term.screen().scrollback(),
+            0,
+            "new output brings the live screen back"
+        );
     }
 
     #[test]
     fn named_colours_come_from_the_page_and_the_cube() {
         let t = Theme::light(1440, 3200, 3.5);
-        assert_eq!(color(&t, vt100::Color::Default, false, t.pal.text), t.pal.text);
+        assert_eq!(
+            color(&t, vt100::Color::Default, false, t.pal.text),
+            t.pal.text
+        );
         assert_eq!(color(&t, vt100::Color::Idx(1), false, t.pal.text), LIGHT[1]);
-        assert_eq!(color(&t, vt100::Color::Idx(1), true, t.pal.text), LIGHT[9], "bold red is bright red");
-        assert_eq!(color(&t, vt100::Color::Idx(196), false, t.pal.text), Rgba::rgb(255, 0, 0));
-        assert_eq!(color(&t, vt100::Color::Idx(232), false, t.pal.text), Rgba::rgb(8, 8, 8));
-        assert_eq!(color(&t, vt100::Color::Rgb(1, 2, 3), false, t.pal.text), Rgba::rgb(1, 2, 3));
+        assert_eq!(
+            color(&t, vt100::Color::Idx(1), true, t.pal.text),
+            LIGHT[9],
+            "bold red is bright red"
+        );
+        assert_eq!(
+            color(&t, vt100::Color::Idx(196), false, t.pal.text),
+            Rgba::rgb(255, 0, 0)
+        );
+        assert_eq!(
+            color(&t, vt100::Color::Idx(232), false, t.pal.text),
+            Rgba::rgb(8, 8, 8)
+        );
+        assert_eq!(
+            color(&t, vt100::Color::Rgb(1, 2, 3), false, t.pal.text),
+            Rgba::rgb(1, 2, 3)
+        );
     }
 }

@@ -69,7 +69,8 @@ mod android {
         config.info.size_limit = length;
         config.info.flags = READ_ONLY;
         if unsafe { libc::ioctl(device.as_raw_fd(), CONFIGURE as libc::Ioctl, &mut config) } < 0 {
-            return Err(std::io::Error::last_os_error()).with_context(|| format!("point {} at {}", path.display(), file.display()));
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("point {} at {}", path.display(), file.display()));
         }
         Ok(path)
     }
@@ -83,6 +84,8 @@ mod android {
                 return Ok(path);
             }
         }
-        anyhow::bail!("the kernel handed out loop device {number}, which is in neither /dev/block nor /dev")
+        anyhow::bail!(
+            "the kernel handed out loop device {number}, which is in neither /dev/block nor /dev"
+        )
     }
 }

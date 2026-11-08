@@ -108,10 +108,12 @@ impl Message {
         let which = self.addresses.len();
         self.addresses.push(self.data.len() as u64);
         self.data.extend_from_slice(&ADDRESS.to_le_bytes());
-        self.data.extend_from_slice(&inside.map_or(0, |_| INSIDE_ANOTHER).to_le_bytes());
+        self.data
+            .extend_from_slice(&inside.map_or(0, |_| INSIDE_ANOTHER).to_le_bytes());
         self.data.extend_from_slice(&at.to_le_bytes());
         self.data.extend_from_slice(&(length as u64).to_le_bytes());
-        self.data.extend_from_slice(&(inside.unwrap_or(0) as u64).to_le_bytes());
+        self.data
+            .extend_from_slice(&(inside.unwrap_or(0) as u64).to_le_bytes());
         // The address inside the frame is the frame's first field.
         self.data.extend_from_slice(&0u64.to_le_bytes());
         self.pointed += (length as u64).next_multiple_of(WORD);
@@ -147,7 +149,9 @@ impl<'a> Answer<'a> {
     /// Whether the call went through. A service that refused says so first,
     /// and says why in the text that follows.
     pub fn status(&mut self) -> Result<()> {
-        let code = self.i32().context("read whether the service took the call")?;
+        let code = self
+            .i32()
+            .context("read whether the service took the call")?;
         if code == 0 {
             return Ok(());
         }
@@ -158,7 +162,9 @@ impl<'a> Answer<'a> {
     }
 
     pub fn i32(&mut self) -> Result<i32> {
-        Ok(i32::from_le_bytes(self.take(4)?.try_into().expect("four bytes")))
+        Ok(i32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
     }
 
     /// A truth value: a byte, padded to four as everything is.
@@ -193,7 +199,12 @@ impl<'a> Answer<'a> {
         while !self.at.is_multiple_of(4) && self.at < self.data.len() {
             self.at += 1;
         }
-        let utf16: Vec<u16> = raw[..units as usize * 2].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        let utf16: Vec<u16> = raw[..units as usize * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
         Ok(String::from_utf16_lossy(&utf16))
     }
 
@@ -208,7 +219,11 @@ impl<'a> Answer<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.at + n;
         if end > self.data.len() {
-            bail!("the reply holds {} bytes, {n} more were read at {}", self.data.len(), self.at);
+            bail!(
+                "the reply holds {} bytes, {n} more were read at {}",
+                self.data.len(),
+                self.at
+            );
         }
         let out = &self.data[self.at..end];
         self.at = end;
@@ -219,7 +234,11 @@ impl<'a> Answer<'a> {
 /// The hardware service serving `interface` as `instance`, or `None` while
 /// nothing has registered it.
 #[cfg(target_os = "android")]
-pub fn find<'a>(binder: &'a crate::driver::Binder, interface: &str, instance: &str) -> Result<Option<crate::driver::Handle<'a>>> {
+pub fn find<'a>(
+    binder: &'a crate::driver::Binder,
+    interface: &str,
+    instance: &str,
+) -> Result<Option<crate::driver::Handle<'a>>> {
     use crate::driver::Handle;
     // The directory the phone's hardware services register with, which is
     // a second one beside the directory the rest of the phone uses, and
@@ -230,10 +249,16 @@ pub fn find<'a>(binder: &'a crate::driver::Binder, interface: &str, instance: &s
     let mut call = Message::call(DIRECTORY);
     call.text(interface);
     call.text(instance);
-    let reply = directory.transact(GET, &call).with_context(|| format!("look up {interface}/{instance}"))?;
+    let reply = directory
+        .transact(GET, &call)
+        .with_context(|| format!("look up {interface}/{instance}"))?;
     let mut read = Answer::new(reply.bytes());
-    read.status().with_context(|| format!("look up {interface}/{instance}"))?;
-    match read.object().with_context(|| format!("read what the directory answered for {interface}"))? {
+    read.status()
+        .with_context(|| format!("look up {interface}/{instance}"))?;
+    match read
+        .object()
+        .with_context(|| format!("read what the directory answered for {interface}"))?
+    {
         Some(handle) => Ok(Some(Handle::hold(reply.binder(), handle)?)),
         None => Ok(None),
     }
@@ -247,14 +272,20 @@ pub fn describes(service: &crate::driver::Handle) -> Result<String> {
     // call on it is named as being on it whatever else the service serves.
     const BASE: &str = "android.hidl.base@1.0::IBase";
     const DESCRIBE: u32 = 256_136_003;
-    let reply = service.transact(DESCRIBE, &Message::call(BASE)).context("ask the service what it serves")?;
+    let reply = service
+        .transact(DESCRIBE, &Message::call(BASE))
+        .context("ask the service what it serves")?;
     let mut read = Answer::new(reply.bytes());
     read.status().context("ask the service what it serves")?;
-    let frame = read.pointed().context("read the frame of what the service serves")?;
+    let frame = read
+        .pointed()
+        .context("read the frame of what the service serves")?;
     if frame.len() < FRAME_BYTES {
         bail!("the service answered a frame of {} bytes", frame.len());
     }
-    let name = read.pointed().context("read the name of what the service serves")?;
+    let name = read
+        .pointed()
+        .context("read the name of what the service serves")?;
     Ok(String::from_utf8_lossy(name.strip_suffix(&[0]).unwrap_or(name)).into_owned())
 }
 
@@ -273,7 +304,8 @@ mod tests {
                 let points = u64::from_le_bytes(raw[8..16].try_into().unwrap());
                 let length = u64::from_le_bytes(raw[16..24].try_into().unwrap()) as usize;
                 let inside = u64::from_le_bytes(raw[24..32].try_into().unwrap());
-                let bytes = unsafe { std::slice::from_raw_parts(points as *const u8, length) }.to_vec();
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(points as *const u8, length) }.to_vec();
                 assert_eq!(u32::from_le_bytes(raw[0..4].try_into().unwrap()), ADDRESS);
                 assert_eq!(u64::from_le_bytes(raw[32..40].try_into().unwrap()), 0);
                 (flags, inside, bytes)
@@ -285,7 +317,11 @@ mod tests {
     fn a_call_opens_with_the_interface_name_and_a_terminator() {
         let m = Message::call("a.b@1.0::IC");
         assert_eq!(&m.data[..11], b"a.b@1.0::IC");
-        assert_eq!(m.data.len(), 12, "the name, its terminator, and padding to four");
+        assert_eq!(
+            m.data.len(),
+            12,
+            "the name, its terminator, and padding to four"
+        );
         assert_eq!(m.data[11], 0);
         assert!(m.addresses.is_empty());
     }
@@ -295,9 +331,16 @@ mod tests {
         let mut m = Message::call("a.b@1.0::IC");
         m.u32(7);
         m.u64(1 << 40);
-        assert_eq!(m.data.len(), 12 + 4 + 8, "a word is not moved to a boundary of its own");
+        assert_eq!(
+            m.data.len(),
+            12 + 4 + 8,
+            "a word is not moved to a boundary of its own"
+        );
         assert_eq!(u32::from_le_bytes(m.data[12..16].try_into().unwrap()), 7);
-        assert_eq!(u64::from_le_bytes(m.data[16..24].try_into().unwrap()), 1 << 40);
+        assert_eq!(
+            u64::from_le_bytes(m.data[16..24].try_into().unwrap()),
+            1 << 40
+        );
     }
 
     #[test]
@@ -308,11 +351,19 @@ mod tests {
         assert_eq!(parts.len(), 2, "the frame, then the bytes");
         assert_eq!(parts[0].0, 0, "the frame points inside nothing");
         assert_eq!(parts[0].2.len(), FRAME_BYTES);
-        assert_eq!(u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()), 3, "how many bytes there are");
+        assert_eq!(
+            u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()),
+            3,
+            "how many bytes there are"
+        );
         assert_eq!(parts[1].0, INSIDE_ANOTHER, "the bytes sit inside the frame");
         assert_eq!(parts[1].1, 0, "inside the first address of the call");
         assert_eq!(parts[1].2, vec![1, 2, 3]);
-        assert_eq!(m.pointed, FRAME_BYTES as u64 + WORD, "both rounded up to a word");
+        assert_eq!(
+            m.pointed,
+            FRAME_BYTES as u64 + WORD,
+            "both rounded up to a word"
+        );
     }
 
     #[test]
@@ -320,7 +371,11 @@ mod tests {
         let mut m = Message::call("a.b@1.0::IC");
         m.text("default");
         let parts = written(&m);
-        assert_eq!(u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()), 7, "the terminator is not counted");
+        assert_eq!(
+            u32::from_le_bytes(parts[0].2[8..12].try_into().unwrap()),
+            7,
+            "the terminator is not counted"
+        );
         assert_eq!(parts[1].2, b"default\0", "but it is carried");
     }
 
@@ -353,7 +408,11 @@ mod tests {
         let mut read = Answer::new(&[1, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0]);
         assert!(read.bool().unwrap());
         assert!(!read.bool().unwrap());
-        assert_eq!(read.i32().unwrap(), 7, "what follows it starts four bytes on");
+        assert_eq!(
+            read.i32().unwrap(),
+            7,
+            "what follows it starts four bytes on"
+        );
         assert!(Answer::new(&[1, 0]).bool().is_err());
     }
 }

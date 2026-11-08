@@ -54,7 +54,11 @@ impl Installed {
         let language = if region == "CN" { "zh_CN" } else { "en_US" };
         // A system whose version says it is for developers is on their
         // branch; any other on the stable one.
-        let branch = if self.version.to_uppercase().ends_with(".DEV") { "X" } else { "F" };
+        let branch = if self.version.to_uppercase().ends_with(".DEV") {
+            "X"
+        } else {
+            "F"
+        };
         let mut q = serde_json::json!({
             "b": branch,
             "c": self.android,
@@ -71,7 +75,13 @@ impl Installed {
             "unlock": if self.unlocked { "1" } else { "0" },
             "v": format!("MIUI-{}", self.version),
         });
-        if self.android.split('.').next().and_then(|major| major.parse::<u32>().ok()).is_some_and(|major| major >= 15) {
+        if self
+            .android
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .is_some_and(|major| major >= 15)
+        {
             q["options"] = serde_json::json!({ "av": UPDATER });
         }
         q.to_string()
@@ -80,7 +90,8 @@ impl Installed {
 
 /// A question sealed, as the form carries it.
 pub fn seal(question: &str) -> String {
-    let sealed = Sealer::new(KEY.into(), IV.into()).encrypt_padded_vec_mut::<Pkcs7>(question.as_bytes());
+    let sealed =
+        Sealer::new(KEY.into(), IV.into()).encrypt_padded_vec_mut::<Pkcs7>(question.as_bytes());
     base64::engine::general_purpose::URL_SAFE.encode(sealed)
 }
 
@@ -157,27 +168,64 @@ pub fn release(answer: &str) -> Result<Option<Release>> {
             code.code == ANSWERED,
             "the update server answered {}{}",
             code.code,
-            code.message.as_deref().map(|m| format!(" ({m})")).unwrap_or_default()
+            code.message
+                .as_deref()
+                .map(|m| format!(" ({m})"))
+                .unwrap_or_default()
         );
     }
     let Some(rom) = a.latest else { return Ok(None) };
-    let name = rom.filename.split('?').next().unwrap_or_default().to_string();
-    ensure!(!name.is_empty() && !name.contains('/'), "the update server names the package {}", rom.filename);
+    let name = rom
+        .filename
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    ensure!(
+        !name.is_empty() && !name.contains('/'),
+        "the update server names the package {}",
+        rom.filename
+    );
     // A mirror that keeps to HTTPS comes before one that does not.
     let mut mirrors = a.mirrors;
     mirrors.sort_by_key(|m| !m.starts_with("https://"));
-    let urls = mirrors.iter().map(|m| format!("{}/{}/{}", m.trim_end_matches('/'), rom.version, rom.filename)).collect::<Vec<_>>();
+    let urls = mirrors
+        .iter()
+        .map(|m| {
+            format!(
+                "{}/{}/{}",
+                m.trim_end_matches('/'),
+                rom.version,
+                rom.filename
+            )
+        })
+        .collect::<Vec<_>>();
     if urls.is_empty() {
         bail!("the update server says of no place to download {name}");
     }
-    Ok(Some(Release { version: rom.version, name, urls, md5: rom.md5.to_lowercase(), size: rom.filesize, length: None }))
+    Ok(Some(Release {
+        version: rom.version,
+        name,
+        urls,
+        md5: rom.md5.to_lowercase(),
+        size: rom.filesize,
+        length: None,
+    }))
 }
 
 /// How many bytes the package at `url` is, as its server says.
 pub fn length(agent: &ureq::Agent, url: &str) -> Result<u64> {
-    let head = agent.head(url).call().context("ask the server about the package")?;
-    ensure!(head.status().is_success(), "the server answered {}", head.status());
-    crate::download::content_length(head.headers()).context("the server does not say how long the package is")
+    let head = agent
+        .head(url)
+        .call()
+        .context("ask the server about the package")?;
+    ensure!(
+        head.status().is_success(),
+        "the server answered {}",
+        head.status()
+    );
+    crate::download::content_length(head.headers())
+        .context("the server does not say how long the package is")
 }
 
 /// Ask `server` which system is the newest for `installed`.
@@ -189,7 +237,10 @@ pub fn ask(agent: &ureq::Agent, server: &str, installed: &Installed) -> Result<O
         .with_context(|| format!("ask {server}"))?;
     let status = response.status();
     ensure!(status.is_success(), "{server} answered {status}");
-    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {server}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .with_context(|| format!("read the answer of {server}"))?;
     release(&open(&body)?)
 }
 
@@ -198,7 +249,12 @@ mod tests {
     use super::*;
 
     fn thirteen_ultra() -> Installed {
-        Installed { device: "ishtar".into(), version: "OS3.0.306.0.WMACNXM".into(), android: "16".into(), unlocked: true }
+        Installed {
+            device: "ishtar".into(),
+            version: "OS3.0.306.0.WMACNXM".into(),
+            android: "16".into(),
+            unlocked: true,
+        }
     }
 
     #[test]
@@ -213,14 +269,26 @@ mod tests {
         assert_eq!(q["v"], "MIUI-OS3.0.306.0.WMACNXM");
         assert_eq!(q["unlock"], "1");
         assert_eq!(q["options"]["av"], UPDATER);
-        let older = Installed { android: "14".into(), ..thirteen_ultra() };
+        let older = Installed {
+            android: "14".into(),
+            ..thirteen_ultra()
+        };
         let q: serde_json::Value = serde_json::from_str(&older.question()).unwrap();
-        assert!(q.get("options").is_none(), "only Android 15 and later is asked the updater's version");
+        assert!(
+            q.get("options").is_none(),
+            "only Android 15 and later is asked the updater's version"
+        );
     }
 
     #[test]
     fn a_region_is_read_from_the_device_name() {
-        let region = |device: &str| Installed { device: device.into(), ..thirteen_ultra() }.region();
+        let region = |device: &str| {
+            Installed {
+                device: device.into(),
+                ..thirteen_ultra()
+            }
+            .region()
+        };
         assert_eq!(region("ishtar"), "CN");
         assert_eq!(region("nuwa_global"), "MI");
         assert_eq!(region("nuwa_eea_global"), "EU");
@@ -232,8 +300,15 @@ mod tests {
     fn a_question_sealed_opens_again_as_the_server_opens_it() {
         let q = thirteen_ultra().question();
         let sealed = seal(&q);
-        assert!(!sealed.contains('+') && !sealed.contains('/'), "sealed for a form, as the stock updater does");
-        let standard = base64::engine::general_purpose::STANDARD.encode(base64::engine::general_purpose::URL_SAFE.decode(&sealed).unwrap());
+        assert!(
+            !sealed.contains('+') && !sealed.contains('/'),
+            "sealed for a form, as the stock updater does"
+        );
+        let standard = base64::engine::general_purpose::STANDARD.encode(
+            base64::engine::general_purpose::URL_SAFE
+                .decode(&sealed)
+                .unwrap(),
+        );
         assert_eq!(open(&standard).unwrap(), q);
         assert!(open("not sealed").is_err());
     }
@@ -244,9 +319,14 @@ mod tests {
 
     #[test]
     fn the_answer_gives_the_newest_full_package_and_where_it_is() {
-        let r = release(ANSWERED_306).unwrap().expect("the server knows a newer system");
+        let r = release(ANSWERED_306)
+            .unwrap()
+            .expect("the server knows a newer system");
         assert_eq!(r.version, "OS3.0.308.0.WMACNXM");
-        assert_eq!(r.name, "ishtar-ota_full-OS3.0.308.0.WMACNXM-user-16.0-e3d01be14a.zip");
+        assert_eq!(
+            r.name,
+            "ishtar-ota_full-OS3.0.308.0.WMACNXM-user-16.0-e3d01be14a.zip"
+        );
         assert_eq!(r.md5, "e3d01be14a3cf95d8e1171a1a2a28eb9");
         assert_eq!(r.size, "7.1G");
         assert_eq!(
@@ -257,15 +337,27 @@ mod tests {
                 "http://superota.d.miui.com/OS3.0.308.0.WMACNXM/ishtar-ota_full-OS3.0.308.0.WMACNXM-user-16.0-e3d01be14a.zip?t=1792686801&s=eb90f665fb7c903a898efb9c8c5e297d",
             ]
         );
-        assert_eq!(r.length, None, "the length is asked of where the package is");
+        assert_eq!(
+            r.length, None,
+            "the length is asked of where the package is"
+        );
     }
 
     #[test]
     fn an_answer_with_nothing_or_a_failure_says_so() {
-        assert_eq!(release(r#"{"Code":{"code":2000,"message":"success"},"MirrorList":[]}"#).unwrap(), None);
+        assert_eq!(
+            release(r#"{"Code":{"code":2000,"message":"success"},"MirrorList":[]}"#).unwrap(),
+            None
+        );
         let e = release(r#"{"Code":{"code":2001,"message":"device not found"}}"#).unwrap_err();
-        assert_eq!(e.to_string(), "the update server answered 2001 (device not found)");
+        assert_eq!(
+            e.to_string(),
+            "the update server answered 2001 (device not found)"
+        );
         let nowhere = r#"{"LatestRom":{"version":"V","filename":"a.zip","md5":"m","filesize":"1G"},"MirrorList":[]}"#;
-        assert!(release(nowhere).is_err(), "a package with no place to download it from");
+        assert!(
+            release(nowhere).is_err(),
+            "a package with no place to download it from"
+        );
     }
 }

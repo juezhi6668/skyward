@@ -63,7 +63,12 @@ pub enum Command {
     On,
     Off,
     Scan,
-    Join { ssid: Vec<u8>, name: String, security: Security, password: String },
+    Join {
+        ssid: Vec<u8>,
+        name: String,
+        security: Security,
+        password: String,
+    },
     Leave,
 }
 
@@ -121,13 +126,21 @@ impl Worker {
     /// driver's modules are found in, `libraries` the bundle of the vendor
     /// interface's libraries, and `servers` where the DNS servers the
     /// network gives are kept for whoever looks names up.
-    pub fn start(cfg: Config, modules: Vec<PathBuf>, libraries: Option<PathBuf>, servers: Servers) -> Result<Worker> {
+    pub fn start(
+        cfg: Config,
+        modules: Vec<PathBuf>,
+        libraries: Option<PathBuf>,
+        servers: Servers,
+    ) -> Result<Worker> {
         let (inbox_tx, inbox) = mpsc::channel();
         let (poked, poke) = pipe()?;
         let (told_tx, told) = mpsc::channel();
         let (wake, rung) = pipe()?;
         let poke = Arc::new(poke);
-        let back = Back { inbox: inbox_tx.clone(), poke: poke.clone() };
+        let back = Back {
+            inbox: inbox_tx.clone(),
+            poke: poke.clone(),
+        };
         let thread = thread::Builder::new()
             .name("wlan".into())
             .spawn(move || {
@@ -137,11 +150,26 @@ impl Worker {
                     let _ = told_tx.send(r);
                     signal(&rung);
                 };
-                let mut s = Station { cfg, modules, libraries, servers, state: Wlan::default(), running: None, back, tell: Box::new(tell) };
+                let mut s = Station {
+                    cfg,
+                    modules,
+                    libraries,
+                    servers,
+                    state: Wlan::default(),
+                    running: None,
+                    back,
+                    tell: Box::new(tell),
+                };
                 s.run(&inbox, &poked);
             })
             .context("start the WLAN thread")?;
-        Ok(Worker { inbox: inbox_tx, poke, told, wake, thread: Some(thread) })
+        Ok(Worker {
+            inbox: inbox_tx,
+            poke,
+            told,
+            wake,
+            thread: Some(thread),
+        })
     }
 
     pub fn send(&self, c: Command) {
@@ -252,14 +280,30 @@ impl Station {
     fn run(&mut self, inbox: &Receiver<Inbox>, poked: &OwnedFd) {
         let mut told = self.state.clone();
         loop {
-            let mut fds = vec![libc::pollfd { fd: poked.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
+            let mut fds = vec![libc::pollfd {
+                fd: poked.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            }];
             if let Some(r) = &self.running {
-                fds.push(libc::pollfd { fd: r.monitor.fd(), events: libc::POLLIN, revents: 0 });
+                fds.push(libc::pollfd {
+                    fd: r.monitor.fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
             }
-            let timeout = self.next().map_or(-1, |at| at.saturating_duration_since(Instant::now()).as_millis().min(60_000) as i32);
+            let timeout = self.next().map_or(-1, |at| {
+                at.saturating_duration_since(Instant::now())
+                    .as_millis()
+                    .min(60_000) as i32
+            });
             if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) } < 0 {
                 let e = std::io::Error::last_os_error();
-                assert_eq!(e.kind(), std::io::ErrorKind::Interrupted, "poll the WLAN thread's inputs: {e}");
+                assert_eq!(
+                    e.kind(),
+                    std::io::ErrorKind::Interrupted,
+                    "poll the WLAN thread's inputs: {e}"
+                );
             }
             drain(poked);
             for message in inbox.try_iter() {
@@ -282,9 +326,30 @@ impl Station {
     /// The soonest a timer is due.
     fn next(&self) -> Option<Instant> {
         let r = self.running.as_ref()?;
-        let poll = matches!(self.state.joined, Some(Joined { stage: Stage::Connected(_), .. })).then(|| r.polled_at + POLL);
-        let count = r.lease.as_ref().map(|_| r.counted.map_or_else(Instant::now, |c| c.at + TRAFFIC));
-        [r.lease.as_ref().filter(|_| r.asking.is_none()).map(Held::due), r.retry_at, poll, count].into_iter().flatten().min()
+        let poll = matches!(
+            self.state.joined,
+            Some(Joined {
+                stage: Stage::Connected(_),
+                ..
+            })
+        )
+        .then(|| r.polled_at + POLL);
+        let count = r
+            .lease
+            .as_ref()
+            .map(|_| r.counted.map_or_else(Instant::now, |c| c.at + TRAFFIC));
+        [
+            r.lease
+                .as_ref()
+                .filter(|_| r.asking.is_none())
+                .map(Held::due),
+            r.retry_at,
+            poll,
+            count,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn command(&mut self, c: Command) {
@@ -300,9 +365,19 @@ impl Station {
                     }
                 }
             }
-            Command::Join { ssid, name, security, password } => {
+            Command::Join {
+                ssid,
+                name,
+                security,
+                password,
+            } => {
                 self.unaddress();
-                let mut joined = Joined { ssid, name, security, stage: Stage::Joining };
+                let mut joined = Joined {
+                    ssid,
+                    name,
+                    security,
+                    stage: Stage::Joining,
+                };
                 if let Err(e) = self.join(&joined, &password) {
                     let _ = skyward_sys::kmsg(&format!("joining {} failed: {e:#}", joined.name));
                     joined.stage = Stage::Failed;
@@ -346,7 +421,10 @@ impl Station {
         let socket = Path::new(HOME).join("sockets").join(&self.cfg.interface);
         let connected = (|| -> Result<(Control, Control)> {
             let control = Control::open(&socket)?;
-            ensure!(control.ask("PING")?.trim_end() == "PONG", "wpa_supplicant does not answer PING");
+            ensure!(
+                control.ask("PING")?.trim_end() == "PONG",
+                "wpa_supplicant does not answer PING"
+            );
             let monitor = Control::open(&socket)?;
             monitor.attach()?;
             Ok((control, monitor))
@@ -396,11 +474,17 @@ impl Station {
     fn join(&self, joined: &Joined, password: &str) -> Result<()> {
         let r = self.running.as_ref().context("the WLAN is off")?;
         r.control.order("REMOVE_NETWORK all")?;
-        let id: u32 = r.control.ask("ADD_NETWORK")?.trim().parse().context("wpa_supplicant numbered the network with no number")?;
+        let id: u32 = r
+            .control
+            .ask("ADD_NETWORK")?
+            .trim()
+            .parse()
+            .context("wpa_supplicant numbered the network with no number")?;
         // One the last scan did not see may hide its name, as one added by
         // hand may.
         let hidden = !r.found.iter().any(|b| b.ssid == joined.ssid);
-        for c in supplicant::network_commands(id, &joined.ssid, joined.security, password, hidden)? {
+        for c in supplicant::network_commands(id, &joined.ssid, joined.security, password, hidden)?
+        {
             r.control.order(&c)?;
         }
         r.control.order(&format!("SELECT_NETWORK {id}"))
@@ -414,7 +498,9 @@ impl Station {
             Err(e) => return self.lost(e),
         };
         for m in messages {
-            let Some(told) = supplicant::event(&m) else { continue };
+            let Some(told) = supplicant::event(&m) else {
+                continue;
+            };
             match told {
                 Told::ScanResults => {
                     if let Err(e) = self.read_scan() {
@@ -429,7 +515,10 @@ impl Station {
     }
 
     fn read_scan(&mut self) -> Result<()> {
-        let r = self.running.as_mut().expect("scan results come from a supplicant running");
+        let r = self
+            .running
+            .as_mut()
+            .expect("scan results come from a supplicant running");
         let mut found = Vec::new();
         let mut first = 0;
         loop {
@@ -444,7 +533,9 @@ impl Station {
     }
 
     fn joining(&mut self, told: &Told) {
-        let Some(j) = &mut self.state.joined else { return };
+        let Some(j) = &mut self.state.joined else {
+            return;
+        };
         match j.on(told) {
             Next::Show => {}
             Next::Address => self.ask_address(),
@@ -477,7 +568,9 @@ impl Station {
         thread::spawn(move || {
             let answer = match keeping {
                 None => dhcp::obtain(&interface, mac, &stop).map(Asked::Got),
-                Some((lease, phase)) => dhcp::keep(&interface, mac, &lease, phase > 0, &stop).map(Asked::Kept),
+                Some((lease, phase)) => {
+                    dhcp::keep(&interface, mac, &lease, phase > 0, &stop).map(Asked::Kept)
+                }
             };
             let _ = back.inbox.send(Inbox::Address(n, answer));
             signal(&back.poke);
@@ -512,9 +605,14 @@ impl Station {
                 return;
             }
         };
-        let same = r.lease.as_ref().is_some_and(|h| (h.lease.address, h.lease.mask, h.lease.router) == (lease.address, lease.mask, lease.router));
+        let same = r.lease.as_ref().is_some_and(|h| {
+            (h.lease.address, h.lease.mask, h.lease.router)
+                == (lease.address, lease.mask, lease.router)
+        });
         if !same {
-            if let Err(e) = iface::configure(&self.cfg.interface, lease.address, lease.mask, lease.router) {
+            if let Err(e) =
+                iface::configure(&self.cfg.interface, lease.address, lease.mask, lease.router)
+            {
                 let _ = skyward_sys::kmsg(&format!("{e:#}"));
                 r.retry_at = Some(Instant::now() + RETRY);
                 if let Some(j) = &mut self.state.joined {
@@ -527,16 +625,26 @@ impl Station {
             "{} has {} ({}) through {:?} for {} s, kept again after {} s",
             self.cfg.interface, lease.address, lease.mask, lease.router, lease.seconds, lease.renew
         ));
-        *self.servers.lock().expect("the DNS servers are not held by a thread that panicked") = lease.dns.clone();
+        *self
+            .servers
+            .lock()
+            .expect("the DNS servers are not held by a thread that panicked") = lease.dns.clone();
         let mut link = Link::new(&lease, r.mac);
         // An address kept keeps how far its network was found to reach; a
         // new one has it looked at.
         link.reach = match &self.state.joined {
-            Some(Joined { stage: Stage::Connected(had), .. }) if same => had.reach.clone(),
+            Some(Joined {
+                stage: Stage::Connected(had),
+                ..
+            }) if same => had.reach.clone(),
             _ => None,
         };
         let look = link.reach.is_none().then(|| lease.dns.clone());
-        r.lease = Some(Held { lease, at: Instant::now(), phase: 0 });
+        r.lease = Some(Held {
+            lease,
+            at: Instant::now(),
+            phase: 0,
+        });
         if let Some(j) = &mut self.state.joined {
             j.stage = Stage::Connected(link);
         }
@@ -564,7 +672,13 @@ impl Station {
         if self.running.as_ref().is_none_or(|r| r.probed != n) {
             return;
         }
-        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return };
+        let Some(Joined {
+            stage: Stage::Connected(link),
+            ..
+        }) = &mut self.state.joined
+        else {
+            return;
+        };
         let _ = skyward_sys::kmsg(&format!("the network on {} {reach}", self.cfg.interface));
         link.reach = Some(reach);
     }
@@ -586,7 +700,10 @@ impl Station {
         if r.counted.take().is_some() {
             (self.tell)(Report::Traffic(Traffic::default()));
         }
-        self.servers.lock().expect("the DNS servers are not held by a thread that panicked").clear();
+        self.servers
+            .lock()
+            .expect("the DNS servers are not held by a thread that panicked")
+            .clear();
     }
 
     fn timers(&mut self) {
@@ -623,11 +740,16 @@ impl Station {
     /// Read what has gone over the interface, and tell how fast it went
     /// since the last reading.
     fn count(&mut self, now: Instant) {
-        let stats = Path::new("/sys/class/net").join(&self.cfg.interface).join("statistics");
+        let stats = Path::new("/sys/class/net")
+            .join(&self.cfg.interface)
+            .join("statistics");
         let read = |name: &str| -> Result<u64> {
             let path = stats.join(name);
-            let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-            text.trim().parse().with_context(|| format!("{} holds no count", path.display()))
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            text.trim()
+                .parse()
+                .with_context(|| format!("{} holds no count", path.display()))
         };
         let (rx, tx) = match (read("rx_bytes"), read("tx_bytes")) {
             (Ok(rx), Ok(tx)) => (rx, tx),
@@ -636,8 +758,13 @@ impl Station {
         let Some(r) = &mut self.running else { return };
         if let Some(c) = r.counted {
             let secs = now.duration_since(c.at).as_secs_f64();
-            let rate = |total: u64, before: u64| (total.saturating_sub(before) as f64 / secs).round() as u64;
-            (self.tell)(Report::Traffic(Traffic { rx: rate(rx, c.rx), tx: rate(tx, c.tx) }));
+            let rate = |total: u64, before: u64| {
+                (total.saturating_sub(before) as f64 / secs).round() as u64
+            };
+            (self.tell)(Report::Traffic(Traffic {
+                rx: rate(rx, c.rx),
+                tx: rate(tx, c.tx),
+            }));
         }
         r.counted = Some(Counted { at: now, rx, tx });
     }
@@ -646,10 +773,19 @@ impl Station {
     fn poll_link(&mut self) {
         let Some(r) = &mut self.running else { return };
         r.polled_at = Instant::now();
-        let Some(Joined { stage: Stage::Connected(link), .. }) = &mut self.state.joined else { return };
+        let Some(Joined {
+            stage: Stage::Connected(link),
+            ..
+        }) = &mut self.state.joined
+        else {
+            return;
+        };
         // A plain STATUS has Android's supplicant tell every listener again
         // that the network is connected; this one leaves that out.
-        let (signal, status) = match (r.control.ask("SIGNAL_POLL"), r.control.ask("STATUS-NO_EVENTS")) {
+        let (signal, status) = match (
+            r.control.ask("SIGNAL_POLL"),
+            r.control.ask("STATUS-NO_EVENTS"),
+        ) {
             (Ok(signal), Ok(status)) => (signal, status),
             (Err(e), _) | (_, Err(e)) => return self.lost(e),
         };
@@ -661,7 +797,9 @@ impl Station {
             link.frequency = f;
         }
         link.speed = fields.get("LINKSPEED").and_then(|v| v.parse().ok());
-        link.generation = supplicant::fields(&status).get("wifi_generation").and_then(|v| v.parse().ok());
+        link.generation = supplicant::fields(&status)
+            .get("wifi_generation")
+            .and_then(|v| v.parse().ok());
     }
 }
 
@@ -677,11 +815,17 @@ fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
             skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
         }
         for w in &cfg.writes {
-            fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+            fs::write(&w.path, &w.value)
+                .with_context(|| format!("write {} to {}", w.value, w.path))?;
         }
         let until = Instant::now() + INTERFACE_WAIT;
         while !net.exists() {
-            ensure!(Instant::now() < until, "the driver made no {} in {} seconds", cfg.interface, INTERFACE_WAIT.as_secs());
+            ensure!(
+                Instant::now() < until,
+                "the driver made no {} in {} seconds",
+                cfg.interface,
+                INTERFACE_WAIT.as_secs()
+            );
             thread::sleep(Duration::from_millis(100));
         }
     }
@@ -698,8 +842,12 @@ fn place(file: &Firmware) -> Result<()> {
         Some(partition) => {
             let at = Path::new(PARTITIONS).join(partition);
             fs::create_dir_all(&at).with_context(|| format!("make {}", at.display()))?;
-            skyward_block::mount::mount_ro(&Path::new(skyward_block::BY_NAME).join(partition), &at)?;
-            let read = fs::read(at.join(&file.path)).with_context(|| format!("read {} on {partition}", file.path));
+            skyward_block::mount::mount_ro(
+                &Path::new(skyward_block::BY_NAME).join(partition),
+                &at,
+            )?;
+            let read = fs::read(at.join(&file.path))
+                .with_context(|| format!("read {} on {partition}", file.path));
             skyward_block::mount::umount(&at)?;
             read?
         }
@@ -712,13 +860,23 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
     let home = Path::new(HOME);
     let sockets = home.join("sockets");
     fs::create_dir_all(&sockets).with_context(|| format!("make {}", sockets.display()))?;
-    fs::set_permissions(home, fs::Permissions::from_mode(0o755)).with_context(|| format!("open {} to the supplicant", home.display()))?;
-    std::os::unix::fs::chown(&sockets, Some(WIFI), Some(WIFI)).with_context(|| format!("give {} to the supplicant", sockets.display()))?;
-    fs::set_permissions(&sockets, fs::Permissions::from_mode(0o770)).with_context(|| format!("keep {} to the supplicant", sockets.display()))?;
+    fs::set_permissions(home, fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("open {} to the supplicant", home.display()))?;
+    std::os::unix::fs::chown(&sockets, Some(WIFI), Some(WIFI))
+        .with_context(|| format!("give {} to the supplicant", sockets.display()))?;
+    fs::set_permissions(&sockets, fs::Permissions::from_mode(0o770))
+        .with_context(|| format!("keep {} to the supplicant", sockets.display()))?;
     let settings = home.join("wpa_supplicant.conf");
-    fs::write(&settings, format!("ctrl_interface={}\nupdate_config=0\np2p_disabled=1\npmf=1\nsae_pwe=2\n", sockets.display()))
-        .with_context(|| format!("write {}", settings.display()))?;
-    fs::set_permissions(&settings, fs::Permissions::from_mode(0o644)).with_context(|| format!("open {} to the supplicant", settings.display()))?;
+    fs::write(
+        &settings,
+        format!(
+            "ctrl_interface={}\nupdate_config=0\np2p_disabled=1\npmf=1\nsae_pwe=2\n",
+            sockets.display()
+        ),
+    )
+    .with_context(|| format!("write {}", settings.display()))?;
+    fs::set_permissions(&settings, fs::Permissions::from_mode(0o644))
+        .with_context(|| format!("open {} to the supplicant", settings.display()))?;
     let socket = sockets.join(&cfg.interface);
     // One an earlier run left would answer nothing.
     if socket.exists() {
@@ -745,7 +903,10 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
         }
         if Instant::now() >= until {
             end(&mut child, None);
-            bail!("wpa_supplicant opened no control socket in {} seconds", SOCKET_WAIT.as_secs());
+            bail!(
+                "wpa_supplicant opened no control socket in {} seconds",
+                SOCKET_WAIT.as_secs()
+            );
         }
         thread::sleep(Duration::from_millis(100));
     }

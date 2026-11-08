@@ -42,14 +42,18 @@ pub fn read(bytes: Vec<u8>, phone: &Phone, tags: &str) -> Result<Wipe> {
     let keys = signature::keys(std::io::BufReader::new(certificates))
         .with_context(|| format!("read {}", signature::CERTIFICATES))?;
     let size = bytes.len() as u64;
-    let verdict = signature::verify(Cursor::new(&bytes), size, &keys, |_, _| true).context("check the wipe package's signature")?;
+    let verdict = signature::verify(Cursor::new(&bytes), size, &keys, |_, _| true)
+        .context("check the wipe package's signature")?;
     match verdict {
         Verdict::Signed => {}
         Verdict::Unsigned => return Ok(Wipe::Refused(Refusal::Unsigned)),
         Verdict::Unverified => return Ok(Wipe::Refused(Refusal::Unverified)),
-        Verdict::Stopped => unreachable!("the check of a package already in memory is never stopped"),
+        Verdict::Stopped => {
+            unreachable!("the check of a package already in memory is never stopped")
+        }
     }
-    let mut zip = ZipArchive::new(Cursor::new(&bytes)).context("read the wipe package's zip directory")?;
+    let mut zip =
+        ZipArchive::new(Cursor::new(&bytes)).context("read the wipe package's zip directory")?;
     let metadata = Metadata::parse(&text(&mut zip, METADATA)?);
     if let Err(refusal) = check(&metadata, phone, tags) {
         return Ok(Wipe::Refused(refusal));
@@ -78,7 +82,10 @@ fn check(metadata: &Metadata, phone: &Phone, tags: &str) -> Result<(), Refusal> 
     }
     match metadata.get("serialno") {
         Some(serials) => {
-            if !serials.split('|').any(|serial| serial.trim() == phone.serial) {
+            if !serials
+                .split('|')
+                .any(|serial| serial.trim() == phone.serial)
+            {
                 return Err(Refusal::OtherSerial);
             }
         }
@@ -102,7 +109,9 @@ fn partitions(listed: &str) -> Vec<String> {
 fn text<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<String> {
     let mut entry = zip.by_name(name).with_context(|| format!("open {name}"))?;
     let mut s = String::new();
-    entry.read_to_string(&mut s).with_context(|| format!("read {name}"))?;
+    entry
+        .read_to_string(&mut s)
+        .with_context(|| format!("read {name}"))?;
     Ok(s)
 }
 
@@ -111,7 +120,11 @@ mod tests {
     use super::*;
 
     fn phone() -> Phone {
-        Phone { device: "ishtar".into(), serial: "2674dc3e".into(), installed: None }
+        Phone {
+            device: "ishtar".into(),
+            serial: "2674dc3e".into(),
+            installed: None,
+        }
     }
 
     fn metadata(lines: &[&str]) -> Metadata {
@@ -120,18 +133,31 @@ mod tests {
 
     #[test]
     fn a_package_for_this_phone_erases_it() {
-        let m = metadata(&["ota-type=BRICK", "pre-device=ishtar", "serialno=2674dc3e|1234abcd"]);
+        let m = metadata(&[
+            "ota-type=BRICK",
+            "pre-device=ishtar",
+            "serialno=2674dc3e|1234abcd",
+        ]);
         assert_eq!(check(&m, &phone(), "release-keys"), Ok(()));
     }
 
     #[test]
     fn a_package_of_another_kind_or_for_another_phone_is_refused() {
         let update = metadata(&["ota-type=AB", "pre-device=ishtar"]);
-        assert_eq!(check(&update, &phone(), "release-keys"), Err(Refusal::NotBrick("AB".into())));
+        assert_eq!(
+            check(&update, &phone(), "release-keys"),
+            Err(Refusal::NotBrick("AB".into()))
+        );
         let other = metadata(&["ota-type=BRICK", "pre-device=aurora|dagger"]);
-        assert_eq!(check(&other, &phone(), "test-keys"), Err(Refusal::OtherDevice("aurora|dagger".into())));
+        assert_eq!(
+            check(&other, &phone(), "test-keys"),
+            Err(Refusal::OtherDevice("aurora|dagger".into()))
+        );
         let serials = metadata(&["ota-type=BRICK", "pre-device=ishtar", "serialno=1234abcd"]);
-        assert_eq!(check(&serials, &phone(), "test-keys"), Err(Refusal::OtherSerial));
+        assert_eq!(
+            check(&serials, &phone(), "test-keys"),
+            Err(Refusal::OtherSerial)
+        );
     }
 
     #[test]
@@ -143,8 +169,12 @@ mod tests {
 
     #[test]
     fn the_partitions_are_read_a_line_each() {
-        let listed = "# the ones to erase\n/dev/block/by-name/userdata\n\n  /dev/block/by-name/metadata  \n";
-        assert_eq!(partitions(listed), ["/dev/block/by-name/userdata", "/dev/block/by-name/metadata"]);
+        let listed =
+            "# the ones to erase\n/dev/block/by-name/userdata\n\n  /dev/block/by-name/metadata  \n";
+        assert_eq!(
+            partitions(listed),
+            ["/dev/block/by-name/userdata", "/dev/block/by-name/metadata"]
+        );
         assert!(partitions("# nothing\n\n").is_empty());
     }
 }

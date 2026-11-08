@@ -199,7 +199,14 @@ const _: () = assert!(size_of::<Strings>() == 22);
 const _: () = assert!(size_of::<Event>() == 12);
 
 fn endpoint(address: u8, attributes: u8, max_packet_size: u16, interval: u8) -> EndpointDesc {
-    EndpointDesc { length: 7, descriptor_type: DT_ENDPOINT, endpoint_address: address, attributes, max_packet_size: U16::new(max_packet_size), interval }
+    EndpointDesc {
+        length: 7,
+        descriptor_type: DT_ENDPOINT,
+        endpoint_address: address,
+        attributes,
+        max_packet_size: U16::new(max_packet_size),
+        interval,
+    }
 }
 
 fn interface() -> InterfaceDesc {
@@ -226,7 +233,13 @@ fn function(max_packet_size: u16) -> Function {
 }
 
 fn companion(max_burst: u8, bytes_per_interval: u16) -> SsCompanionDesc {
-    SsCompanionDesc { length: 6, descriptor_type: DT_SS_ENDPOINT_COMP, max_burst, attributes: 0, bytes_per_interval: U16::new(bytes_per_interval) }
+    SsCompanionDesc {
+        length: 6,
+        descriptor_type: DT_SS_ENDPOINT_COMP,
+        max_burst,
+        attributes: 0,
+        bytes_per_interval: U16::new(bytes_per_interval),
+    }
 }
 
 fn descriptors() -> Descriptors {
@@ -257,7 +270,13 @@ fn descriptors() -> Descriptors {
             count: U16::new(1),
         },
         // Windows finds its MTP driver by this.
-        compat: ExtCompatDesc { first_interface_number: 0, reserved1: 1, compatible_id: *b"MTP\0\0\0\0\0", sub_compatible_id: [0; 8], reserved2: [0; 6] },
+        compat: ExtCompatDesc {
+            first_interface_number: 0,
+            reserved1: 1,
+            compatible_id: *b"MTP\0\0\0\0\0",
+            sub_compatible_id: [0; 8],
+            reserved2: [0; 6],
+        },
     }
 }
 
@@ -325,7 +344,12 @@ impl Aio {
             unsafe { libc::syscall(libc::SYS_io_destroy, ctx) };
             return Err(e);
         }
-        Ok(Aio { ctx, done: unsafe { OwnedFd::from_raw_fd(fd) }, flying: HashMap::new(), next: 1 })
+        Ok(Aio {
+            ctx,
+            done: unsafe { OwnedFd::from_raw_fd(fd) },
+            flying: HashMap::new(),
+            next: 1,
+        })
     }
 
     /// Start moving `len` bytes at `buf` over `fd`; the key its end comes
@@ -333,12 +357,22 @@ impl Aio {
     ///
     /// # Safety
     /// The bytes at `buf` stay in place until the request has ended.
-    unsafe fn submit(&mut self, fd: RawFd, buf: *mut u8, len: usize, write: bool) -> io::Result<u64> {
+    unsafe fn submit(
+        &mut self,
+        fd: RawFd,
+        buf: *mut u8,
+        len: usize,
+        write: bool,
+    ) -> io::Result<u64> {
         let key = self.next;
         self.next += 1;
         let mut iocb = Box::new(Iocb {
             data: key,
-            opcode: if write { IOCB_CMD_PWRITE } else { IOCB_CMD_PREAD },
+            opcode: if write {
+                IOCB_CMD_PWRITE
+            } else {
+                IOCB_CMD_PREAD
+            },
             fildes: fd as u32,
             buf: buf as u64,
             nbytes: len as u64,
@@ -362,8 +396,20 @@ impl Aio {
         let mut out = Vec::new();
         let mut events = [IoEvent::default(); 16];
         loop {
-            let zero = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-            let n = unsafe { libc::syscall(libc::SYS_io_getevents, self.ctx, 0, events.len(), events.as_mut_ptr(), &zero) };
+            let zero = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            let n = unsafe {
+                libc::syscall(
+                    libc::SYS_io_getevents,
+                    self.ctx,
+                    0,
+                    events.len(),
+                    events.as_mut_ptr(),
+                    &zero,
+                )
+            };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == ErrorKind::Interrupted {
@@ -383,11 +429,20 @@ impl Aio {
 
     /// Ask the request to end at once; its end comes as any other's does.
     fn cancel(&mut self, key: u64) {
-        let Some(iocb) = self.flying.get_mut(&key) else { return };
+        let Some(iocb) = self.flying.get_mut(&key) else {
+            return;
+        };
         let mut result = IoEvent::default();
         // The kernel answers that cancelling is under way; a request that
         // ended meanwhile is not found, and its end is on the way already.
-        unsafe { libc::syscall(libc::SYS_io_cancel, self.ctx, &mut **iocb as *mut Iocb, &mut result) };
+        unsafe {
+            libc::syscall(
+                libc::SYS_io_cancel,
+                self.ctx,
+                &mut **iocb as *mut Iocb,
+                &mut result,
+            )
+        };
     }
 }
 
@@ -483,9 +538,18 @@ impl Port {
     /// init can bind the function, and open its endpoints; `wake` is what
     /// the phone wakes the function's thread with.
     pub fn open(wake: RawFd) -> Result<Port> {
-        let ep0 = OpenOptions::new().read(true).write(true).custom_flags(libc::O_CLOEXEC).open(EP0).with_context(|| format!("open {EP0}"))?;
-        (&ep0).write_all(descriptors().as_bytes()).context("write the MTP descriptors")?;
-        (&ep0).write_all(strings().as_bytes()).context("write the MTP strings")?;
+        let ep0 = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(EP0)
+            .with_context(|| format!("open {EP0}"))?;
+        (&ep0)
+            .write_all(descriptors().as_bytes())
+            .context("write the MTP descriptors")?;
+        (&ep0)
+            .write_all(strings().as_bytes())
+            .context("write the MTP strings")?;
         // Without blocking, a transfer started as the function goes fails
         // at once instead of waiting for it to come back.
         let open = |path: &str, write: bool| {
@@ -521,8 +585,16 @@ impl Port {
     pub fn wait_enabled(&mut self) -> Result<bool> {
         while !self.enabled {
             let mut fds = [
-                libc::pollfd { fd: self.ep0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: self.wake, events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd: self.ep0.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.wake,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             if unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) } < 0 {
                 let e = io::Error::last_os_error();
@@ -546,7 +618,10 @@ impl Port {
         let mut buf = [0u8; size_of::<Event>()];
         let n = (&self.ep0).read(&mut buf)?;
         if n != buf.len() {
-            return Err(io::Error::new(ErrorKind::InvalidData, format!("a control event of {n} bytes")));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("a control event of {n} bytes"),
+            ));
         }
         let ev = Event::read_from_bytes(&buf).expect("the buffer is one event");
         Ok(match ev.kind {
@@ -574,7 +649,8 @@ impl Port {
     /// answers it.
     fn setup(&mut self, ev: &Event) -> io::Result<Option<Control>> {
         let length = usize::from(ev.length.get());
-        let class = ev.request_type & TYPE_MASK == TYPE_CLASS && ev.index.get() == 0 && ev.value.get() == 0;
+        let class =
+            ev.request_type & TYPE_MASK == TYPE_CLASS && ev.index.get() == 0 && ev.value.get() == 0;
         let into_device = ev.request_type & DIR_IN == 0;
         match (class, ev.request) {
             (true, request::CANCEL | request::RESET) if into_device => {
@@ -587,7 +663,10 @@ impl Port {
                 if self.cancelled {
                     // Which endpoints the cancelling halted, for the
                     // computer to clear.
-                    let ends = [&self.bulk_in, &self.bulk_out].map(|f| unsafe { libc::ioctl(f.as_raw_fd(), ENDPOINT_REVMAP as _) } as u16);
+                    let ends = [&self.bulk_in, &self.bulk_out]
+                        .map(
+                            |f| unsafe { libc::ioctl(f.as_raw_fd(), ENDPOINT_REVMAP as _) } as u16,
+                        );
                     status.extend(8u16.to_le_bytes());
                     status.extend(response::TRANSACTION_CANCELLED.to_le_bytes());
                     for end in ends {
@@ -603,7 +682,10 @@ impl Port {
                 Ok(None)
             }
             _ => {
-                note(&format!("took control request {:#04x} of type {:#04x}, {length} bytes", ev.request, ev.request_type));
+                note(&format!(
+                    "took control request {:#04x} of type {:#04x}, {length} bytes",
+                    ev.request, ev.request_type
+                ));
                 let mut data = vec![0u8; length];
                 if into_device {
                     (&self.ep0).read_exact(&mut data)?;
@@ -618,7 +700,14 @@ impl Port {
     /// The bulk endpoints' packet size at the speed connected at.
     fn packet_size(&self) -> io::Result<usize> {
         let mut desc = [0u8; 9];
-        if unsafe { libc::ioctl(self.bulk_in.as_raw_fd(), ENDPOINT_DESC as _, desc.as_mut_ptr()) } < 0 {
+        if unsafe {
+            libc::ioctl(
+                self.bulk_in.as_raw_fd(),
+                ENDPOINT_DESC as _,
+                desc.as_mut_ptr(),
+            )
+        } < 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(usize::from(u16::from_le_bytes([desc[4], desc[5]]) & 0x7ff))
@@ -629,10 +718,22 @@ impl Port {
     /// # Safety
     /// The bytes at `buf` stay in place until the request has ended.
     unsafe fn start(&mut self, buf: *mut u8, len: usize, write: bool) -> Result<u64, Halt> {
-        let fd = if write { self.bulk_in.as_raw_fd() } else { self.bulk_out.as_raw_fd() };
+        let fd = if write {
+            self.bulk_in.as_raw_fd()
+        } else {
+            self.bulk_out.as_raw_fd()
+        };
         match unsafe { self.aio.submit(fd, buf, len, write) } {
             Ok(key) => Ok(key),
-            Err(e) if matches!(e.raw_os_error(), Some(libc::EAGAIN | libc::ESHUTDOWN)) => {
+            // EAGAIN and ESHUTDOWN are the endpoints saying the computer
+            // let the function go; ENODEV is functionfs saying the same of
+            // the gadget it was bound into, which has just been unbound.
+            Err(e)
+                if matches!(
+                    e.raw_os_error(),
+                    Some(libc::EAGAIN | libc::ESHUTDOWN | libc::ENODEV)
+                ) =>
+            {
                 self.unconfigured();
                 Err(Halt::Disconnected)
             }
@@ -645,7 +746,10 @@ impl Port {
     fn moved(&mut self, res: i64) -> Result<usize, Halt> {
         match res {
             r if r >= 0 => Ok(r as usize),
-            r if r == -i64::from(libc::ESHUTDOWN) || r == -i64::from(libc::EAGAIN) => {
+            r if r == -i64::from(libc::ESHUTDOWN)
+                || r == -i64::from(libc::EAGAIN)
+                || r == -i64::from(libc::ENODEV) =>
+            {
                 self.unconfigured();
                 Err(Halt::Disconnected)
             }
@@ -680,10 +784,26 @@ impl Port {
             }
             // poll passes over a descriptor below zero.
             let mut fds = [
-                libc::pollfd { fd: self.aio.done.as_raw_fd(), events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: self.ep0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: self.wake, events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: also.unwrap_or(-1), events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd: self.aio.done.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.ep0.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: self.wake,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: also.unwrap_or(-1),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             if unsafe { libc::poll(fds.as_mut_ptr(), 4, -1) } < 0 {
                 let e = io::Error::last_os_error();
@@ -714,7 +834,11 @@ impl Port {
     fn abort(&mut self, key: u64, stall: bool) -> io::Result<()> {
         self.aio.cancel(key);
         while self.aio.flying.contains_key(&key) {
-            let mut fds = [libc::pollfd { fd: self.aio.done.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
+            let mut fds = [libc::pollfd {
+                fd: self.aio.done.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            }];
             if unsafe { libc::poll(fds.as_mut_ptr(), 1, -1) } < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() != ErrorKind::Interrupted {
@@ -785,7 +909,12 @@ impl Port {
         }
     }
 
-    fn transfer(&mut self, buf: &mut [u8], write: bool, stop: &mut dyn FnMut() -> bool) -> Result<usize, Halt> {
+    fn transfer(
+        &mut self,
+        buf: &mut [u8],
+        write: bool,
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<usize, Halt> {
         // Safety: `buf` is borrowed until the wait has seen the request end.
         let key = unsafe { self.start(buf.as_mut_ptr(), buf.len(), write)? };
         self.wait(key, stop)
@@ -853,14 +982,26 @@ impl Port {
     }
 
     /// A data phase with `payload`.
-    pub fn send_data(&mut self, code: u16, transaction: u32, payload: &[u8], stop: &mut dyn FnMut() -> bool) -> Result<(), Halt> {
+    pub fn send_data(
+        &mut self,
+        code: u16,
+        transaction: u32,
+        payload: &[u8],
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<(), Halt> {
         let mut bytes = dataset::data_header(code, transaction, payload.len() as u64).to_vec();
         bytes.extend_from_slice(payload);
         self.send_whole(&mut bytes, stop)
     }
 
     /// A response, which fits in a packet.
-    pub fn send_response(&mut self, code: u16, transaction: u32, params: &[u32], stop: &mut dyn FnMut() -> bool) -> Result<(), Halt> {
+    pub fn send_response(
+        &mut self,
+        code: u16,
+        transaction: u32,
+        params: &[u32],
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<(), Halt> {
         let mut bytes = dataset::short(container::RESPONSE, code, transaction, params);
         self.send_whole(&mut bytes, stop)
     }
@@ -869,7 +1010,15 @@ impl Port {
     /// read from the file while the one before is on the bus. A file
     /// shorter than it was a moment ago halts the transfer.
     #[allow(clippy::too_many_arguments)]
-    pub fn send_file(&mut self, code: u16, transaction: u32, file: &File, offset: u64, length: u64, stop: &mut dyn FnMut() -> bool) -> Result<(), Halt> {
+    pub fn send_file(
+        &mut self,
+        code: u16,
+        transaction: u32,
+        file: &File,
+        offset: u64,
+        length: u64,
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<(), Halt> {
         let mut bufs = [vec![0u8; CHUNK], vec![0u8; CHUNK]];
         let end = offset + length;
         let mut at = offset;
@@ -946,13 +1095,18 @@ impl Port {
                 break n;
             }
         };
-        let Some(header) = Header::read(&bufs[0][..first]).filter(|h| h.kind == container::DATA) else {
+        let Some(header) = Header::read(&bufs[0][..first]).filter(|h| h.kind == container::DATA)
+        else {
             // What came is no data phase: the transaction is given up.
             self.halt();
-            return Err(Halt::Aborted(io::Error::new(ErrorKind::InvalidData, format!("{first} bytes came where a data phase starts"))));
+            return Err(Halt::Aborted(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("{first} bytes came where a data phase starts"),
+            )));
         };
         // How much payload is still to come, where the header says.
-        let mut left = (!unbounded && header.length != u32::MAX).then(|| u64::from(header.length).saturating_sub(HEADER as u64));
+        let mut left = (!unbounded && header.length != u32::MAX)
+            .then(|| u64::from(header.length).saturating_sub(HEADER as u64));
         // The part of `got` bytes that is payload, and whether more comes.
         let take = |got: usize, full: bool, left: &mut Option<u64>| -> (usize, bool) {
             match left {
@@ -974,12 +1128,18 @@ impl Port {
             // The next piece goes on the bus while this one goes to `sink`.
             let next = if more {
                 let asked = match left {
-                    Some(l) => (l as usize).min(CHUNK).next_multiple_of(self.packet).min(CHUNK),
+                    Some(l) => (l as usize)
+                        .min(CHUNK)
+                        .next_multiple_of(self.packet)
+                        .min(CHUNK),
                     None => CHUNK,
                 };
                 // Safety: the other buffer stays put until the wait below,
                 // or giving the request up, has seen it end.
-                Some((unsafe { self.start(bufs[1 - cur].as_mut_ptr(), asked, false)? }, asked))
+                Some((
+                    unsafe { self.start(bufs[1 - cur].as_mut_ptr(), asked, false)? },
+                    asked,
+                ))
             } else {
                 None
             };
@@ -1000,7 +1160,9 @@ impl Port {
     /// Tell the computer `code` about `param`, once it polls; events wait
     /// their turn behind the one going.
     pub fn event(&mut self, code: u16, transaction: u32, param: u32) -> io::Result<()> {
-        let bytes: [u8; 16] = dataset::short(container::EVENT, code, transaction, &[param]).try_into().expect("an event with one parameter is sixteen bytes");
+        let bytes: [u8; 16] = dataset::short(container::EVENT, code, transaction, &[param])
+            .try_into()
+            .expect("an event with one parameter is sixteen bytes");
         self.events.push_back(bytes);
         if self.event.is_none() {
             self.next_event()?;
@@ -1013,7 +1175,9 @@ impl Port {
             self.events.clear();
             return Ok(());
         }
-        let Some(bytes) = self.events.pop_front() else { return Ok(()) };
+        let Some(bytes) = self.events.pop_front() else {
+            return Ok(());
+        };
         let mut boxed = Box::new(bytes);
         let fd = self.event_in.as_raw_fd();
         // Safety: the box goes with the request and is kept until it ends.

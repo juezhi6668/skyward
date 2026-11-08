@@ -158,11 +158,21 @@ pub struct Theme {
 impl Theme {
     /// `px_per_dp` is the panel density over 160, e.g. 3.0 at 480 dpi.
     pub fn light(w: u32, h: u32, px_per_dp: f32) -> Self {
-        Theme { pal: LIGHT, hero: LIGHT_HERO, m: metrics(w, h, px_per_dp), dark: false }
+        Theme {
+            pal: LIGHT,
+            hero: LIGHT_HERO,
+            m: metrics(w, h, px_per_dp),
+            dark: false,
+        }
     }
 
     pub fn dark(w: u32, h: u32, px_per_dp: f32) -> Self {
-        Theme { pal: DARK, hero: DARK_HERO, m: metrics(w, h, px_per_dp), dark: true }
+        Theme {
+            pal: DARK,
+            hero: DARK_HERO,
+            m: metrics(w, h, px_per_dp),
+            dark: true,
+        }
     }
 
     /// This theme with every card as it shows behind a row held down.

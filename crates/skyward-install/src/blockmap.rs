@@ -50,11 +50,21 @@ impl BlockMap {
         let mut sizes = lines[1].split_whitespace();
         let size: u64 = number(sizes.next(), "the package's length")?;
         let block_size: u32 = number(sizes.next(), "the size of a block")?;
-        ensure!(size > 0 && block_size > 0, "a map of {size} bytes in blocks of {block_size}");
+        ensure!(
+            size > 0 && block_size > 0,
+            "a map of {size} bytes in blocks of {block_size}"
+        );
         let count: usize = number(Some(count.trim()), "how many runs follow")?;
-        ensure!(count > 0 && count == runs.len(), "the map says {count} runs and holds {}", runs.len());
+        ensure!(
+            count > 0 && count == runs.len(),
+            "the map says {count} runs and holds {}",
+            runs.len()
+        );
         let blocks = size.div_ceil(u64::from(block_size));
-        ensure!(blocks <= u64::from(u32::MAX), "a package of {blocks} blocks is longer than a map holds");
+        ensure!(
+            blocks <= u64::from(u32::MAX),
+            "a package of {blocks} blocks is longer than a map holds"
+        );
         let mut spans = Vec::with_capacity(count);
         let mut at = 0;
         for run in runs {
@@ -63,28 +73,55 @@ impl BlockMap {
             let end: u64 = number(ends.next(), "the block after a run's last")?;
             ensure!(end > start, "a run from block {start} to {end}");
             let held = end - start;
-            ensure!(at + held <= blocks, "the runs hold more than the package's {blocks} blocks");
-            spans.push(Span { at, device: start, blocks: held });
+            ensure!(
+                at + held <= blocks,
+                "the runs hold more than the package's {blocks} blocks"
+            );
+            spans.push(Span {
+                at,
+                device: start,
+                blocks: held,
+            });
             at += held;
         }
-        ensure!(at == blocks, "the runs hold {at} of the package's {blocks} blocks");
-        Ok(BlockMap { device: PathBuf::from(device), size, block_size, spans })
+        ensure!(
+            at == blocks,
+            "the runs hold {at} of the package's {blocks} blocks"
+        );
+        Ok(BlockMap {
+            device: PathBuf::from(device),
+            size,
+            block_size,
+            spans,
+        })
     }
 
     /// Read the map the system wrote at `path`.
     pub fn read(path: &Path) -> Result<BlockMap> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         BlockMap::parse(&text).with_context(|| format!("read the block map in {}", path.display()))
     }
 
     /// Open the partition to serve the package from it, with the size and
     /// the block size it is served in.
     pub fn open(&self) -> Result<(Mapped, Offer)> {
-        let file = File::open(&self.device).with_context(|| format!("open {}", self.device.display()))?;
+        let file =
+            File::open(&self.device).with_context(|| format!("open {}", self.device.display()))?;
         let block_size = crate::fuse::file_block(self.size);
-        let mapped =
-            Mapped { file, block_size: u64::from(block_size), map_block: u64::from(self.block_size), spans: self.spans.clone() };
-        Ok((mapped, Offer { size: self.size, block_size }))
+        let mapped = Mapped {
+            file,
+            block_size: u64::from(block_size),
+            map_block: u64::from(self.block_size),
+            spans: self.spans.clone(),
+        };
+        Ok((
+            mapped,
+            Offer {
+                size: self.size,
+                block_size,
+            },
+        ))
     }
 
     /// How many of the partition's blocks the package takes.
@@ -95,7 +132,9 @@ impl BlockMap {
 
 fn number<T: std::str::FromStr>(field: Option<&str>, what: &str) -> Result<T> {
     let field = field.with_context(|| format!("a block map without {what}"))?;
-    field.parse().map_err(|_| anyhow::anyhow!("{what} reads {field:?}"))
+    field
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{what} reads {field:?}"))
 }
 
 /// The package as the partition holds it: served in blocks of its own,
@@ -125,12 +164,15 @@ impl Mapped {
                     _ => std::cmp::Ordering::Equal,
                 })
                 .map(|i| self.spans[i])
-                .map_err(|_| io::Error::other(format!("the map does not hold the package's block {block}")))?;
+                .map_err(|_| {
+                    io::Error::other(format!("the map does not hold the package's block {block}"))
+                })?;
             // As much as is left of the run, and no more than is wanted.
             let left = (span.at + span.blocks - block) * self.map_block - within;
             let take = left.min((out.len() - read) as u64) as usize;
             let device_at = (span.device + block - span.at) * self.map_block + within;
-            self.file.read_exact_at(&mut out[read..read + take], device_at)?;
+            self.file
+                .read_exact_at(&mut out[read..read + take], device_at)?;
             read += take;
         }
         Ok(())
@@ -139,7 +181,8 @@ impl Mapped {
 
 impl Source for Mapped {
     fn read_block(&mut self, index: u64, out: &mut [u8]) -> Result<(), String> {
-        self.read_at(index * self.block_size, out).map_err(|e| e.to_string())
+        self.read_at(index * self.block_size, out)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -162,33 +205,63 @@ mod tests {
         let map = BlockMap::parse(MAP).unwrap();
         assert_eq!(map.device, Path::new("/dev/block/by-name/userdata"));
         assert_eq!((map.size, map.block_size, map.blocks()), (10240, 4096, 3));
-        assert_eq!(map.spans, [Span { at: 0, device: 100, blocks: 2 }, Span { at: 2, device: 500, blocks: 1 }]);
+        assert_eq!(
+            map.spans,
+            [
+                Span {
+                    at: 0,
+                    device: 100,
+                    blocks: 2
+                },
+                Span {
+                    at: 2,
+                    device: 500,
+                    blocks: 1
+                }
+            ]
+        );
     }
 
     #[test]
     fn a_map_that_does_not_add_up_is_refused() {
         let short = "/dev/block/x\n10240 4096\n1\n100 102\n";
-        assert!(BlockMap::parse(short).is_err(), "two of the package's three blocks");
+        assert!(
+            BlockMap::parse(short).is_err(),
+            "two of the package's three blocks"
+        );
         let miscounted = "/dev/block/x\n10240 4096\n2\n100 103\n";
-        assert!(BlockMap::parse(miscounted).is_err(), "one run where it says two");
+        assert!(
+            BlockMap::parse(miscounted).is_err(),
+            "one run where it says two"
+        );
         let backwards = "/dev/block/x\n10240 4096\n1\n102 100\n";
         assert!(BlockMap::parse(backwards).is_err());
         let sizeless = "/dev/block/x\n0 4096\n1\n100 103\n";
         assert!(BlockMap::parse(sizeless).is_err());
-        assert!(BlockMap::parse("/dev/block/x\n10240 4096\n").is_err(), "too few lines");
-        assert!(BlockMap::parse("/dev/block/x\nmany 4096\n1\n0 3\n").is_err(), "a length that is not a number");
+        assert!(
+            BlockMap::parse("/dev/block/x\n10240 4096\n").is_err(),
+            "too few lines"
+        );
+        assert!(
+            BlockMap::parse("/dev/block/x\nmany 4096\n1\n0 3\n").is_err(),
+            "a length that is not a number"
+        );
     }
 
     #[test]
     fn only_a_path_after_an_at_sign_is_a_map() {
-        assert_eq!(mapped("@/cache/recovery/block.map"), Some("/cache/recovery/block.map"));
+        assert_eq!(
+            mapped("@/cache/recovery/block.map"),
+            Some("/cache/recovery/block.map")
+        );
         assert_eq!(mapped("/sdcard/update.zip"), None);
     }
 
     /// The map above over a partition whose blocks each hold their own
     /// number, so what is read says where it came from.
     fn partition(name: &str) -> (PathBuf, Mapped) {
-        let path = std::env::temp_dir().join(format!("skyward-blockmap-{name}-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("skyward-blockmap-{name}-{}", std::process::id()));
         let mut bytes = vec![0u8; 4096 * 501 + 4096];
         for block in 0..bytes.len() / 4096 {
             bytes[block * 4096..block * 4096 + 4].copy_from_slice(&(block as u32).to_le_bytes());
@@ -197,7 +270,12 @@ mod tests {
         std::fs::write(&path, &bytes).unwrap();
         let map = BlockMap::parse(MAP).unwrap();
         let file = File::open(&path).unwrap();
-        let mapped = Mapped { file, block_size: 4096, map_block: 4096, spans: map.spans.clone() };
+        let mapped = Mapped {
+            file,
+            block_size: 4096,
+            map_block: 4096,
+            spans: map.spans.clone(),
+        };
         (path, mapped)
     }
 
@@ -210,7 +288,10 @@ mod tests {
             mapped.read_block(index, &mut out).unwrap();
             assert_eq!(first(&out), block, "the package's block {index}");
         }
-        assert!(mapped.read_block(3, &mut out).is_err(), "past the package's last block");
+        assert!(
+            mapped.read_block(3, &mut out).is_err(),
+            "past the package's last block"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 

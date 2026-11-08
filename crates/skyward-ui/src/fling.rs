@@ -17,7 +17,11 @@ impl Tracker {
 
     pub fn add(&mut self, at: u64, y: f32) {
         // A finger moving again after a rest starts a new measure.
-        if self.samples.last().is_some_and(|&(t, _)| at.saturating_sub(t) > REST_MS) {
+        if self
+            .samples
+            .last()
+            .is_some_and(|&(t, _)| at.saturating_sub(t) > REST_MS)
+        {
             self.samples.clear();
         }
         self.samples.retain(|&(t, _)| t + HORIZON_MS >= at);
@@ -29,12 +33,18 @@ impl Tracker {
     /// squares, so a finger speeding up is measured at its lift; zero when
     /// the finger rested before lifting.
     pub fn velocity(&self, at: u64) -> f32 {
-        let Some(&(last, _)) = self.samples.last() else { return 0.0 };
+        let Some(&(last, _)) = self.samples.last() else {
+            return 0.0;
+        };
         if at.saturating_sub(last) > REST_MS {
             return 0.0;
         }
         // Seconds before the last sample, and positions.
-        let points = || self.samples.iter().map(move |&(t, y)| ((t as f64 - last as f64) / 1000.0, f64::from(y)));
+        let points = || {
+            self.samples
+                .iter()
+                .map(move |&(t, y)| ((t as f64 - last as f64) / 1000.0, f64::from(y)))
+        };
         let n = self.samples.len() as f64;
         let (mut mt, mut mq, mut my) = (0.0, 0.0, 0.0);
         for (t, y) in points() {
@@ -87,8 +97,14 @@ impl Fling {
         let physical = 9.806_65 * 39.37 * ppi * 0.84;
         let l = (INFLEXION * velocity.abs() / (FRICTION * physical)).ln();
         let duration = 1000.0 * (l / (DECELERATION_RATE - 1.0)).exp();
-        let distance = FRICTION * physical * (DECELERATION_RATE / (DECELERATION_RATE - 1.0) * l).exp();
-        Fling { start, from, distance: distance.copysign(velocity), duration }
+        let distance =
+            FRICTION * physical * (DECELERATION_RATE / (DECELERATION_RATE - 1.0) * l).exp();
+        Fling {
+            start,
+            from,
+            distance: distance.copysign(velocity),
+            duration,
+        }
     }
 
     /// Where the glide is at `now`, and whether it has come to rest.
@@ -185,7 +201,10 @@ mod tests {
             assert!(d >= last, "the glide never turns back");
             last = d;
         }
-        assert!(ease(0.25) > 0.5, "half the distance goes in the first quarter");
+        assert!(
+            ease(0.25) > 0.5,
+            "half the distance goes in the first quarter"
+        );
     }
 
     #[test]
@@ -194,7 +213,10 @@ mod tests {
         let fast = Fling::new(0, 0.0, 8000.0, 560.0);
         assert!(fast.distance > slow.distance && fast.duration > slow.duration);
         let up = Fling::new(0, 1000.0, -3000.0, 560.0);
-        assert!(up.at(100).0 < 1000.0, "a glide follows the sign of the speed");
+        assert!(
+            up.at(100).0 < 1000.0,
+            "a glide follows the sign of the speed"
+        );
         assert_eq!(up.at(100_000), (1000.0 + up.distance, true));
     }
 }

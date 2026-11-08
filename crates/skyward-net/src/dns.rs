@@ -34,7 +34,9 @@ pub enum Answer {
 /// The answer `packet` gives to question `id`, after the names it points
 /// to; a packet that answers another question gives none.
 pub fn answer(packet: &[u8], id: u16, host: &str) -> Result<Option<Answer>> {
-    let Ok(m) = Message::from_vec(packet) else { return Ok(None) };
+    let Ok(m) = Message::from_vec(packet) else {
+        return Ok(None);
+    };
     if m.metadata.id != id || m.metadata.message_type != MessageType::Response {
         return Ok(None);
     }
@@ -62,7 +64,9 @@ pub fn answer(packet: &[u8], id: u16, host: &str) -> Result<Option<Answer>> {
 
 /// A question's number, different from one question to the next.
 fn id() -> u16 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     (now.subsec_nanos() ^ std::process::id()) as u16
 }
 
@@ -93,7 +97,12 @@ fn ask_server(host: &str, at: SocketAddrV4) -> Result<Result<Vec<Ipv4Addr>, anyh
     if let Some(Answer::Addresses(found)) = ask(host, at)? {
         return Ok(Ok(found));
     }
-    Ok(ask_tcp(host, at)?.map_err(|why| anyhow::anyhow!("the DNS server at {} did not answer over UDP, nor over TCP: {why}", at.ip())))
+    Ok(ask_tcp(host, at)?.map_err(|why| {
+        anyhow::anyhow!(
+            "the DNS server at {} did not answer over UDP, nor over TCP: {why}",
+            at.ip()
+        )
+    }))
 }
 
 /// Ask the server at `at` over UDP; nothing heard in time gives none.
@@ -101,15 +110,26 @@ fn ask(host: &str, at: SocketAddrV4) -> Result<Option<Answer>> {
     let id = id();
     let q = question(id, host)?;
     let s = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).context("make a DNS socket")?;
-    s.set_read_timeout(Some(WAIT)).context("time the DNS socket")?;
-    s.send_to(&q, at).with_context(|| format!("ask the DNS server at {at}"))?;
+    s.set_read_timeout(Some(WAIT))
+        .context("time the DNS socket")?;
+    s.send_to(&q, at)
+        .with_context(|| format!("ask the DNS server at {at}"))?;
     let mut buf = [0u8; 1500];
     loop {
         let (n, from) = match s.recv_from(&mut buf) {
             Ok(got) => got,
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => return Ok(None),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Ok(None)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e).with_context(|| format!("read the answer of the DNS server at {at}")),
+            Err(e) => {
+                return Err(e).with_context(|| format!("read the answer of the DNS server at {at}"))
+            }
         };
         if from != SocketAddr::V4(at) {
             continue;
@@ -145,7 +165,9 @@ fn ask_tcp(host: &str, at: SocketAddrV4) -> Result<Result<Vec<Ipv4Addr>, std::io
     };
     match answer(&packet, id, host)? {
         Some(Answer::Addresses(found)) => Ok(Ok(found)),
-        Some(Answer::Truncated) => bail!("the DNS server at {at} cut its answer short over TCP too"),
+        Some(Answer::Truncated) => {
+            bail!("the DNS server at {at} cut its answer short over TCP too")
+        }
         None => bail!("the DNS server at {at} answered another question"),
     }
 }
@@ -165,9 +187,14 @@ mod tests {
         let other = Name::from_ascii("ota.example.cdn.").unwrap();
         m.metadata.truncation = truncated;
         m.add_query(q.queries[0].clone());
-        m.answers.push(Record::from_rdata(name, 60, RData::CNAME(CNAME(other.clone()))));
+        m.answers.push(Record::from_rdata(
+            name,
+            60,
+            RData::CNAME(CNAME(other.clone())),
+        ));
         for a in addresses {
-            m.answers.push(Record::from_rdata(other.clone(), 60, RData::A(A(*a))));
+            m.answers
+                .push(Record::from_rdata(other.clone(), 60, RData::A(A(*a))));
         }
         m.to_vec().unwrap()
     }
@@ -175,15 +202,36 @@ mod tests {
     #[test]
     fn an_answer_gives_the_addresses_after_the_names_it_points_to() {
         let q = question(9, "update.example.com").unwrap();
-        let reply = served(&q, &[Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)], false);
+        let reply = served(
+            &q,
+            &[Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)],
+            false,
+        );
         assert_eq!(
             answer(&reply, 9, "update.example.com").unwrap(),
-            Some(Answer::Addresses(vec![Ipv4Addr::new(1, 2, 3, 4), Ipv4Addr::new(5, 6, 7, 8)]))
+            Some(Answer::Addresses(vec![
+                Ipv4Addr::new(1, 2, 3, 4),
+                Ipv4Addr::new(5, 6, 7, 8)
+            ]))
         );
-        assert_eq!(answer(&reply, 10, "update.example.com").unwrap(), None, "another question's answer");
-        assert_eq!(answer(&q, 9, "update.example.com").unwrap(), None, "the question itself");
-        assert!(answer(&served(&q, &[], false), 9, "update.example.com").is_err(), "a name with no address");
-        assert_eq!(answer(&served(&q, &[], true), 9, "update.example.com").unwrap(), Some(Answer::Truncated));
+        assert_eq!(
+            answer(&reply, 10, "update.example.com").unwrap(),
+            None,
+            "another question's answer"
+        );
+        assert_eq!(
+            answer(&q, 9, "update.example.com").unwrap(),
+            None,
+            "the question itself"
+        );
+        assert!(
+            answer(&served(&q, &[], false), 9, "update.example.com").is_err(),
+            "a name with no address"
+        );
+        assert_eq!(
+            answer(&served(&q, &[], true), 9, "update.example.com").unwrap(),
+            Some(Answer::Truncated)
+        );
     }
 
     #[test]
@@ -198,7 +246,10 @@ mod tests {
 
     #[test]
     fn an_address_needs_no_server() {
-        assert_eq!(lookup("192.168.1.1", &[]).unwrap(), [Ipv4Addr::new(192, 168, 1, 1)]);
+        assert_eq!(
+            lookup("192.168.1.1", &[]).unwrap(),
+            [Ipv4Addr::new(192, 168, 1, 1)]
+        );
         assert!(lookup("example.com", &[]).is_err());
     }
 
@@ -229,7 +280,11 @@ mod tests {
             udp.send_to(&served(&buf[..n], &[], true), from).unwrap();
             answer_over_tcp(tcp);
         });
-        let found = ask_server("update.example.com", SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).unwrap();
+        let found = ask_server(
+            "update.example.com",
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        )
+        .unwrap();
         server.join().unwrap();
         assert_eq!(found.unwrap(), ADDRESSES);
     }
@@ -242,7 +297,11 @@ mod tests {
         let port = udp.local_addr().unwrap().port();
         let tcp = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
         let server = std::thread::spawn(move || answer_over_tcp(tcp));
-        let found = ask_server("update.example.com", SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).unwrap();
+        let found = ask_server(
+            "update.example.com",
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        )
+        .unwrap();
         server.join().unwrap();
         assert_eq!(found.unwrap(), ADDRESSES);
         drop(udp);
@@ -252,8 +311,17 @@ mod tests {
     fn a_server_that_answers_neither_way_says_why() {
         let udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = udp.local_addr().unwrap().port();
-        let why = ask_server("update.example.com", SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).unwrap().unwrap_err().to_string();
-        assert!(why.starts_with("the DNS server at 127.0.0.1 did not answer over UDP, nor over TCP: "), "{why}");
+        let why = ask_server(
+            "update.example.com",
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, port),
+        )
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            why.starts_with("the DNS server at 127.0.0.1 did not answer over UDP, nor over TCP: "),
+            "{why}"
+        );
         drop(udp);
     }
 }

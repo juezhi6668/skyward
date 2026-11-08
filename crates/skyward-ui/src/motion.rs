@@ -14,7 +14,12 @@ impl Spring {
     /// A spring released at `start` from `from` moving at `velocity` units
     /// per second.
     pub fn new(start: u64, from: f32, velocity: f32, period: f32) -> Spring {
-        Spring { start, from, velocity, omega: std::f32::consts::TAU / period }
+        Spring {
+            start,
+            from,
+            velocity,
+            omega: std::f32::consts::TAU / period,
+        }
     }
 
     /// Where the spring is at `now`, and whether it has settled: back
@@ -25,7 +30,11 @@ impl Spring {
         let x = (x0 + (v0 + w * x0) * t) * (-w * t).exp();
         // A spring set moving away from rest turns once, when its velocity
         // (v0 − w (v0 + w x0) t) e^(−w t) reaches zero.
-        let turn = if v0 + w * x0 != 0.0 { v0 / (w * (v0 + w * x0)) } else { 0.0 };
+        let turn = if v0 + w * x0 != 0.0 {
+            v0 / (w * (v0 + w * x0))
+        } else {
+            0.0
+        };
         (x, t >= turn && x.abs() < 0.5)
     }
 }
@@ -80,7 +89,10 @@ mod tests {
         let w = std::f32::consts::TAU / 0.4;
         let peak_ms = (1000.0 / w) as u64;
         let (peak, _) = s.at(peak_ms);
-        assert!((peak - 3000.0 / (w * std::f32::consts::E)).abs() < 1.0, "{peak}");
+        assert!(
+            (peak - 3000.0 / (w * std::f32::consts::E)).abs() < 1.0,
+            "{peak}"
+        );
         assert!(!s.at(2).1, "it has only just left");
         assert!(s.at(1500).1);
         assert!(s.at(1500).0 >= 0.0, "it never crosses back");
@@ -96,12 +108,24 @@ mod tests {
     #[test]
     fn rubber_banding_resists_more_the_further_it_goes() {
         let range = 3200.0;
-        assert!((rubber(10.0, range) - 10.0).abs() < 0.1, "it starts at the finger's pace");
+        assert!(
+            (rubber(10.0, range) - 10.0).abs() < 0.1,
+            "it starts at the finger's pace"
+        );
         assert!(rubber(1600.0, range) < 1600.0 * 0.7);
-        assert!((rubber(10_000.0, range) - range / 3.0).abs() < 0.5, "a third of the screen at most");
-        assert!(rubber(-400.0, range) < 0.0, "pulling down goes the other way");
+        assert!(
+            (rubber(10_000.0, range) - range / 3.0).abs() < 0.5,
+            "a third of the screen at most"
+        );
+        assert!(
+            rubber(-400.0, range) < 0.0,
+            "pulling down goes the other way"
+        );
         for pull in [0.0, 50.0, 400.0, -900.0, 2500.0] {
-            assert!((unrubber(rubber(pull, range), range) - pull).abs() < 0.5, "{pull}");
+            assert!(
+                (unrubber(rubber(pull, range), range) - pull).abs() < 0.5,
+                "{pull}"
+            );
         }
     }
 }

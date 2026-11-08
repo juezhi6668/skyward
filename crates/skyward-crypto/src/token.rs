@@ -48,7 +48,10 @@ impl Token {
     /// phone agree on them whatever they are built for.
     pub fn of(raw: &[u8]) -> Result<Token> {
         if raw.len() != BYTES {
-            bail!("the secure world's note is {} bytes, and {BYTES} is the length of one", raw.len());
+            bail!(
+                "the secure world's note is {} bytes, and {BYTES} is the length of one",
+                raw.len()
+            );
         }
         if raw[0] != LATEST {
             bail!("the secure world's note is written in layout {}, and Skyward reads layout {LATEST}", raw[0]);
@@ -86,10 +89,16 @@ mod tests {
         assert_eq!(raw.len(), BYTES);
         let token = Token::of(&raw).unwrap();
         assert_eq!(token.challenge, 7);
-        assert_eq!(token.user as u64, 0x253c_22c3_acbb_a741, "the secure world's own user, as it wrote it");
+        assert_eq!(
+            token.user as u64, 0x253c_22c3_acbb_a741,
+            "the secure world's own user, as it wrote it"
+        );
         assert_eq!(token.authenticator, 9);
         assert_eq!(token.kind, 1);
-        assert_eq!(token.when, 1_700_000_000, "the time, in the order the network uses");
+        assert_eq!(
+            token.when, 1_700_000_000,
+            "the time, in the order the network uses"
+        );
         assert_eq!(token.mac, vec![0xAB; MAC_BYTES]);
     }
 

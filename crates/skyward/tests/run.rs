@@ -5,7 +5,11 @@ use std::path::Path;
 
 #[test]
 fn the_logs_the_recovery_saves_are_in_its_own_folder() {
-    for log in [skyward_sys::LOG, skyward_install::ENGINE_LOG, skyward_install::SCRIPT_LOG] {
+    for log in [
+        skyward_sys::LOG,
+        skyward_install::ENGINE_LOG,
+        skyward_install::SCRIPT_LOG,
+    ] {
         assert!(Path::new(log).starts_with(skyward_sys::RUN), "{log}");
     }
     assert!(!Path::new(skyward_sys::RUN).starts_with("/tmp"));

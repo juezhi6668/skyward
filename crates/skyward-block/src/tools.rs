@@ -45,8 +45,14 @@ pub enum Missing {
 impl fmt::Display for Missing {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Missing::Unmounted(base) => write!(f, "the {base} partition, which holds the program, is not mounted"),
-            Missing::Absent(name) => write!(f, "neither the recovery nor the installed system has {name}"),
+            Missing::Unmounted(base) => write!(
+                f,
+                "the {base} partition, which holds the program, is not mounted"
+            ),
+            Missing::Absent(name) => write!(
+                f,
+                "neither the recovery nor the installed system has {name}"
+            ),
         }
     }
 }
@@ -71,11 +77,17 @@ pub fn find(name: &str) -> Result<Tool, Missing> {
 fn look(name: &str, bin: &Path, system_bin: &Path) -> Result<Tool, Missing> {
     let own = bin.join(name);
     if own.exists() {
-        return Ok(Tool { program: own, libraries: Vec::new() });
+        return Ok(Tool {
+            program: own,
+            libraries: Vec::new(),
+        });
     }
     let installed = system_bin.join(name);
     if installed.exists() {
-        return Ok(Tool { program: installed, libraries: SYSTEM_LIBRARIES.map(str::to_string).to_vec() });
+        return Ok(Tool {
+            program: installed,
+            libraries: SYSTEM_LIBRARIES.map(str::to_string).to_vec(),
+        });
     }
     // An unmounted system holds its programs out of reach rather than not
     // having them.
@@ -93,9 +105,15 @@ impl Tool {
         if !self.libraries.is_empty() {
             command.env("LD_LIBRARY_PATH", self.libraries.join(":"));
         }
-        let out = command.output().with_context(|| format!("run {}", self.describe(args)))?;
-        let status = out.status.code().with_context(|| format!("{} ended with {}", self.describe(args), out.status))?;
-        let said = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+        let out = command
+            .output()
+            .with_context(|| format!("run {}", self.describe(args)))?;
+        let status = out
+            .status
+            .code()
+            .with_context(|| format!("{} ended with {}", self.describe(args), out.status))?;
+        let said = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
         Ok(Ran { status, said })
     }
 
@@ -134,7 +152,13 @@ mod tests {
             std::fs::write(dir.join("fsck.f2fs"), []).unwrap();
         }
         let found = look("fsck.f2fs", &bin, &system_bin).unwrap();
-        assert_eq!(found, Tool { program: bin.join("fsck.f2fs"), libraries: Vec::new() });
+        assert_eq!(
+            found,
+            Tool {
+                program: bin.join("fsck.f2fs"),
+                libraries: Vec::new()
+            }
+        );
     }
 
     #[test]
@@ -144,19 +168,34 @@ mod tests {
         std::fs::write(system_bin.join("e2fsck"), []).unwrap();
         let found = look("e2fsck", &bin, &system_bin).unwrap();
         assert_eq!(found.program, system_bin.join("e2fsck"));
-        assert_eq!(found.libraries, ["/mnt/system/system/lib64", "/system/lib64"]);
-        assert_eq!(look("tune2fs", &bin, &system_bin), Err(Missing::Absent("tune2fs".into())));
+        assert_eq!(
+            found.libraries,
+            ["/mnt/system/system/lib64", "/system/lib64"]
+        );
+        assert_eq!(
+            look("tune2fs", &bin, &system_bin),
+            Err(Missing::Absent("tune2fs".into()))
+        );
     }
 
     #[test]
     fn an_unmounted_system_holds_its_programs_out_of_reach() {
         let (bin, system_bin) = dirs("unmounted");
-        assert_eq!(look("e2fsck", &bin, &system_bin), Err(Missing::Unmounted("system")));
+        assert_eq!(
+            look("e2fsck", &bin, &system_bin),
+            Err(Missing::Unmounted("system"))
+        );
     }
 
     #[test]
     fn a_program_is_named_with_its_arguments() {
-        let tool = Tool { program: PathBuf::from("/system/bin/fsck.f2fs"), libraries: Vec::new() };
-        assert_eq!(tool.describe(&["-f".into(), "/dev/block/dm-8".into()]), "/system/bin/fsck.f2fs -f /dev/block/dm-8");
+        let tool = Tool {
+            program: PathBuf::from("/system/bin/fsck.f2fs"),
+            libraries: Vec::new(),
+        };
+        assert_eq!(
+            tool.describe(&["-f".into(), "/dev/block/dm-8".into()]),
+            "/system/bin/fsck.f2fs -f /dev/block/dm-8"
+        );
     }
 }

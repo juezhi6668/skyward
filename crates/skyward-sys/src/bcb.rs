@@ -47,7 +47,10 @@ impl Bcb {
         let mut lines = recovery.split('\n');
         let args = match lines.next() {
             None | Some("") => Vec::new(),
-            Some("recovery") => lines.filter(|l| !l.is_empty()).map(str::to_string).collect(),
+            Some("recovery") => lines
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect(),
             Some(_) => bail!("misc holds an unknown recovery message {recovery:?}"),
         };
         Ok(Bcb { command, args })
@@ -62,7 +65,8 @@ impl Bcb {
     /// given twice counts as it was given last.
     pub fn request(&self) -> Request {
         let mut r = Request::default();
-        let (mut fastboot, mut wipe_data, mut prompt, mut wipe_cache, mut wipe_ab) = (false, false, false, false, false);
+        let (mut fastboot, mut wipe_data, mut prompt, mut wipe_cache, mut wipe_ab) =
+            (false, false, false, false, false);
         let (mut rescue, mut unshare, mut exit, mut security) = (false, false, false, false);
         let mut sideload = None;
         let (mut update, mut reformat, mut retry, mut wipe_package) = (None, None, 0, 0);
@@ -121,14 +125,21 @@ impl Bcb {
         // Formatting as another filesystem shapes erasing data or the cache;
         // as one the recovery cannot make, it leaves that work undone.
         let reformat = match reformat {
-            Some((filesystem, _)) if REFORMATS.contains(&filesystem.as_str()) => Ok(Some(filesystem)),
+            Some((filesystem, _)) if REFORMATS.contains(&filesystem.as_str()) => {
+                Ok(Some(filesystem))
+            }
             Some((_, arg)) => Err(arg),
             None => Ok(None),
         };
         r.work = if fastboot {
             Work::Fastboot
         } else if let Some(package) = update {
-            Work::Update(Update { package, retry, wipe_cache, security })
+            Work::Update(Update {
+                package,
+                retry,
+                wipe_cache,
+                security,
+            })
         } else if wipe_data {
             reformat.map_or_else(Work::Unsupported, |reformat| Work::WipeData { reformat })
         } else if prompt {
@@ -136,7 +147,9 @@ impl Bcb {
         } else if wipe_cache {
             reformat.map_or_else(Work::Unsupported, |reformat| Work::WipeCache { reformat })
         } else if wipe_ab {
-            Work::WipeAb { package_size: wipe_package }
+            Work::WipeAb {
+                package_size: wipe_package,
+            }
         } else if let Some(auto_reboot) = sideload {
             Work::Sideload { auto_reboot }
         } else if rescue {
@@ -161,9 +174,17 @@ impl Bcb {
     /// for the `count`th time, as Android's own recovery counts them: the
     /// count it had taken out, the new one put in.
     pub fn with_retry(&self, count: u32) -> Bcb {
-        let mut args: Vec<String> = self.args.iter().filter(|a| !a.starts_with("--retry_count")).cloned().collect();
+        let mut args: Vec<String> = self
+            .args
+            .iter()
+            .filter(|a| !a.starts_with("--retry_count"))
+            .cloned()
+            .collect();
         args.push(format!("--retry_count={count}"));
-        Bcb { command: "boot-recovery".into(), args }
+        Bcb {
+            command: "boot-recovery".into(),
+            args,
+        }
     }
 
     /// Lay the message out over `raw`, a bootloader message read from misc:
@@ -172,12 +193,26 @@ impl Bcb {
     fn lay_over(&self, raw: &mut [u8; SIZE]) -> Result<()> {
         let recovery = match self.args.is_empty() {
             true => String::new(),
-            false => self.args.iter().fold(String::from("recovery\n"), |text, arg| text + arg + "\n"),
+            false => self
+                .args
+                .iter()
+                .fold(String::from("recovery\n"), |text, arg| text + arg + "\n"),
         };
         // Each field ends in a NUL, as the bootloader reads it.
-        ensure!(self.command.len() < COMMAND.len(), "the command {:?} does not fit in misc", self.command);
-        ensure!(recovery.len() < RECOVERY.len(), "{} bytes of arguments do not fit in misc", recovery.len());
-        for (field, text) in [(COMMAND, self.command.as_bytes()), (RECOVERY, recovery.as_bytes())] {
+        ensure!(
+            self.command.len() < COMMAND.len(),
+            "the command {:?} does not fit in misc",
+            self.command
+        );
+        ensure!(
+            recovery.len() < RECOVERY.len(),
+            "{} bytes of arguments do not fit in misc",
+            recovery.len()
+        );
+        for (field, text) in [
+            (COMMAND, self.command.as_bytes()),
+            (RECOVERY, recovery.as_bytes()),
+        ] {
             let field = &mut raw[field];
             field.fill(0);
             field[..text.len()].copy_from_slice(text);
@@ -263,7 +298,10 @@ impl Work {
     /// then stays in misc until it is done, so a restart halfway comes back
     /// to it, as Android's own recovery does.
     pub fn lasts(&self) -> bool {
-        !matches!(self, Work::Menu | Work::Fastboot | Work::Exit | Work::Unsupported(_))
+        !matches!(
+            self,
+            Work::Menu | Work::Fastboot | Work::Exit | Work::Unsupported(_)
+        )
     }
 }
 
@@ -285,20 +323,32 @@ pub fn read(misc: &Path) -> Result<Bcb> {
 /// Zero the bootloader message so the next boot follows its reboot reason
 /// instead of a pending command.
 pub fn clear(misc: &Path) -> Result<()> {
-    let f = OpenOptions::new().write(true).open(misc).with_context(|| format!("open {}", misc.display()))?;
-    f.write_all_at(&[0u8; SIZE], 0).with_context(|| format!("write {}", misc.display()))?;
-    f.sync_all().with_context(|| format!("sync {}", misc.display()))
+    let f = OpenOptions::new()
+        .write(true)
+        .open(misc)
+        .with_context(|| format!("open {}", misc.display()))?;
+    f.write_all_at(&[0u8; SIZE], 0)
+        .with_context(|| format!("write {}", misc.display()))?;
+    f.sync_all()
+        .with_context(|| format!("sync {}", misc.display()))
 }
 
 /// Write `bcb` over the bootloader message in misc, its status and stage
 /// left as they are.
 pub fn write(misc: &Path, bcb: &Bcb) -> Result<()> {
-    let f = OpenOptions::new().read(true).write(true).open(misc).with_context(|| format!("open {}", misc.display()))?;
+    let f = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(misc)
+        .with_context(|| format!("open {}", misc.display()))?;
     let mut raw = [0u8; SIZE];
-    f.read_exact_at(&mut raw, 0).with_context(|| format!("read {}", misc.display()))?;
+    f.read_exact_at(&mut raw, 0)
+        .with_context(|| format!("read {}", misc.display()))?;
     bcb.lay_over(&mut raw)?;
-    f.write_all_at(&raw, 0).with_context(|| format!("write {}", misc.display()))?;
-    f.sync_all().with_context(|| format!("sync {}", misc.display()))
+    f.write_all_at(&raw, 0)
+        .with_context(|| format!("write {}", misc.display()))?;
+    f.sync_all()
+        .with_context(|| format!("sync {}", misc.display()))
 }
 
 /// The wipe package the system of an A/B phone left in misc, `size` bytes,
@@ -306,7 +356,10 @@ pub fn write(misc: &Path, bcb: &Bcb) -> Result<()> {
 pub fn wipe_package(misc: &Path, size: u64) -> Result<Vec<u8>> {
     ensure!(size > 0, "the request gives the wipe package no size");
     let room = WIPE_PACKAGE.end - WIPE_PACKAGE.start;
-    ensure!(size <= room, "a wipe package of {size} bytes is more than the {room} misc keeps one in");
+    ensure!(
+        size <= room,
+        "a wipe package of {size} bytes is more than the {room} misc keeps one in"
+    );
     let mut package = vec![0u8; size as usize];
     File::open(misc)
         .and_then(|f| f.read_exact_at(&mut package, WIPE_PACKAGE.start))
@@ -318,10 +371,15 @@ pub fn wipe_package(misc: &Path, size: u64) -> Result<Vec<u8>> {
 /// is asked to keep it: the bootloader then turns on no tagging it was
 /// asked for before.
 pub fn forget_memtag_mode(misc: &Path) -> Result<()> {
-    let f = OpenOptions::new().write(true).open(misc).with_context(|| format!("open {}", misc.display()))?;
+    let f = OpenOptions::new()
+        .write(true)
+        .open(misc)
+        .with_context(|| format!("open {}", misc.display()))?;
     let empty = [0u8; (MEMTAG_MESSAGE.end - MEMTAG_MESSAGE.start) as usize];
-    f.write_all_at(&empty, MEMTAG_MESSAGE.start).with_context(|| format!("write {}", misc.display()))?;
-    f.sync_all().with_context(|| format!("sync {}", misc.display()))
+    f.write_all_at(&empty, MEMTAG_MESSAGE.start)
+        .with_context(|| format!("write {}", misc.display()))?;
+    f.sync_all()
+        .with_context(|| format!("sync {}", misc.display()))
 }
 
 #[cfg(test)]
@@ -348,7 +406,13 @@ mod tests {
         // The 13 Ultra's misc after the bootloader wrote boot-recovery over
         // bootonce-bootloader.
         let bcb = Bcb::parse(&message(b"boot-recovery\0oader", b"")).unwrap();
-        assert_eq!(bcb, Bcb { command: "boot-recovery".into(), args: Vec::new() });
+        assert_eq!(
+            bcb,
+            Bcb {
+                command: "boot-recovery".into(),
+                args: Vec::new()
+            }
+        );
     }
 
     #[test]
@@ -362,14 +426,25 @@ mod tests {
     }
 
     fn asked(command: &str, args: &[&str]) -> Request {
-        Bcb { command: command.into(), args: args.iter().map(|a| a.to_string()).collect() }.request()
+        Bcb {
+            command: command.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+        }
+        .request()
     }
 
     const WIPE_DATA: Work = Work::WipeData { reformat: None };
 
     #[test]
     fn a_factory_reset_from_the_settings_erases_data() {
-        let r = asked("boot-recovery", &["--format_data", "--locale=zh-CN", "--reason=factroy_reset(1217)"]);
+        let r = asked(
+            "boot-recovery",
+            &[
+                "--format_data",
+                "--locale=zh-CN",
+                "--reason=factroy_reset(1217)",
+            ],
+        );
         assert_eq!(r.work, WIPE_DATA);
         assert_eq!(r.locale.as_deref(), Some("zh-CN"));
         assert_eq!(r.reason.as_deref(), Some("factroy_reset(1217)"));
@@ -379,97 +454,269 @@ mod tests {
     #[test]
     fn a_wipe_asked_by_the_system_says_how_to_end() {
         let reason = "--reason=MasterClearConfirm,2026-10-20T01:00:00Z";
-        let r = asked("boot-recovery", &["--wipe_data", "--shutdown_after", reason, "--keep_memtag_mode", "--locale=en-US"]);
+        let r = asked(
+            "boot-recovery",
+            &[
+                "--wipe_data",
+                "--shutdown_after",
+                reason,
+                "--keep_memtag_mode",
+                "--locale=en-US",
+            ],
+        );
         assert_eq!(r.work, WIPE_DATA);
         assert!(r.shutdown_after && r.keep_memtag_mode);
-        assert_eq!(r.reason.as_deref(), Some("MasterClearConfirm,2026-10-20T01:00:00Z"));
+        assert_eq!(
+            r.reason.as_deref(),
+            Some("MasterClearConfirm,2026-10-20T01:00:00Z")
+        );
     }
 
     #[test]
     fn each_kind_of_work_is_read() {
-        assert_eq!(asked("boot-recovery", &["--prompt_and_wipe_data", "--reason=RescueParty"]).work, Work::PromptWipeData);
-        assert_eq!(asked("boot-recovery", &["--wipe_cache"]).work, Work::WipeCache { reformat: None });
-        assert_eq!(asked("boot-recovery", &["--sideload"]).work, Work::Sideload { auto_reboot: false });
-        assert_eq!(asked("boot-recovery", &["--sideload_auto_reboot"]).work, Work::Sideload { auto_reboot: true });
+        assert_eq!(
+            asked(
+                "boot-recovery",
+                &["--prompt_and_wipe_data", "--reason=RescueParty"]
+            )
+            .work,
+            Work::PromptWipeData
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--wipe_cache"]).work,
+            Work::WipeCache { reformat: None }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--sideload"]).work,
+            Work::Sideload { auto_reboot: false }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--sideload_auto_reboot"]).work,
+            Work::Sideload { auto_reboot: true }
+        );
         assert_eq!(asked("boot-recovery", &["--rescue"]).work, Work::Rescue);
-        assert_eq!(asked("boot-recovery", &["--fsck_unshare_blocks"]).work, Work::UnshareBlocks);
+        assert_eq!(
+            asked("boot-recovery", &["--fsck_unshare_blocks"]).work,
+            Work::UnshareBlocks
+        );
         assert_eq!(asked("boot-recovery", &["--fastboot"]).work, Work::Fastboot);
         assert_eq!(asked("boot-recovery", &["--just_exit"]).work, Work::Exit);
         assert_eq!(asked("boot-recovery", &[]).work, Work::Menu);
-        assert_eq!(asked("boot-recovery", &["--locale=zh-CN"]).work, Work::Menu, "a language alone asks for nothing");
+        assert_eq!(
+            asked("boot-recovery", &["--locale=zh-CN"]).work,
+            Work::Menu,
+            "a language alone asks for nothing"
+        );
     }
 
     #[test]
     fn the_first_work_in_order_is_the_one_done() {
-        assert_eq!(asked("boot-recovery", &["--sideload", "--wipe_data"]).work, WIPE_DATA);
-        assert_eq!(asked("boot-recovery", &["--wipe_data", "--fastboot"]).work, Work::Fastboot);
         assert_eq!(
-            asked("boot-recovery", &["--wipe_data", "--update_package=/data/ota_package/update.zip"]).work,
-            Work::Update(Update { package: "/data/ota_package/update.zip".into(), ..Update::default() })
+            asked("boot-recovery", &["--sideload", "--wipe_data"]).work,
+            WIPE_DATA
         );
-        assert_eq!(asked("boot-recovery", &["--wipe_ab", "--wipe_package_size=4096", "--sideload"]).work, Work::WipeAb { package_size: 4096 });
-        assert_eq!(asked("boot-recovery", &["--wipe_cache", "--wipe_ab"]).work, Work::WipeCache { reformat: None });
-        assert_eq!(asked("boot-recovery", &["--fsck_unshare_blocks", "--rescue"]).work, Work::Rescue);
-        assert_eq!(asked("boot-recovery", &["--just_exit", "--fsck_unshare_blocks"]).work, Work::UnshareBlocks);
+        assert_eq!(
+            asked("boot-recovery", &["--wipe_data", "--fastboot"]).work,
+            Work::Fastboot
+        );
+        assert_eq!(
+            asked(
+                "boot-recovery",
+                &[
+                    "--wipe_data",
+                    "--update_package=/data/ota_package/update.zip"
+                ]
+            )
+            .work,
+            Work::Update(Update {
+                package: "/data/ota_package/update.zip".into(),
+                ..Update::default()
+            })
+        );
+        assert_eq!(
+            asked(
+                "boot-recovery",
+                &["--wipe_ab", "--wipe_package_size=4096", "--sideload"]
+            )
+            .work,
+            Work::WipeAb { package_size: 4096 }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--wipe_cache", "--wipe_ab"]).work,
+            Work::WipeCache { reformat: None }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--fsck_unshare_blocks", "--rescue"]).work,
+            Work::Rescue
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--just_exit", "--fsck_unshare_blocks"]).work,
+            Work::UnshareBlocks
+        );
     }
 
     #[test]
     fn an_update_the_system_asks_for_says_how_to_install_it() {
-        let fresh = asked("boot-recovery", &["--update_package=@/cache/recovery/block.map", "--locale=zh-CN", "--security"]);
-        assert_eq!(fresh.work, Work::Update(Update { package: "@/cache/recovery/block.map".into(), retry: 0, wipe_cache: false, security: true }));
-        let again = asked("boot-recovery", &["--update_package=/sdcard/update.zip", "--wipe_cache", "--retry_count=2", "--install_with_fuse"]);
-        assert_eq!(again.work, Work::Update(Update { package: "/sdcard/update.zip".into(), retry: 2, wipe_cache: true, security: false }));
+        let fresh = asked(
+            "boot-recovery",
+            &[
+                "--update_package=@/cache/recovery/block.map",
+                "--locale=zh-CN",
+                "--security",
+            ],
+        );
+        assert_eq!(
+            fresh.work,
+            Work::Update(Update {
+                package: "@/cache/recovery/block.map".into(),
+                retry: 0,
+                wipe_cache: false,
+                security: true
+            })
+        );
+        let again = asked(
+            "boot-recovery",
+            &[
+                "--update_package=/sdcard/update.zip",
+                "--wipe_cache",
+                "--retry_count=2",
+                "--install_with_fuse",
+            ],
+        );
+        assert_eq!(
+            again.work,
+            Work::Update(Update {
+                package: "/sdcard/update.zip".into(),
+                retry: 2,
+                wipe_cache: true,
+                security: false
+            })
+        );
         assert!(again.unknown.is_empty());
-        let last = asked("boot-recovery", &["--update_package=/a.zip", "--update_package=/b.zip"]);
-        assert_eq!(last.work, Work::Update(Update { package: "/b.zip".into(), ..Update::default() }), "as given last");
+        let last = asked(
+            "boot-recovery",
+            &["--update_package=/a.zip", "--update_package=/b.zip"],
+        );
+        assert_eq!(
+            last.work,
+            Work::Update(Update {
+                package: "/b.zip".into(),
+                ..Update::default()
+            }),
+            "as given last"
+        );
     }
 
     #[test]
     fn an_option_without_the_value_it_takes_is_not_known() {
-        assert_eq!(asked("boot-recovery", &["--update_package"]).work, Work::Unsupported("--update_package".into()));
-        assert_eq!(asked("boot-recovery", &["--update_package="]).work, Work::Unsupported("--update_package=".into()));
-        let unread = asked("boot-recovery", &["--update_package=/a.zip", "--retry_count=twice"]);
-        assert_eq!(unread.work, Work::Update(Update { package: "/a.zip".into(), ..Update::default() }));
+        assert_eq!(
+            asked("boot-recovery", &["--update_package"]).work,
+            Work::Unsupported("--update_package".into())
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--update_package="]).work,
+            Work::Unsupported("--update_package=".into())
+        );
+        let unread = asked(
+            "boot-recovery",
+            &["--update_package=/a.zip", "--retry_count=twice"],
+        );
+        assert_eq!(
+            unread.work,
+            Work::Update(Update {
+                package: "/a.zip".into(),
+                ..Update::default()
+            })
+        );
         assert_eq!(unread.unknown, ["--retry_count=twice"]);
-        assert_eq!(asked("boot-recovery", &["--wipe_ab", "--wipe_package_size=-1"]).unknown, ["--wipe_package_size=-1"]);
+        assert_eq!(
+            asked("boot-recovery", &["--wipe_ab", "--wipe_package_size=-1"]).unknown,
+            ["--wipe_package_size=-1"]
+        );
     }
 
     #[test]
     fn formatting_as_another_filesystem_shapes_erasing() {
-        let data = asked("boot-recovery", &["--wipe_data", "--reformat_data=ext4", "--reason=toggle16k"]);
-        assert_eq!(data.work, Work::WipeData { reformat: Some("ext4".into()) });
-        assert_eq!(asked("boot-recovery", &["--reformat_data=f2fs", "--wipe_cache"]).work, Work::WipeCache { reformat: Some("f2fs".into()) });
-        assert_eq!(asked("boot-recovery", &["--reformat_data=ext4"]).work, Work::Menu, "alone, it shapes nothing");
+        let data = asked(
+            "boot-recovery",
+            &["--wipe_data", "--reformat_data=ext4", "--reason=toggle16k"],
+        );
+        assert_eq!(
+            data.work,
+            Work::WipeData {
+                reformat: Some("ext4".into())
+            }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--reformat_data=f2fs", "--wipe_cache"]).work,
+            Work::WipeCache {
+                reformat: Some("f2fs".into())
+            }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--reformat_data=ext4"]).work,
+            Work::Menu,
+            "alone, it shapes nothing"
+        );
         assert_eq!(
             asked("boot-recovery", &["--wipe_data", "--reformat_data=btrfs"]).work,
             Work::Unsupported("--reformat_data=btrfs".into()),
             "a filesystem the recovery cannot make leaves the erasing undone"
         );
         assert_eq!(
-            asked("boot-recovery", &["--reformat_data=ext4", "--update_package=/a.zip"]).work,
-            Work::Update(Update { package: "/a.zip".into(), ..Update::default() })
+            asked(
+                "boot-recovery",
+                &["--reformat_data=ext4", "--update_package=/a.zip"]
+            )
+            .work,
+            Work::Update(Update {
+                package: "/a.zip".into(),
+                ..Update::default()
+            })
         );
     }
 
     #[test]
     fn a_wipe_package_comes_with_its_size() {
-        assert_eq!(asked("boot-recovery", &["--wipe_ab", "--wipe_package_size=1834", "--reason=wipe_ab"]).work, Work::WipeAb { package_size: 1834 });
-        assert_eq!(asked("boot-recovery", &["--wipe_ab"]).work, Work::WipeAb { package_size: 0 }, "erasing says the size is missing");
+        assert_eq!(
+            asked(
+                "boot-recovery",
+                &["--wipe_ab", "--wipe_package_size=1834", "--reason=wipe_ab"]
+            )
+            .work,
+            Work::WipeAb { package_size: 1834 }
+        );
+        assert_eq!(
+            asked("boot-recovery", &["--wipe_ab"]).work,
+            Work::WipeAb { package_size: 0 },
+            "erasing says the size is missing"
+        );
     }
 
     #[test]
     fn a_command_alone_can_ask_for_fastboot_or_rescue() {
         assert_eq!(asked("boot-fastboot", &[]).work, Work::Fastboot);
-        assert_eq!(asked("boot-fastboot", &["--wipe_data"]).work, WIPE_DATA, "arguments come first");
+        assert_eq!(
+            asked("boot-fastboot", &["--wipe_data"]).work,
+            WIPE_DATA,
+            "arguments come first"
+        );
         assert_eq!(asked("boot-rescue", &[]).work, Work::Rescue);
     }
 
     #[test]
     fn arguments_the_recovery_does_not_know() {
         let alone = asked("boot-recovery", &["--wipe_efs"]);
-        assert_eq!(alone.work, Work::Unsupported("--wipe_efs".into()), "asked for on their own, they are shown");
+        assert_eq!(
+            alone.work,
+            Work::Unsupported("--wipe_efs".into()),
+            "asked for on their own, they are shown"
+        );
         let beside = asked("boot-recovery", &["--wipe_data", "--keep_photos", "stray"]);
-        assert_eq!(beside.work, WIPE_DATA, "beside work the recovery knows, they change nothing");
+        assert_eq!(
+            beside.work, WIPE_DATA,
+            "beside work the recovery knows, they change nothing"
+        );
         assert_eq!(beside.unknown, ["--keep_photos", "stray"]);
     }
 
@@ -488,17 +735,45 @@ mod tests {
         for work in lasting {
             assert!(work.lasts(), "{work:?}");
         }
-        for work in [Work::Menu, Work::Fastboot, Work::Exit, Work::Unsupported("--wipe_efs".into())] {
+        for work in [
+            Work::Menu,
+            Work::Fastboot,
+            Work::Exit,
+            Work::Unsupported("--wipe_efs".into()),
+        ] {
             assert!(!work.lasts(), "{work:?}");
         }
     }
 
     #[test]
     fn a_retry_takes_the_place_of_the_count_before_it() {
-        let bcb = Bcb { command: "boot-recovery".into(), args: vec!["--update_package=/a.zip".into(), "--retry_count=1".into(), "--locale=zh-CN".into()] };
-        assert_eq!(bcb.with_retry(2).args, ["--update_package=/a.zip", "--locale=zh-CN", "--retry_count=2"]);
-        let fresh = Bcb { command: String::new(), args: vec!["--update_package=/a.zip".into()] };
-        assert_eq!(fresh.with_retry(1), Bcb { command: "boot-recovery".into(), args: vec!["--update_package=/a.zip".into(), "--retry_count=1".into()] });
+        let bcb = Bcb {
+            command: "boot-recovery".into(),
+            args: vec![
+                "--update_package=/a.zip".into(),
+                "--retry_count=1".into(),
+                "--locale=zh-CN".into(),
+            ],
+        };
+        assert_eq!(
+            bcb.with_retry(2).args,
+            [
+                "--update_package=/a.zip",
+                "--locale=zh-CN",
+                "--retry_count=2"
+            ]
+        );
+        let fresh = Bcb {
+            command: String::new(),
+            args: vec!["--update_package=/a.zip".into()],
+        };
+        assert_eq!(
+            fresh.with_retry(1),
+            Bcb {
+                command: "boot-recovery".into(),
+                args: vec!["--update_package=/a.zip".into(), "--retry_count=1".into()]
+            }
+        );
     }
 
     fn scratch(name: &str, contents: &[u8]) -> PathBuf {
@@ -510,25 +785,43 @@ mod tests {
     #[test]
     fn a_message_written_reads_back_with_the_rest_of_misc_kept() {
         let mut before = vec![0xffu8; 64 * 1024];
-        before[..SIZE].copy_from_slice(&message(b"bootonce-bootloader", b"recovery\n--wipe_data\n--locale=zh-CN-with-a-long-tail\n"));
+        before[..SIZE].copy_from_slice(&message(
+            b"bootonce-bootloader",
+            b"recovery\n--wipe_data\n--locale=zh-CN-with-a-long-tail\n",
+        ));
         let path = scratch("write", &before);
-        let bcb = Bcb { command: "boot-recovery".into(), args: vec!["--update_package=/a.zip".into(), "--retry_count=1".into()] };
+        let bcb = Bcb {
+            command: "boot-recovery".into(),
+            args: vec!["--update_package=/a.zip".into(), "--retry_count=1".into()],
+        };
         write(&path, &bcb).unwrap();
         assert_eq!(read(&path).unwrap(), bcb);
-        let rescue = Bcb { command: "boot-rescue".into(), args: Vec::new() };
+        let rescue = Bcb {
+            command: "boot-rescue".into(),
+            args: Vec::new(),
+        };
         write(&path, &rescue).unwrap();
         let after = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(Bcb::parse(&after).unwrap(), rescue);
-        assert!(after[RECOVERY].iter().all(|&b| b == 0), "no arguments leave the field empty");
+        assert!(
+            after[RECOVERY].iter().all(|&b| b == 0),
+            "no arguments leave the field empty"
+        );
         assert!(after[32..64].iter().all(|&b| b == 0), "the status was zero");
-        assert!(after[SIZE..].iter().all(|&b| b == 0xff), "nothing past the message is touched");
+        assert!(
+            after[SIZE..].iter().all(|&b| b == 0xff),
+            "nothing past the message is touched"
+        );
     }
 
     #[test]
     fn a_message_too_long_for_misc_is_not_written() {
         let path = scratch("long", &[0u8; SIZE]);
-        let long = Bcb { command: "boot-recovery".into(), args: vec!["--update_package=/".to_string() + &"a".repeat(800)] };
+        let long = Bcb {
+            command: "boot-recovery".into(),
+            args: vec!["--update_package=/".to_string() + &"a".repeat(800)],
+        };
         let written = write(&path, &long);
         let after = std::fs::read(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
@@ -559,7 +852,10 @@ mod tests {
         let (start, end) = (MEMTAG_MESSAGE.start as usize, MEMTAG_MESSAGE.end as usize);
         assert_eq!((start, end - start), (32832, 64));
         assert!(after[start..end].iter().all(|&b| b == 0));
-        assert!(after[..start].iter().chain(&after[end..]).all(|&b| b == 0xff));
+        assert!(after[..start]
+            .iter()
+            .chain(&after[end..])
+            .all(|&b| b == 0xff));
     }
 
     #[test]

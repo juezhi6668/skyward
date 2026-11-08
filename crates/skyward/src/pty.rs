@@ -31,11 +31,26 @@ impl Shell {
     /// the system's own shell does over adb.
     pub fn start(rows: u16, cols: u16, codename: &str, folder: &Path) -> Result<Shell> {
         let (mut master, mut slave) = (-1, -1);
-        let size = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
-        if unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), &size) } != 0 {
+        let size = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &size,
+            )
+        } != 0
+        {
             return Err(io::Error::last_os_error()).context("open a pseudo-terminal");
         }
-        let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        let (master, slave) =
+            unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
         // Nothing the shell starts is to hold the screen's side open, and
         // the screen reads it only when there is something to read.
         let fd = master.as_raw_fd();
@@ -56,8 +71,12 @@ impl Shell {
             // The socket init made for the recovery service means nothing to
             // what the shell runs.
             .env_remove("ANDROID_SOCKET_recovery")
-            .stdin(Stdio::from(slave.try_clone().context("share the terminal")?))
-            .stdout(Stdio::from(slave.try_clone().context("share the terminal")?))
+            .stdin(Stdio::from(
+                slave.try_clone().context("share the terminal")?,
+            ))
+            .stdout(Stdio::from(
+                slave.try_clone().context("share the terminal")?,
+            ))
             .stderr(Stdio::from(slave));
         unsafe {
             command.pre_exec(|| {
@@ -73,7 +92,11 @@ impl Shell {
             return Err(io::Error::last_os_error()).context("watch the shell");
         }
         let ended = unsafe { OwnedFd::from_raw_fd(ended as RawFd) };
-        Ok(Shell { master: File::from(master), child, ended })
+        Ok(Shell {
+            master: File::from(master),
+            child,
+            ended,
+        })
     }
 
     /// What to wait on: the shell writing, and the shell ending.
@@ -90,7 +113,12 @@ impl Shell {
             match self.master.read(&mut buf) {
                 Ok(0) => return Ok(out),
                 Ok(n) => out.extend_from_slice(&buf[..n]),
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EIO) => return Ok(out),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.raw_os_error() == Some(libc::EIO) =>
+                {
+                    return Ok(out)
+                }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Err(e).context("read what the shell wrote"),
             }
@@ -104,9 +132,16 @@ impl Shell {
             match self.master.write(&bytes[at..]) {
                 Ok(n) => at += n,
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    let mut room = libc::pollfd { fd: self.master.as_raw_fd(), events: libc::POLLOUT, revents: 0 };
+                    let mut room = libc::pollfd {
+                        fd: self.master.as_raw_fd(),
+                        events: libc::POLLOUT,
+                        revents: 0,
+                    };
                     match unsafe { libc::poll(&mut room, 1, WRITE_TIMEOUT_MS) } {
-                        n if n < 0 => return Err(io::Error::last_os_error()).context("wait for the shell to take what was typed"),
+                        n if n < 0 => {
+                            return Err(io::Error::last_os_error())
+                                .context("wait for the shell to take what was typed")
+                        }
                         0 => bail!("the shell has taken nothing typed for {WRITE_TIMEOUT_MS} ms"),
                         _ => {}
                     }
@@ -120,7 +155,9 @@ impl Shell {
 
     /// How the shell ended, once it has.
     pub fn ended(&mut self) -> Result<Option<ExitStatus>> {
-        self.child.try_wait().context("see whether the shell has ended")
+        self.child
+            .try_wait()
+            .context("see whether the shell has ended")
     }
 
     /// Whether the shell waits for a command: it, not a command it started,

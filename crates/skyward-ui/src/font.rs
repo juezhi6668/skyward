@@ -49,12 +49,19 @@ struct Known {
 
 impl Face {
     fn new(data: &'static [u8], index: u32, weight: f32) -> Result<Self> {
-        let mut font =
-            FontRef::try_from_slice_and_index(data, index).map_err(|e| anyhow!("parse font: {e}"))?;
+        let mut font = FontRef::try_from_slice_and_index(data, index)
+            .map_err(|e| anyhow!("parse font: {e}"))?;
         font.set_variation(b"wght", weight);
-        let upem = font.units_per_em().ok_or_else(|| anyhow!("font has no units-per-em"))?;
+        let upem = font
+            .units_per_em()
+            .ok_or_else(|| anyhow!("font has no units-per-em"))?;
         let height = font.height_unscaled();
-        Ok(Face { font, upem, height, known: RefCell::new(Known::default()) })
+        Ok(Face {
+            font,
+            upem,
+            height,
+            known: RefCell::new(Known::default()),
+        })
     }
 
     /// The glyph for `ch`, and how far it advances the pen at `scale`.
@@ -74,13 +81,24 @@ impl Face {
             return ink.clone();
         }
         let at = ab_glyph::point(qx as f32 / SUBPIXELS, qy as f32 / SUBPIXELS);
-        let ink = self.font.outline_glyph(id.with_scale_and_position(scale, at)).map(|og| {
-            let b = og.px_bounds();
-            let (w, h) = (b.width() as u32, b.height() as u32);
-            let mut cov = vec![0u8; (w * h) as usize];
-            og.draw(|gx, gy, c| cov[(gy * w + gx) as usize] = (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-            Rc::new(Ink { x: b.min.x as i32, y: b.min.y as i32, w, h, cov })
-        });
+        let ink = self
+            .font
+            .outline_glyph(id.with_scale_and_position(scale, at))
+            .map(|og| {
+                let b = og.px_bounds();
+                let (w, h) = (b.width() as u32, b.height() as u32);
+                let mut cov = vec![0u8; (w * h) as usize];
+                og.draw(|gx, gy, c| {
+                    cov[(gy * w + gx) as usize] = (c.clamp(0.0, 1.0) * 255.0).round() as u8
+                });
+                Rc::new(Ink {
+                    x: b.min.x as i32,
+                    y: b.min.y as i32,
+                    w,
+                    h,
+                    cov,
+                })
+            });
         let mut known = self.known.borrow_mut();
         if known.glyphs.len() >= GLYPHS_KEPT {
             known.glyphs.clear();
@@ -117,7 +135,10 @@ impl Face {
     /// spans.
     pub fn line(&self, em_px: f32) -> (f32, f32) {
         let k = em_px / self.upem;
-        (-self.font.ascent_unscaled() * k, -self.font.descent_unscaled() * k)
+        (
+            -self.font.ascent_unscaled() * k,
+            -self.font.descent_unscaled() * k,
+        )
     }
 
     /// Height of a capital letter above the baseline, for Latin lettering
@@ -141,7 +162,10 @@ impl Face {
                 pen += scaled.kern(p, id);
             }
             if let Some(o) = self.font.outline(id) {
-                span = (span.0.min(pen + o.bounds.min.x * k), span.1.max(pen + o.bounds.max.x * k));
+                span = (
+                    span.0.min(pen + o.bounds.min.x * k),
+                    span.1.max(pen + o.bounds.max.x * k),
+                );
             }
             pen += advance;
             prev = Some(id);
@@ -150,8 +174,14 @@ impl Face {
     }
 
     fn bounds(&self, ch: char, em_px: f32) -> (f32, f32) {
-        let glyph = self.font.glyph_id(ch).with_scale_and_position(self.scale(em_px), ab_glyph::point(0.0, 0.0));
-        let og = self.font.outline_glyph(glyph).unwrap_or_else(|| panic!("font has no outline for {ch:?}"));
+        let glyph = self
+            .font
+            .glyph_id(ch)
+            .with_scale_and_position(self.scale(em_px), ab_glyph::point(0.0, 0.0));
+        let og = self
+            .font
+            .outline_glyph(glyph)
+            .unwrap_or_else(|| panic!("font has no outline for {ch:?}"));
         let b = og.px_bounds();
         (b.min.y, b.max.y)
     }
@@ -229,14 +259,20 @@ impl FontInfo {
     fn read(data: &[u8], index: u32) -> Result<FontInfo> {
         let face = ttf_parser::Face::parse(data, index).map_err(|e| anyhow!("parse font: {e}"))?;
         let name = |id: u16| -> Option<String> {
-            face.names().into_iter().filter(|n| n.name_id == id && n.is_unicode()).find_map(|n| n.to_string())
+            face.names()
+                .into_iter()
+                .filter(|n| n.name_id == id && n.is_unicode())
+                .find_map(|n| n.to_string())
         };
         let needed = |id: u16| name(id).ok_or_else(|| anyhow!("the font names no entry {id}"));
         let version = needed(ttf_parser::name_id::VERSION)?;
         Ok(FontInfo {
             family: needed(ttf_parser::name_id::FAMILY)?,
             // "Version 4.009" names the version twice in a row labelled 版本.
-            version: version.strip_prefix("Version ").unwrap_or(&version).to_string(),
+            version: version
+                .strip_prefix("Version ")
+                .unwrap_or(&version)
+                .to_string(),
             copyright: name(ttf_parser::name_id::COPYRIGHT_NOTICE),
         })
     }
@@ -255,7 +291,12 @@ impl Fonts {
         Self::load_with(path, index, mono, &STOCK_WEIGHTS)
     }
 
-    pub fn load_with(path: impl AsRef<Path>, index: u32, mono: impl AsRef<Path>, w: &Weights) -> Result<Self> {
+    pub fn load_with(
+        path: impl AsRef<Path>,
+        index: u32,
+        mono: impl AsRef<Path>,
+        w: &Weights,
+    ) -> Result<Self> {
         // One copy of the bytes backs every weight instance.
         let data = leak(path.as_ref())?;
         let mono_data = leak(mono.as_ref())?;
@@ -291,7 +332,14 @@ impl Fonts {
             .font
             .variations()
             .into_iter()
-            .map(|a| (String::from_utf8_lossy(&a.tag).into_owned(), a.min_value, a.default_value, a.max_value))
+            .map(|a| {
+                (
+                    String::from_utf8_lossy(&a.tag).into_owned(),
+                    a.min_value,
+                    a.default_value,
+                    a.max_value,
+                )
+            })
             .collect()
     }
 }
@@ -300,7 +348,12 @@ impl Fonts {
 #[cfg(test)]
 pub(crate) fn bundled() -> Fonts {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../resources/fonts");
-    Fonts::load(format!("{dir}/MiSansVF.ttf"), 0, format!("{dir}/KirkMono-Regular.ttf")).unwrap()
+    Fonts::load(
+        format!("{dir}/MiSansVF.ttf"),
+        0,
+        format!("{dir}/KirkMono-Regular.ttf"),
+    )
+    .unwrap()
 }
 
 #[cfg(test)]
@@ -315,7 +368,10 @@ mod tests {
         let em = 16.9 * 3.0;
         let (ink_top, ink_bottom) = f.heading.ink(em);
         let (top, bottom) = f.heading.line(em);
-        assert!((ink_bottom - ink_top - 47.0).abs() <= 2.0, "ink {ink_top}..{ink_bottom}");
+        assert!(
+            (ink_bottom - ink_top - 47.0).abs() <= 2.0,
+            "ink {ink_top}..{ink_bottom}"
+        );
         assert!((bottom - top - 69.0).abs() <= 2.0, "line {top}..{bottom}");
     }
 }

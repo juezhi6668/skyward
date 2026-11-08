@@ -50,7 +50,13 @@ pub enum Unwrap<'a, K: Decryptor> {
 /// service on the phone is the one that can; naming it this way keeps the
 /// key handling testable away from a phone.
 pub trait Decryptor {
-    fn gcm_decrypt(&self, key_blob: &[u8], app_id: &[u8], nonce: &[u8], body: &[u8]) -> Result<Vec<u8>>;
+    fn gcm_decrypt(
+        &self,
+        key_blob: &[u8],
+        app_id: &[u8],
+        nonce: &[u8],
+        body: &[u8],
+    ) -> Result<Vec<u8>>;
 }
 
 /// One wrapped key as Android leaves it on disk.
@@ -64,13 +70,23 @@ pub struct StoredKey {
 
 impl StoredKey {
     pub fn load(dir: &Path) -> Result<StoredKey> {
-        let read = |name: &str| fs::read(dir.join(name)).with_context(|| format!("read {}", dir.join(name).display()));
-        let version = fs::read_to_string(dir.join(FN_VERSION)).with_context(|| format!("read {}", dir.join(FN_VERSION).display()))?;
+        let read = |name: &str| {
+            fs::read(dir.join(name)).with_context(|| format!("read {}", dir.join(name).display()))
+        };
+        let version = fs::read_to_string(dir.join(FN_VERSION))
+            .with_context(|| format!("read {}", dir.join(FN_VERSION).display()))?;
         if version.trim() != VERSION {
-            bail!("{} is written in layout {}, Skyward reads layout {VERSION}", dir.display(), version.trim());
+            bail!(
+                "{} is written in layout {}, Skyward reads layout {VERSION}",
+                dir.display(),
+                version.trim()
+            );
         }
         if dir.join(FN_STRETCHING).exists() {
-            bail!("{} was written by an Android too old for Skyward to read", dir.display());
+            bail!(
+                "{} was written by an Android too old for Skyward to read",
+                dir.display()
+            );
         }
         let secdiscardable_hash = match dir.join(FN_SECDISCARDABLE).exists() {
             true => hash_with_prefix(SECDISCARDABLE_PREFIX, &read(FN_SECDISCARDABLE)?),
@@ -80,7 +96,11 @@ impl StoredKey {
             true => Some(read(FN_KEY_BLOB)?),
             false => None,
         };
-        Ok(StoredKey { encrypted: read(FN_ENCRYPTED_KEY)?, key_blob, secdiscardable_hash })
+        Ok(StoredKey {
+            encrypted: read(FN_ENCRYPTED_KEY)?,
+            key_blob,
+            secdiscardable_hash,
+        })
     }
 
     /// What the wrapping is bound to: the directory's own hash and whatever
@@ -95,14 +115,20 @@ impl StoredKey {
     /// What the phone's key service says the wrapping key may be used for.
     #[cfg(target_os = "android")]
     pub fn authorizations(&self, service: &crate::keymint::KeyMint) -> Result<Vec<(i32, i64)>> {
-        let blob = self.key_blob.as_ref().context("this key is wrapped by a secret, not by the key service")?;
+        let blob = self
+            .key_blob
+            .as_ref()
+            .context("this key is wrapped by a secret, not by the key service")?;
         service.authorizations(blob, &self.app_id(&[]))
     }
 
     /// The key itself.
     pub fn unwrap<K: Decryptor>(&self, how: Unwrap<K>) -> Result<Vec<u8>> {
         if self.encrypted.len() < NONCE_BYTES + TAG_BYTES {
-            bail!("the wrapped key is {} bytes, too few to hold anything", self.encrypted.len());
+            bail!(
+                "the wrapped key is {} bytes, too few to hold anything",
+                self.encrypted.len()
+            );
         }
         let (nonce, body) = self.encrypted.split_at(NONCE_BYTES);
         match how {
@@ -124,9 +150,11 @@ fn decrypt_with_secret(pre_key: &[u8], nonce: &[u8], body: &[u8]) -> Result<Vec<
     let mut key = hash_with_prefix(KEYGEN_PREFIX, pre_key);
     key.truncate(KEY_BYTES);
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    cipher
-        .decrypt(Nonce::from_slice(nonce), body)
-        .map_err(|_| anyhow::anyhow!("the wrapped key did not come apart; the secret is not the one it was wrapped with"))
+    cipher.decrypt(Nonce::from_slice(nonce), body).map_err(|_| {
+        anyhow::anyhow!(
+            "the wrapped key did not come apart; the secret is not the one it was wrapped with"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -189,7 +217,11 @@ mod tests {
         let mut pre_key = hash.clone();
         pre_key.extend_from_slice(b"the user's secret");
         let s = stored(&blob, wrap(&pre_key, &[1; NONCE_BYTES], &key));
-        assert_eq!(s.unwrap(Unwrap::<NoService>::Secret(b"the user's secret")).unwrap(), key.to_vec());
+        assert_eq!(
+            s.unwrap(Unwrap::<NoService>::Secret(b"the user's secret"))
+                .unwrap(),
+            key.to_vec()
+        );
     }
 
     #[test]
@@ -198,7 +230,10 @@ mod tests {
         let mut pre_key = hash_with_prefix(SECDISCARDABLE_PREFIX, &blob);
         pre_key.extend_from_slice(b"right");
         let s = stored(&blob, wrap(&pre_key, &[1; NONCE_BYTES], &[0xCDu8; 64]));
-        let said = format!("{:#}", s.unwrap(Unwrap::<NoService>::Secret(b"wrong")).unwrap_err());
+        let said = format!(
+            "{:#}",
+            s.unwrap(Unwrap::<NoService>::Secret(b"wrong")).unwrap_err()
+        );
         assert!(said.contains("not the one it was wrapped with"), "{said}");
     }
 
@@ -208,8 +243,15 @@ mod tests {
         let mut pre_key = hash_with_prefix(SECDISCARDABLE_PREFIX, b"this directory");
         pre_key.extend_from_slice(b"s");
         let wrapped = wrap(&pre_key, &[2; NONCE_BYTES], &key);
-        assert_eq!(stored(b"this directory", wrapped.clone()).unwrap(Unwrap::<NoService>::Secret(b"s")).unwrap(), key.to_vec());
-        assert!(stored(b"another directory", wrapped).unwrap(Unwrap::<NoService>::Secret(b"s")).is_err());
+        assert_eq!(
+            stored(b"this directory", wrapped.clone())
+                .unwrap(Unwrap::<NoService>::Secret(b"s"))
+                .unwrap(),
+            key.to_vec()
+        );
+        assert!(stored(b"another directory", wrapped)
+            .unwrap(Unwrap::<NoService>::Secret(b"s"))
+            .is_err());
     }
 
     #[test]
@@ -242,22 +284,34 @@ mod tests {
         let dir = tempdir("no-secdiscardable");
         let key = [0x22u8; 32];
         fs::write(dir.join(FN_VERSION), "1").unwrap();
-        fs::write(dir.join(FN_ENCRYPTED_KEY), wrap(b"only the secret", &[3; NONCE_BYTES], &key)).unwrap();
+        fs::write(
+            dir.join(FN_ENCRYPTED_KEY),
+            wrap(b"only the secret", &[3; NONCE_BYTES], &key),
+        )
+        .unwrap();
         let s = StoredKey::load(&dir).unwrap();
         assert!(s.secdiscardable_hash.is_empty());
-        assert_eq!(s.unwrap(Unwrap::<NoService>::Secret(b"only the secret")).unwrap(), key.to_vec());
+        assert_eq!(
+            s.unwrap(Unwrap::<NoService>::Secret(b"only the secret"))
+                .unwrap(),
+            key.to_vec()
+        );
     }
 
     /// Why loading the directory was turned down.
     fn refusal(dir: &Path) -> String {
         match StoredKey::load(dir) {
             Err(e) => format!("{e:#}"),
-            Ok(_) => panic!("{} was read where it should have been refused", dir.display()),
+            Ok(_) => panic!(
+                "{} was read where it should have been refused",
+                dir.display()
+            ),
         }
     }
 
     fn tempdir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("skyward-keystore-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("skyward-keystore-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

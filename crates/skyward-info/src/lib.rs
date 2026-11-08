@@ -60,8 +60,14 @@ impl FromStr for PatchLevel {
 
     fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split('-').collect();
-        let [y, m, d] = parts.as_slice() else { bail!("security patch {s:?} is not YYYY-MM-DD") };
-        let level = PatchLevel { year: parse(y, "patch year")?, month: parse(m, "patch month")?, day: parse(d, "patch day")? };
+        let [y, m, d] = parts.as_slice() else {
+            bail!("security patch {s:?} is not YYYY-MM-DD")
+        };
+        let level = PatchLevel {
+            year: parse(y, "patch year")?,
+            month: parse(m, "patch month")?,
+            day: parse(d, "patch day")?,
+        };
         if !(1..=12).contains(&level.month) || !(1..=31).contains(&level.day) {
             bail!("security patch {s:?} is not a date");
         }
@@ -113,11 +119,14 @@ pub struct Battery {
     /// A charger charging it quickly, as Xiaomi's Qualcomm phones tell
     /// beside their power supplies.
     pub quick: bool,
+    /// A charger or a computer powers the phone, by cable or wirelessly: a
+    /// power supply besides the battery is online.
+    pub plugged: bool,
 }
 
 impl Battery {
-    /// Whether the cable is in: charging, or full and topped up.
-    pub fn plugged(&self) -> bool {
+    /// Whether it charges, or is full and topped up.
+    pub fn charging(&self) -> bool {
         matches!(self.charge, Charge::Charging | Charge::Full)
     }
 }
@@ -142,7 +151,9 @@ pub fn collect(cfg: &DeviceConfig) -> Result<DeviceInfo> {
     Ok(DeviceInfo {
         // The system names the exact edition; the configured model covers a
         // system whose partitions are not mounted.
-        model: system.get("ro.product.marketname").unwrap_or_else(|| cfg.device.model.clone()),
+        model: system
+            .get("ro.product.marketname")
+            .unwrap_or_else(|| cfg.device.model.clone()),
         codename: cfg.device.codename.clone(),
         soc: cfg.device.soc.clone(),
         cpu: cpu(Path::new(CPU))?,
@@ -152,13 +163,19 @@ pub fn collect(cfg: &DeviceConfig) -> Result<DeviceInfo> {
         os_version: system.get(&cfg.device.os_version_prop),
         android: system.get("ro.build.version.release"),
         locale: system.get("ro.product.locale"),
-        security_patch: system.get("ro.build.version.security_patch").map(|s| s.parse()).transpose()?,
+        security_patch: system
+            .get("ro.build.version.security_patch")
+            .map(|s| s.parse())
+            .transpose()?,
         kernel: kernel_release()?,
         storage: storage()?,
         battery: battery(Path::new(POWER_SUPPLY))?,
         slot: skyward_vab::current_slot()?,
         snapshot: skyward_vab::snapshot_state()?,
-        boot: Boot { unlocked, verified: skyward_block::boot_param("androidboot.verifiedbootstate")? },
+        boot: Boot {
+            unlocked,
+            verified: skyward_block::boot_param("androidboot.verifiedbootstate")?,
+        },
     })
 }
 
@@ -193,7 +210,16 @@ impl SystemProps {
 
 /// The order init reads build.prop files in at boot; later files override
 /// earlier ones.
-const PROP_ORDER: [&str; 8] = ["system", "system_ext", "system_dlkm", "vendor", "vendor_dlkm", "odm_dlkm", "odm", "product"];
+const PROP_ORDER: [&str; 8] = [
+    "system",
+    "system_ext",
+    "system_dlkm",
+    "vendor",
+    "vendor_dlkm",
+    "odm_dlkm",
+    "odm",
+    "product",
+];
 
 /// What init names the properties the bootloader passes.
 const BOOT_PROPS: &str = "ro.boot.";
@@ -206,10 +232,18 @@ const BOOT_PROPS: &str = "ro.boot.";
 /// they come first here too, the same in a recovery as in the system.
 pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
     let base = |m: &skyward_vab::Mounted| -> String {
-        m.partition.strip_suffix(slot.suffix()).expect("mounted partitions carry the slot suffix").to_string()
+        m.partition
+            .strip_suffix(slot.suffix())
+            .expect("mounted partitions carry the slot suffix")
+            .to_string()
     };
     let mut parts = skyward_vab::mounted_partitions(slot)?;
-    parts.sort_by_key(|m| PROP_ORDER.iter().position(|b| *b == base(m)).unwrap_or(PROP_ORDER.len()));
+    parts.sort_by_key(|m| {
+        PROP_ORDER
+            .iter()
+            .position(|b| *b == base(m))
+            .unwrap_or(PROP_ORDER.len())
+    });
     let mut props: HashMap<String, String> = skyward_sys::props(BOOT_PROPS).into_iter().collect();
     for m in &parts {
         let files: &[&str] = match base(m).as_str() {
@@ -233,7 +267,10 @@ pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
 
 fn read(path: impl AsRef<Path>) -> Result<String> {
     let p = path.as_ref();
-    Ok(fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?.trim().to_string())
+    Ok(fs::read_to_string(p)
+        .with_context(|| format!("read {}", p.display()))?
+        .trim()
+        .to_string())
 }
 
 /// `None` when the file does not exist; any other failure is an error.
@@ -269,7 +306,10 @@ fn cpu(root: &Path) -> Result<Cpu> {
             max_khz = Some(max_khz.map_or(khz, |m| m.max(khz)));
         }
     }
-    Ok(Cpu { cores: ids.len() as u32, max_khz })
+    Ok(Cpu {
+        cores: ids.len() as u32,
+        max_khz,
+    })
 }
 
 /// Kernel cpulist syntax: comma-separated ids and inclusive ranges (`0-3,6`).
@@ -308,22 +348,39 @@ fn kernel_release() -> Result<String> {
         return Err(std::io::Error::last_os_error()).context("uname");
     }
     let release = unsafe { CStr::from_ptr(u.release.as_ptr()) };
-    Ok(release.to_str().context("kernel release is not UTF-8")?.to_string())
+    Ok(release
+        .to_str()
+        .context("kernel release is not UTF-8")?
+        .to_string())
 }
 
 fn storage() -> Result<Storage> {
     let link = Path::new(skyward_block::BY_NAME).join("userdata");
     let dev = fs::canonicalize(&link).with_context(|| format!("resolve {}", link.display()))?;
-    let name = dev.file_name().ok_or_else(|| anyhow!("{} has no device name", dev.display()))?;
-    let sectors: u64 = parse(&read(Path::new(SYS_BLOCK).join(name).join("size"))?, "block size")?;
-    let free = if is_mountpoint(Path::new("/data"))? { Some(free_bytes("/data")?) } else { None };
-    Ok(Storage { total: sectors * 512, free })
+    let name = dev
+        .file_name()
+        .ok_or_else(|| anyhow!("{} has no device name", dev.display()))?;
+    let sectors: u64 = parse(
+        &read(Path::new(SYS_BLOCK).join(name).join("size"))?,
+        "block size",
+    )?;
+    let free = if is_mountpoint(Path::new("/data"))? {
+        Some(free_bytes("/data")?)
+    } else {
+        None
+    };
+    Ok(Storage {
+        total: sectors * 512,
+        free,
+    })
 }
 
 /// A directory is a mountpoint when it lives on a different filesystem from
 /// its parent.
 fn is_mountpoint(path: &Path) -> Result<bool> {
-    let parent = path.parent().ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent", path.display()))?;
     let here = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
     let up = fs::metadata(parent).with_context(|| format!("stat {}", parent.display()))?;
     Ok(here.dev() != up.dev())
@@ -354,35 +411,68 @@ fn battery(root: &Path) -> Result<Option<Battery>> {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", root.display())),
     };
-    let mut dirs: Vec<_> = entries.map(|e| e.map(|e| e.path())).collect::<Result<_, _>>()?;
+    let mut dirs: Vec<_> = entries
+        .map(|e| e.map(|e| e.path()))
+        .collect::<Result<_, _>>()?;
     dirs.sort();
+    let mut first = None;
+    let mut plugged = false;
     for dir in dirs {
-        if read_opt(dir.join("type"))?.as_deref() != Some("Battery") {
-            continue;
+        match read_opt(dir.join("type"))?.as_deref() {
+            Some("Battery") => {
+                first.get_or_insert(dir);
+            }
+            Some(_) => plugged |= online(&dir)?,
+            None => {}
         }
-        let charge = match read(dir.join("status"))?.as_str() {
-            "Charging" => Charge::Charging,
-            "Discharging" => Charge::Discharging,
-            "Not charging" => Charge::NotCharging,
-            "Full" => Charge::Full,
-            "Unknown" => Charge::Unknown,
-            other => bail!("{}: status {other:?}", dir.display()),
-        };
-        return Ok(Some(Battery {
-            level: parse(&read(dir.join("capacity"))?, "capacity")?,
-            charge,
-            temp: parse_opt(dir.join("temp"), "temp")?,
-            health: read_opt(dir.join("health"))?,
-            cycles: parse_opt(dir.join("cycle_count"), "cycle_count")?,
-            design: parse_opt(dir.join("charge_full_design"), "charge_full_design")?,
-            full: parse_opt(dir.join("charge_full"), "charge_full")?,
-            voltage: parse_opt(dir.join("voltage_now"), "voltage_now")?,
-            // How quickly the charger charges: 0 normally, then fast, flash,
-            // turbo and super, which the stock SystemUI all counts quick.
-            quick: parse_opt::<u8>(root.with_file_name("qcom-battery").join("quick_charge_type"), "quick_charge_type")?.is_some_and(|k| (1..=4).contains(&k)),
-        }));
     }
-    Ok(None)
+    let Some(dir) = first else { return Ok(None) };
+    let charge = match read(dir.join("status"))?.as_str() {
+        "Charging" => Charge::Charging,
+        "Discharging" => Charge::Discharging,
+        "Not charging" => Charge::NotCharging,
+        "Full" => Charge::Full,
+        "Unknown" => Charge::Unknown,
+        other => bail!("{}: status {other:?}", dir.display()),
+    };
+    Ok(Some(Battery {
+        level: parse(&read(dir.join("capacity"))?, "capacity")?,
+        charge,
+        temp: parse_opt(dir.join("temp"), "temp")?,
+        health: read_opt(dir.join("health"))?,
+        cycles: parse_opt(dir.join("cycle_count"), "cycle_count")?,
+        design: parse_opt(dir.join("charge_full_design"), "charge_full_design")?,
+        full: parse_opt(dir.join("charge_full"), "charge_full")?,
+        voltage: parse_opt(dir.join("voltage_now"), "voltage_now")?,
+        // How quickly the charger charges: 0 normally, then fast, flash,
+        // turbo and super, which the stock SystemUI all counts quick.
+        quick: parse_opt::<u8>(
+            root.with_file_name("qcom-battery")
+                .join("quick_charge_type"),
+            "quick_charge_type",
+        )?
+        .is_some_and(|k| (1..=4).contains(&k)),
+        plugged,
+    }))
+}
+
+/// Whether the power supply in `dir` says a charger or a computer is
+/// attached to it.
+fn online(dir: &Path) -> Result<bool> {
+    let path = dir.join("online");
+    said_online(fs::read_to_string(&path)).with_context(|| format!("read {}", path.display()))
+}
+
+/// What a power supply's `online` file says, as reading it went. A supply
+/// without one has no say, and one whose driver cannot tell yet, as
+/// Qualcomm's USB-C connector cannot early in a boot, answers "try again":
+/// either is taken as offline, and the next reading asks again.
+fn said_online(read: std::io::Result<String>) -> std::io::Result<bool> {
+    match read {
+        Ok(s) => Ok(s.trim() == "1"),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::WouldBlock) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -409,7 +499,14 @@ mod tests {
     #[test]
     fn patch_level_parses_dates_only() {
         let p: PatchLevel = "2026-10-01".parse().unwrap();
-        assert_eq!(p, PatchLevel { year: 2026, month: 10, day: 1 });
+        assert_eq!(
+            p,
+            PatchLevel {
+                year: 2026,
+                month: 10,
+                day: 1
+            }
+        );
         assert!("2026-13-01".parse::<PatchLevel>().is_err());
         assert!("2026-10".parse::<PatchLevel>().is_err());
         assert!("October 2026".parse::<PatchLevel>().is_err());
@@ -427,16 +524,98 @@ mod tests {
         let supplies = class.path().join("power_supply");
         let bat = supplies.join("battery");
         fs::create_dir_all(&bat).unwrap();
-        for (name, value) in [("type", "Battery"), ("status", "Charging"), ("capacity", "96"), ("temp", "377")] {
+        for (name, value) in [
+            ("type", "Battery"),
+            ("status", "Charging"),
+            ("capacity", "96"),
+            ("temp", "377"),
+        ] {
             fs::write(bat.join(name), format!("{value}\n")).unwrap();
         }
         let b = battery(&supplies).unwrap().expect("a battery");
-        assert_eq!((b.level, b.temp, b.quick), (96, Some(377), false), "a phone that does not tell charges as it may");
+        assert_eq!(
+            (b.level, b.temp, b.quick),
+            (96, Some(377), false),
+            "a phone that does not tell charges as it may"
+        );
         let qcom = class.path().join("qcom-battery");
         fs::create_dir_all(&qcom).unwrap();
         fs::write(qcom.join("quick_charge_type"), "0\n").unwrap();
         assert!(!battery(&supplies).unwrap().expect("a battery").quick);
         fs::write(qcom.join("quick_charge_type"), "3\n").unwrap();
-        assert!(battery(&supplies).unwrap().expect("a battery").quick, "turbo charging is quick");
+        assert!(
+            battery(&supplies).unwrap().expect("a battery").quick,
+            "turbo charging is quick"
+        );
+    }
+
+    #[test]
+    fn the_phone_is_plugged_in_while_a_power_supply_besides_the_battery_is_online() {
+        // The 13 Ultra's power supplies in the recovery.
+        let class = tempfile::tempdir().unwrap();
+        let supplies = class.path().join("power_supply");
+        let supply = |name: &str, files: &[(&str, &str)]| {
+            let dir = supplies.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            for (file, value) in files {
+                fs::write(dir.join(file), format!("{value}\n")).unwrap();
+            }
+        };
+        supply(
+            "battery",
+            &[
+                ("type", "Battery"),
+                ("status", "Discharging"),
+                ("capacity", "80"),
+            ],
+        );
+        supply("usb", &[("type", "USB"), ("online", "0")]);
+        supply("wireless", &[("type", "Wireless"), ("online", "0")]);
+        supply(
+            "ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1",
+            &[("type", "USB"), ("online", "0")],
+        );
+        assert!(
+            !battery(&supplies).unwrap().expect("a battery").plugged,
+            "on its battery alone"
+        );
+        supply("usb", &[("type", "USB_PD"), ("online", "1")]);
+        supply(
+            "ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1",
+            &[("online", "1")],
+        );
+        assert!(
+            battery(&supplies).unwrap().expect("a battery").plugged,
+            "on a charger's cable"
+        );
+        supply("usb", &[("type", "USB"), ("online", "0")]);
+        supply(
+            "ucsi-source-psy-soc:qcom,pmic_glink:qcom,ucsi1",
+            &[("online", "0")],
+        );
+        supply("wireless", &[("online", "1")]);
+        assert!(
+            battery(&supplies).unwrap().expect("a battery").plugged,
+            "on a wireless charger"
+        );
+    }
+
+    #[test]
+    fn a_power_supply_that_cannot_tell_yet_is_taken_as_offline() {
+        use std::io::Error;
+        assert!(said_online(Ok("1\n".into())).unwrap());
+        assert!(!said_online(Ok("0\n".into())).unwrap());
+        assert!(
+            !said_online(Err(Error::from(ErrorKind::WouldBlock))).unwrap(),
+            "Qualcomm's USB-C connector early in a boot"
+        );
+        assert!(
+            !said_online(Err(Error::from(ErrorKind::NotFound))).unwrap(),
+            "a supply without the file"
+        );
+        assert!(
+            said_online(Err(Error::from(ErrorKind::PermissionDenied))).is_err(),
+            "anything else is an error"
+        );
     }
 }
