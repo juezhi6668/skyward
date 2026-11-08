@@ -1329,9 +1329,12 @@ pub mod fb {
         }
     }
 
+    /// How many blanks in a row a screen may fail to give before its frames
+    /// stop being waited for.
+    const BLANKS_MISSED: u8 = 3;
+
     pub struct FbSurface {
-        file: std::fs::File,
-        map: *mut u8,
+        file: std::fs::File,        map: *mut u8,
         len: usize,
         var: Var,
         w: u32,
@@ -1356,6 +1359,13 @@ pub mod fb {
         frames: u32,
         /// Where the driver tells the panel's own power, if it tells it.
         lit_at: Option<PathBuf>,
+        /// Whether the blank that shows a frame has failed to come since the
+        /// screen was last set up, and that has been said.
+        blank_told: bool,
+        /// How many blanks in a row have failed to come. A screen whose
+        /// blanks have stopped is one where every frame costs the whole wait,
+        /// which is a screen that reads as broken rather than slow.
+        blank_missed: u8,
         /// Whether the panel is lit, resting with the backlight down, or
         /// blanked.
         power: Power,
@@ -1520,6 +1530,8 @@ pub mod fb {
                 flip: pages >= 2,
                 frames: 0,
                 lit_at,
+                blank_told: false,
+                blank_missed: 0,
                 power: Power::On,
                 summary,
             })
@@ -1567,26 +1579,26 @@ pub mod fb {
             Ok(())
         }
 
-        /// Power the panel back up after the display turned off, the way
-        /// taking it over does: an unblank can be swallowed by the phone's
-        /// own panel code while still answering success, so the cycle is
-        /// repeated until the driver reports the panel lit.
+        /// Power the panel back up after the display turned off — **the whole
+        /// of what taking it over does**, not the power cycle alone.
+        ///
+        /// A blanked driver may forget the virtual height it was given and
+        /// hand back a buffer of its own choosing, and this surface would go
+        /// on writing the page count it remembered into a mapping it no
+        /// longer owns. Every flip after that is then a mode change rather
+        /// than a page being named, and a frame that changes the mode costs
+        /// many times one that does not: the screen goes from smooth to
+        /// unusable after a single sleep and wake, which is what the Mi MIX 2
+        /// does. The Mi 6's driver keeps both across a blank, which is why
+        /// the power cycle alone was enough there and this never showed.
         fn wake(&mut self) {
+            // What the driver has now is what the takeover has to ask from.
             let fd = self.file.as_raw_fd();
-            for try_no in 1..=3 {
-                let down = ioctl_int(fd, BLANK, BLANK_POWERDOWN);
-                let up = ioctl_int(fd, BLANK, BLANK_UNBLANK);
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                let now = self
-                    .lit_at
-                    .as_ref()
-                    .and_then(|at| std::fs::read_to_string(at).ok())
-                    .unwrap_or_default();
-                eprintln!("wake the panel after it was turned off ({try_no}): down {down:?} up {up:?}, lit reads {:?}", now.trim());
-                if now.trim().ends_with('1') {
-                    break;
-                }
+            let mut var: Var = unsafe { std::mem::zeroed() };
+            if ioctl(fd, GET_VSCREENINFO, &mut var).is_ok() {
+                self.var = var;
             }
+            self.take_over("after it was turned off");
         }
 
         /// Make the panel look at the memory the driver owns, the way the
@@ -1599,7 +1611,7 @@ pub mod fb {
         /// answering success, so the cycle is repeated until the driver reports
         /// the panel lit. A failure here is told and not returned: a recovery
         /// that goes on drawing is worth more than no recovery.
-        fn take_over(&mut self) {
+        fn take_over(&mut self, why: &str) {
             let fd = self.file.as_raw_fd();
             // The number is what the working recovery asks for, not what it
             // gets back: the driver is free to widen a virtual height it
@@ -1624,7 +1636,7 @@ pub mod fb {
                     .as_ref()
                     .and_then(|at| std::fs::read_to_string(at).ok())
                     .unwrap_or_default();
-                eprintln!("take over the panel after the first frame ({try_no}): down {down:?} up {up:?}, lit reads {:?}", now.trim());
+                eprintln!("take over the panel {why} ({try_no}): down {down:?} up {up:?}, lit reads {:?}", now.trim());
                 if now.trim().ends_with('1') {
                     break;
                 }
@@ -1674,6 +1686,11 @@ pub mod fb {
             self.var = var;
             self.back = 0;
             self.flip = pages >= 2;
+            // A blank that failed to come before the screen was set up may
+            // come again now that it has been, so the next one is worth
+            // saying too.
+            self.blank_told = false;
+            self.blank_missed = 0;
             eprintln!("mapped the screen the driver owns: {}x{} of {}x{}, row {row}, {pages} pages, {len} bytes, {}", var.xres, var.yres, var.xres_virtual, var.yres_virtual, if self.flip { "flipping between pages" } else { "drawing in the one page" });
         }
     }
@@ -1757,7 +1774,7 @@ pub mod fb {
                 self.told = true;
                 // A frame is in memory and pointed at now, so this is where the
                 // boot loader's picture is replaced.
-                self.take_over();
+                self.take_over("after the first frame");
             }
             self.frames += 1;
             // The driver only recomputes its rate once a target number of
@@ -1791,6 +1808,16 @@ pub mod fb {
             let Some(at) = self.vsync.as_ref() else {
                 return Ok(());
             };
+            // **A screen whose blanks have stopped is not waited for any
+            // more.** The wait exists to keep a frame from being shown half
+            // written; it is worth a frame's time, not a tenth of a second
+            // every time. Three in a row is a screen that is not blanking,
+            // and from there the frame is taken to be shown when it is
+            // written — the same as on a driver that offers no blanks at
+            // all, and the tearing that costs is the whole of what is lost.
+            if self.blank_missed >= BLANKS_MISSED {
+                return Ok(());
+            }
             let mut file =
                 std::fs::File::open(at).with_context(|| format!("open {}", at.display()))?;
             let mut poll = [libc::pollfd {
@@ -1802,6 +1829,16 @@ pub mod fb {
             if r > 0 {
                 let mut blank = [0u8; 32];
                 let _ = file.read(&mut blank);
+                self.blank_missed = 0;
+            } else {
+                self.blank_missed = self.blank_missed.saturating_add(1);
+                if !self.blank_told && self.blank_missed >= BLANKS_MISSED {
+                    self.blank_told = true;
+                    eprintln!(
+                        "no blank came from {} in 100 ms, {BLANKS_MISSED} times over; frames are shown as they are written from here",
+                        at.display()
+                    );
+                }
             }
             Ok(())
         }
