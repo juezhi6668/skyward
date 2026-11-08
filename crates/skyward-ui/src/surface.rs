@@ -1722,8 +1722,24 @@ pub mod fb {
             }
             if self.power == Power::Off {
                 self.wake();
-                self.power = Power::On;
             }
+            // **Lit again, whichever it was.** A panel that only rested is
+            // lit by the frame shown to it, and one that was turned off is
+            // woken first; either way the surface is on from here, which is
+            // what the KMS surface says on every frame it shows.
+            //
+            // Left resting, the surface goes on answering "not on" for the
+            // rest of its life, and the loop above reads that as a wake on
+            // every frame — so it writes what the device configuration says
+            // to the touch controller every frame, and a write to that
+            // controller costs a hundred times a frame. Measured on the Mi
+            // MIX 2: sixteen milliseconds a frame before the screen was put
+            // out and back, two hundred and fifty after, for as long as the
+            // page stayed up. A screen put out and woken again *before* it
+            // had rested long enough to be turned off is what leaves it
+            // resting, which is exactly what pressing the power key twice
+            // does.
+            self.power = Power::On;
             self.settle()?;
             let row = self.w as usize * 4;
             let base = if self.flip {
