@@ -25,6 +25,10 @@ const FN_KEY_BLOB: &str = "keymaster_key_blob";
 const FN_SECDISCARDABLE: &str = "secdiscardable";
 const FN_STRETCHING: &str = "stretching";
 
+/// What Android 9 wrote in `stretching` for a key no credential was wrapped
+/// with.
+const NO_STRETCHING: &str = "nopassword";
+
 /// SHA-512 of `data` behind a fixed prefix.
 pub fn hash_with_prefix(prefix: &[u8], data: &[u8]) -> Vec<u8> {
     let mut padded = prefix.to_vec();
@@ -82,11 +86,21 @@ impl StoredKey {
                 version.trim()
             );
         }
+        // A key wrapped with a credential is **stretched** first, and the
+        // token that says how is kept beside it. Android 9 wrote the word
+        // `nopassword` where no credential was involved at all — which is
+        // this phone's, its data being wrapped by the hardware alone — and
+        // that is the only stretching this program can undo: the others need
+        // the credential's own stretching, which is not on the phone.
         if dir.join(FN_STRETCHING).exists() {
-            bail!(
-                "{} was written by an Android too old for Skyward to read",
-                dir.display()
-            );
+            let said = fs::read_to_string(dir.join(FN_STRETCHING))
+                .with_context(|| format!("read {}", dir.join(FN_STRETCHING).display()))?;
+            if said.trim() != NO_STRETCHING {
+                bail!(
+                    "{} was wrapped with a credential's stretching, which this program cannot undo",
+                    dir.display()
+                );
+            }
         }
         let secdiscardable_hash = match dir.join(FN_SECDISCARDABLE).exists() {
             true => hash_with_prefix(SECDISCARDABLE_PREFIX, &read(FN_SECDISCARDABLE)?),

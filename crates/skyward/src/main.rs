@@ -92,6 +92,13 @@ enum Cmd {
         /// all, which is how its C structures are checked against it.
         #[arg(long)]
         legacy: bool,
+        /// A file holding a key blob, to ask the hardware about.
+        #[arg(long)]
+        blob: Option<String>,
+        /// How many bytes of the file to leave out before the blob begins,
+        /// for a file that carries a word of its own in front of it.
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
     },
     /// Print the logical partition metadata in super.
     Lp {
@@ -258,7 +265,7 @@ fn main() -> Result<()> {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
             skyward_sys::power(p)
         }
-        Cmd::Keytest { list, legacy } => keytest(list, legacy),
+        Cmd::Keytest { list, legacy, blob, skip } => keytest(list, legacy, blob, skip),
         Cmd::Bcb => {
             let b = bcb::read(&bcb::misc())?;
             println!("command = {:?}", b.command);
@@ -1009,7 +1016,7 @@ fn prepare(cfg: &DeviceConfig, slot: Option<skyward_vab::Slot>) -> Result<()> {
 /// call in the older layout — before anything that needs a key is asked of
 /// it, and it takes nothing and changes nothing.
 #[cfg(target_os = "android")]
-fn keytest(list: bool, legacy: bool) -> Result<()> {
+fn keytest(list: bool, legacy: bool, blob: Option<String>, skip: usize) -> Result<()> {
     if legacy {
         // A blob of nothing is not a key: what the hardware answers to it
         // proves the whole call path — the module, the device, the offset
@@ -1017,6 +1024,20 @@ fn keytest(list: bool, legacy: bool) -> Result<()> {
         // without a key or a credential being touched.
         let hardware = skyward_crypto::keymaster1::Keymaster1::open()?;
         println!("the key hardware is loaded");
+        if let Some(path) = blob {
+            let raw = std::fs::read(&path).with_context(|| format!("read {path}"))?;
+            let key = &raw[skip.min(raw.len())..];
+            println!("{path}: {} bytes, {skip} left out", raw.len());
+            match hardware.authorizations(key, &[]) {
+                Ok(tags) => {
+                    for (tag, value) in tags {
+                        println!("  {:#010x} {:<16} {value}", tag, skyward_crypto::keymaster1::tag_name(tag));
+                    }
+                }
+                Err(e) => println!("  refused: {e:#}"),
+            }
+            return Ok(());
+        }
         match hardware.authorizations(&[0u8; 32], &[]) {
             Ok(tags) => {
                 println!("it took a blob of zeros as a key, which it should not have:");
@@ -1050,7 +1071,7 @@ fn keytest(list: bool, legacy: bool) -> Result<()> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn keytest(_list: bool, _legacy: bool) -> Result<()> {
+fn keytest(_list: bool, _legacy: bool, _blob: Option<String>, _skip: usize) -> Result<()> {
     anyhow::bail!("the key hardware is only reachable on the phone")
 }
 
