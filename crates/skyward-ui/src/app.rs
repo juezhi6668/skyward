@@ -6367,6 +6367,13 @@ impl App {
                         // at a time -- and the other way round below.
                         self.state.wipe = [false; WIPES.len()];
                         self.state.format.push(part);
+                        // **Kept in the order the page lists them**, whatever
+                        // order they are ticked in, so the page that follows
+                        // the work reads the way the page it was asked on did.
+                        let listed = self.state.formats.clone();
+                        self.state
+                            .format
+                            .sort_by_key(|part| listed.iter().position(|p| p == part));
                     }
                 }
                 self.refresh();
@@ -12345,10 +12352,10 @@ mod tests {
             swipe(&mut app, &f, &i, Confirm::Wipe).is_empty(),
             "nothing is ticked at first"
         );
-        tap(&mut app, &f, &i, Action::Format(Part::Cache));
-        assert_eq!(ticked(&app), [Part::Cache], "a row ticked on its own");
-        tap(&mut app, &f, &i, Action::Format(Part::System));
         tap(&mut app, &f, &i, Action::Format(Part::Vendor));
+        assert_eq!(ticked(&app), [Part::Vendor], "a row ticked on its own");
+        tap(&mut app, &f, &i, Action::Format(Part::System));
+        tap(&mut app, &f, &i, Action::Format(Part::Cache));
         assert_eq!(
             ticked(&app),
             [Part::Cache, Part::System, Part::Vendor],
