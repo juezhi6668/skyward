@@ -184,7 +184,8 @@ enum SystemProps {
     /// Android is running and keeps them in its property area.
     Running,
     /// Recovery is running; they come from the build.prop files of the
-    /// installed system's mounted partitions, none when nothing is mounted.
+    /// installed system's partitions, which the recovery mounts read-only to
+    /// read where nothing has mounted them yet.
     Installed(HashMap<String, String>),
 }
 
@@ -195,7 +196,7 @@ impl SystemProps {
         }
         let props = match skyward_vab::current_slot()? {
             Some(slot) => installed_props(slot)?,
-            None => HashMap::new(),
+            None => installed_props_aonly()?,
         };
         Ok(SystemProps::Installed(props))
     }
@@ -260,6 +261,51 @@ pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
             }
             rsproperties::load_properties_from_file(&path, None, "u:r:init:s0", &mut props)
                 .with_context(|| format!("read {}", path.display()))?;
+        }
+    }
+    Ok(props)
+}
+
+/// The installed system's build properties on a phone with one set of
+/// partitions, where there is no slot to name them by. The recovery does not
+/// mount the system to start, so each partition the phone's own table mounts
+/// is put up read-only for the read and left there — a recovery that says
+/// what system is installed has to read what the installed system says of
+/// itself. A partition already mounted, whether for the recovery's own work
+/// or read-only for an earlier read, is read as it stands; one that will not
+/// mount is skipped, and the About page keeps what the others gave.
+pub fn installed_props_aonly() -> Result<HashMap<String, String>> {
+    let mut props: HashMap<String, String> = skyward_sys::props(BOOT_PROPS).into_iter().collect();
+    let mut parts = skyward_block::fstab::mountable()?;
+    parts.sort_by_key(|one| {
+        PROP_ORDER
+            .iter()
+            .position(|b| *b == one.name)
+            .unwrap_or(PROP_ORDER.len())
+    });
+    for one in &parts {
+        let at = Path::new(&one.point);
+        if !skyward_block::mount::is_mount_point(at)? {
+            let Ok(device) = skyward_block::fstab::device(&one.ways[0]) else {
+                continue;
+            };
+            if skyward_block::mount::prepare(at).is_err()
+                || skyward_block::mount::mount_ro(Path::new(&device), at).is_err()
+            {
+                continue;
+            }
+        }
+        let files: &[&str] = match one.name.as_str() {
+            "system" => &["system/build.prop"],
+            "vendor" => &["default.prop", "build.prop"],
+            _ => &["etc/build.prop"],
+        };
+        for f in files {
+            let path = at.join(f);
+            if !path.is_file() {
+                continue;
+            }
+            let _ = rsproperties::load_properties_from_file(&path, None, "u:r:init:s0", &mut props);
         }
     }
     Ok(props)
