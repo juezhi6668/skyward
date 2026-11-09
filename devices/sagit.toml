@@ -80,8 +80,10 @@ extras = "defaults"
 # key services either.
 
 # The Synaptics DSX driver wakes the screen from a double tap through this
-# file. Naming it here is what makes the settings page offer the switch; the
-# switch writes 1 or 0 to it, and the saved choice is put to the driver when
-# the recovery starts.
+# sysfs file. Naming it here is what makes the settings page offer the
+# switch; the switch writes 1 or 0 to it. The recovery reads it to show what
+# the driver says now and never writes it at boot -- writing the file before
+# the panel is up is what once took the touch away, so a fresh start leaves
+# the touch panel exactly as the driver and the phone's own init left it.
 [touch]
-double_tap = "/proc/touchpanel/double_tap_enable"
+double_tap = "/sys/devices/soc/c179000.i2c/i2c-5/5-0020/input/input1/double_tap_enable"

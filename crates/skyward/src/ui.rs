@@ -1917,13 +1917,15 @@ pub fn run(
     app.state.slots = info.slot.is_some();
     app.state.update_server = cfg.update.is_some();
     // The settings page offers the double-tap switch only where the phone's
-    // touch driver has a file for it, and the saved choice is put to that
-    // file now, so the switch and the driver agree from the first frame.
+    // touch driver has the file, and it shows what the driver says now. The
+    // recovery reads it here and never writes it at boot: writing the file
+    // before the panel is up is what once took the touch away, so a start
+    // leaves the touch panel exactly as the driver left it. Only the switch
+    // writes it, when the user moves it.
     if let Some(node) = &cfg.touch.double_tap {
-        app.state.double_tap_node = true;
-        let on = app.state.double_tap;
-        if let Err(e) = fs::write(node, if on { "1" } else { "0" }) {
-            skyward_sys::kmsg(&format!("double tap to wake: {e}"))?;
+        if Path::new(node).exists() {
+            app.state.double_tap_node = true;
+            app.state.double_tap = fs::read_to_string(node).is_ok_and(|value| value.trim() == "1");
         }
     }
     // Asking the update server, and downloading the full package.
