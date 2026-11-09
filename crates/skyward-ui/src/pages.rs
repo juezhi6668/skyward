@@ -598,6 +598,22 @@ pub fn settings(cx: &Ctx) -> Frame {
         "When on, a computer can manage the files in internal storage, once it is decrypted.",
     ]);
     y = widgets::footnote(&mut c, t, f, usb.bottom, note);
+    if s.double_tap_node {
+        y = widgets::section(&mut c, t, f, y, l.pick(["屏幕", "螢幕", "Screen"]));
+        let screen = widgets::list(
+            &mut c,
+            t,
+            f,
+            y,
+            &[
+                Row::new(l.pick(["双击亮屏", "雙擊亮屏", "Double tap to wake"]))
+                    .icon(PURPLE, Icon::Power)
+                    .trail(Trail::Switch(s.double_tap)),
+            ],
+        );
+        out.extend(hits(&screen.rows, &[Action::Toggle(Switch::DoubleTap)]));
+        y = screen.bottom + t.m.card_gap;
+    }
     y = widgets::section(&mut c, t, f, y, l.pick(["调试", "偵錯", "Debugging"]));
     let debug = widgets::list(
         &mut c,

@@ -406,6 +406,11 @@ pub struct Touch {
     /// step of starting the controller.
     #[serde(default)]
     pub writes: Vec<Write>,
+    /// The file the driver takes to turn waking the screen with a double
+    /// tap on and off, on phones whose touch driver gives one; the settings
+    /// page offers that switch only where this names a file.
+    #[serde(default)]
+    pub double_tap: Option<String>,
 }
 
 /// Partitions as the phone itself mounts them.

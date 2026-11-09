@@ -72,9 +72,16 @@ filesystem = "ext4"
 options = "ro,nosuid,nodev,noatime"
 extras = "defaults"
 
-# Nothing else. Of the older Qualcomm kernels this phone runs, the panel,
-# the Synaptics DSX touch and the keys are all built into the recovery
-# kernel rather than modules, and the boot loader leaves the panel lit, so
-# there is no [modules], no [touch] and no [firmware] to write. The data
+# Nothing else of the kind. Of the older Qualcomm kernels this phone runs,
+# the panel, the Synaptics DSX touch and the keys are all built into the
+# recovery kernel rather than modules, and the boot loader leaves the panel
+# lit, so there is no [modules] and no [firmware] to write. The data
 # partition is not encrypted, so no decryption is asked of the system's own
 # key services either.
+
+# The Synaptics DSX driver wakes the screen from a double tap through this
+# file. Naming it here is what makes the settings page offer the switch; the
+# switch writes 1 or 0 to it, and the saved choice is put to the driver when
+# the recovery starts.
+[touch]
+double_tap = "/proc/touchpanel/double_tap_enable"

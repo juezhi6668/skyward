@@ -584,6 +584,8 @@ pub enum Switch {
     Vibrate,
     /// Offer internal storage to a computer over USB.
     FileTransfer,
+    /// Wake the screen with a double tap on it, where the driver can.
+    DoubleTap,
     /// Compress a backup.
     Compress,
     /// Read a backup back once it is written.
@@ -1848,6 +1850,11 @@ pub struct State {
     pub vibration: f32,
     /// A computer connected over USB is offered internal storage.
     pub file_transfer: bool,
+    /// Wake the screen with a double tap on it.
+    pub double_tap: bool,
+    /// The phone's touch driver has a file to switch double-tap wake in, so
+    /// the settings page offers the switch at all.
+    pub double_tap_node: bool,
     pub reboot: usize,
     /// What the wipe page has chosen, by place in [`WIPES`].
     pub wipe: [bool; WIPES.len()],
@@ -2035,6 +2042,8 @@ impl Default for State {
             vibrate: true,
             vibration: SLIDER_START,
             file_transfer: true,
+            double_tap: false,
+            double_tap_node: false,
             reboot: 0,
             wipe: [false; WIPES.len()],
             cache_partition: false,
@@ -2246,6 +2255,9 @@ pub enum Effect {
     },
     /// Offer internal storage to a computer over USB, or stop.
     FileTransfer(bool),
+    /// Turn waking the screen with a double tap on or off, as the switch
+    /// says, where the phone's touch driver has a file for it.
+    DoubleTap(bool),
     /// Start receiving a package over USB.
     Sideload,
     /// Start installing the file at this path from the top of a place,
@@ -6495,6 +6507,7 @@ impl App {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
                     Switch::FileTransfer => &mut self.state.file_transfer,
+                    Switch::DoubleTap => &mut self.state.double_tap,
                     Switch::Compress => &mut self.state.compress,
                     Switch::Verify => &mut self.state.verify,
                     Switch::Signature => &mut self.state.check_signature,
@@ -6507,6 +6520,9 @@ impl App {
                 self.refresh();
                 if switch == Switch::FileTransfer {
                     return vec![Effect::FileTransfer(now_on)];
+                }
+                if switch == Switch::DoubleTap {
+                    return vec![Effect::DoubleTap(now_on)];
                 }
             }
             Action::MountToggle(i) => {
@@ -14000,13 +14016,32 @@ mod tests {
         app.state.dual_boot = true;
         app.system_stopped("no partition userdata showed within 15s".into());
         assert_eq!(app.screen(), Screen::Systems);
-        app.set_systems(Ok(Overview { other_starts: true, ..two_systems() }));
+        app.set_systems(Ok(Overview {
+            other_starts: true,
+            ..two_systems()
+        }));
         let page = app.frame(&f, &i);
-        assert!(page.hits.iter().any(|h| h.action == Action::PickSystem(Who::Installed)), "the main system is there to switch back to");
-        assert!(!page.hits.iter().any(|h| h.action == Action::Confirm(Confirm::SwitchSystem)), "nothing is switched until one is picked");
+        assert!(
+            page.hits
+                .iter()
+                .any(|h| h.action == Action::PickSystem(Who::Installed)),
+            "the main system is there to switch back to"
+        );
+        assert!(
+            !page
+                .hits
+                .iter()
+                .any(|h| h.action == Action::Confirm(Confirm::SwitchSystem)),
+            "nothing is switched until one is picked"
+        );
         app.key(Key::Back, 0);
         assert_eq!(app.screen(), Screen::Home);
-        let opens = app.frame(&f, &i).hits.iter().filter(|h| h.action == Action::Open(Screen::Systems)).count();
+        let opens = app
+            .frame(&f, &i)
+            .hits
+            .iter()
+            .filter(|h| h.action == Action::Open(Screen::Systems))
+            .count();
         assert_eq!(opens, 2, "the card says so above the entry to the systems");
     }
 

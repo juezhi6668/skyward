@@ -1916,6 +1916,16 @@ pub fn run(
     // decides where an update can be read, merged or searched for.
     app.state.slots = info.slot.is_some();
     app.state.update_server = cfg.update.is_some();
+    // The settings page offers the double-tap switch only where the phone's
+    // touch driver has a file for it, and the saved choice is put to that
+    // file now, so the switch and the driver agree from the first frame.
+    if let Some(node) = &cfg.touch.double_tap {
+        app.state.double_tap_node = true;
+        let on = app.state.double_tap;
+        if let Err(e) = fs::write(node, if on { "1" } else { "0" }) {
+            skyward_sys::kmsg(&format!("double tap to wake: {e}"))?;
+        }
+    }
     // Asking the update server, and downloading the full package.
     let mut checker: Option<updates::Worker> = None;
     let mut downloader: Option<updates::Worker> = None;
@@ -3647,6 +3657,14 @@ pub fn run(
                     }
                     // A port that something else has takes file transfer
                     // on, or leaves it, when it comes back to rest.
+                    Effect::DoubleTap(on) => {
+                        if let Some(node) = &cfg.touch.double_tap {
+                            if let Err(e) = fs::write(node, if on { "1" } else { "0" }) {
+                                skyward_sys::kmsg(&format!("double tap to wake: {e:#}"))?;
+                                app.report(&format!("{e:#}"), now);
+                            }
+                        }
+                    }
                     Effect::FileTransfer(on) => {
                         let rests = !fastboot && !sideloading;
                         match (on, transfer.take()) {

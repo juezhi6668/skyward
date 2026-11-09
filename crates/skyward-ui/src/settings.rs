@@ -47,6 +47,8 @@ pub struct Settings {
     pub vibration: f32,
     /// A computer connected over USB is offered internal storage.
     pub file_transfer: bool,
+    /// Wake the screen with a double tap on it.
+    pub double_tap: bool,
     pub install: Install,
     pub backup: Backup,
     pub logs: Logs,
@@ -124,6 +126,7 @@ impl Settings {
             vibrate: state.vibrate,
             vibration: state.vibration,
             file_transfer: state.file_transfer,
+            double_tap: state.double_tap,
             install: Install {
                 check_signature: state.check_signature,
                 keep_recovery: state.keep_recovery,
@@ -195,6 +198,7 @@ impl Settings {
             state.vibration = self.vibration;
         }
         state.file_transfer = self.file_transfer;
+        state.double_tap = self.double_tap;
         state.check_signature = self.install.check_signature;
         state.keep_recovery = self.install.keep_recovery;
         state.backup = tick(&self.backup.parts, std::mem::take(&mut state.backup));
@@ -354,6 +358,7 @@ mod tests {
             vibrate: false,
             vibration: 0.4,
             file_transfer: false,
+            double_tap: false,
             check_signature: true,
             keep_recovery: false,
             backup: rows(&["system", "data"]),
