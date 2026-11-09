@@ -7682,9 +7682,15 @@ impl App {
     }
 
     pub fn touch(&mut self, ev: Touch, f: &Fonts, now: u64) -> Vec<Effect> {
-        // A finger on the dark panel lights nothing, as on the phone's own
-        // system, where the power key lights it.
+        // A finger on the dark panel lights it only where the double-tap
+        // switch is on; otherwise, as on the phone's own system, the power
+        // key lights it and a touch does not. The touch that lights it is
+        // the wake and nothing more -- it is not taken as input, and the
+        // driver's own double-tap gate decides which taps reach this.
         if !self.display_on {
+            if self.state.double_tap {
+                self.wake(now);
+            }
             return Vec::new();
         }
         // A finger on the charging screen sends it away for the page, and
