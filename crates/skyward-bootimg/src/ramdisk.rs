@@ -59,15 +59,15 @@ pub enum Format {
 }
 
 impl Format {
-    /// The format `bytes` are compressed with. The kernel's initramfs
-    /// unpacker reads no LZ4 framing besides the frames themselves, so a
-    /// legacy-block stream is named in the error rather than guessed at.
+    /// The format `bytes` are compressed with: gzip, or LZ4 in either
+    /// the frame or the legacy block framing the kernel's initramfs
+    /// unpacker reads.
     pub fn of(bytes: &[u8]) -> Result<Format> {
         match bytes {
             [0x1f, 0x8b, ..] => Ok(Format::Gzip),
-            [0x04, b'"', b'M', 0x18, ..] => Ok(Format::Lz4),
+            [0x04, b'"', b'M', 0x18, ..] | [0x02, 0x21, 0x4c, 0x18, ..] => Ok(Format::Lz4),
             other => bail!(
-                "ramdisk starts with {}, which is neither gzip nor an LZ4 frame",
+                "ramdisk starts with {}, which is neither gzip nor LZ4",
                 other
                     .iter()
                     .take(4)
@@ -288,12 +288,22 @@ fn unpack(e: &Entry, path: &Path) -> Result<()> {
     };
     match kind {
         S_IFDIR if kept => {}
-        S_IFDIR => fs::DirBuilder::new().mode(mode).create(path).context("make the folder")?,
+        S_IFDIR => fs::DirBuilder::new()
+            .mode(mode)
+            .create(path)
+            .context("make the folder")?,
         S_IFREG => {
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(mode).open(path).context("make the file")?;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(mode)
+                .open(path)
+                .context("make the file")?;
             file.write_all(&e.data).context("write the file")?;
         }
-        S_IFLNK => std::os::unix::fs::symlink(OsStr::from_bytes(&e.data), path).context("make the link")?,
+        S_IFLNK => {
+            std::os::unix::fs::symlink(OsStr::from_bytes(&e.data), path).context("make the link")?
+        }
         S_IFCHR | S_IFBLK | S_IFIFO | S_IFSOCK => {
             let dev = libc::makedev(e.rdev.0 as _, e.rdev.1 as _);
             if unsafe { libc::mknod(c_path(path)?.as_ptr(), e.mode as libc::mode_t, dev) } != 0 {
@@ -317,9 +327,20 @@ fn unpack(e: &Entry, path: &Path) -> Result<()> {
 /// Give `path` itself, a link or not, `mtime` as the time it was last
 /// changed and read.
 fn set_time(path: &Path, mtime: u32) -> Result<()> {
-    let at = libc::timespec { tv_sec: mtime as libc::time_t, tv_nsec: 0 };
+    let at = libc::timespec {
+        tv_sec: mtime as libc::time_t,
+        tv_nsec: 0,
+    };
     let times = [at, at];
-    if unsafe { libc::utimensat(libc::AT_FDCWD, c_path(path)?.as_ptr(), times.as_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+    if unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            c_path(path)?.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
         return Err(std::io::Error::last_os_error()).context("give it its time");
     }
     Ok(())
@@ -457,7 +478,7 @@ mod tests {
         };
         ours.add("init", 0o750, b"program".to_vec()).unwrap();
         let joined = [
-            vendor.encode().unwrap(),
+            vendor.encode(Format::Lz4).unwrap(),
             lz4_legacy(&ours.archive().unwrap()),
         ]
         .concat();
@@ -501,7 +522,17 @@ mod tests {
     /// An entry owned by whoever runs the tests, who can give it that owner.
     fn mine(name: &str, mode: u32, data: &[u8]) -> Entry {
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        Entry { name: name.into(), mode, uid, gid, mtime: 1_500_000_000, nlink: 1, dev: (0, 0), rdev: (0, 0), data: data.to_vec() }
+        Entry {
+            name: name.into(),
+            mode,
+            uid,
+            gid,
+            mtime: 1_500_000_000,
+            nlink: 1,
+            dev: (0, 0),
+            rdev: (0, 0),
+            data: data.to_vec(),
+        }
     }
 
     #[test]
@@ -513,7 +544,10 @@ mod tests {
         fs::write(root.join("init"), b"old program").unwrap();
         fs::create_dir(root.join("skyward")).unwrap();
         fs::write(root.join("skyward/system.toml"), b"id = \"test\"").unwrap();
-        fs::DirBuilder::new().mode(0o700).create(root.join("dev")).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join("dev"))
+            .unwrap();
         fs::write(root.join("etc"), b"a file").unwrap();
         std::os::unix::fs::symlink("nowhere", root.join("bin")).unwrap();
         let rd = Ramdisk {
@@ -531,19 +565,48 @@ mod tests {
         };
         rd.unpack(root).unwrap();
         let meta = |name: &str| fs::symlink_metadata(root.join(name)).unwrap();
-        assert_eq!(fs::read_link(root.join("init")).unwrap(), Path::new("/system/bin/init"), "a link in the file's place");
-        assert_eq!(fs::read(root.join("skyward/system.toml")).unwrap(), b"id = \"test\"", "what the archive leaves out stays");
-        assert_eq!(meta("dev").permissions().mode() & 0o7777, 0o755, "a folder there stays, with the archive's mode");
-        assert_eq!(fs::read_link(root.join("etc")).unwrap(), Path::new("/system/etc"), "a link in the file's place");
+        assert_eq!(
+            fs::read_link(root.join("init")).unwrap(),
+            Path::new("/system/bin/init"),
+            "a link in the file's place"
+        );
+        assert_eq!(
+            fs::read(root.join("skyward/system.toml")).unwrap(),
+            b"id = \"test\"",
+            "what the archive leaves out stays"
+        );
+        assert_eq!(
+            meta("dev").permissions().mode() & 0o7777,
+            0o755,
+            "a folder there stays, with the archive's mode"
+        );
+        assert_eq!(
+            fs::read_link(root.join("etc")).unwrap(),
+            Path::new("/system/etc"),
+            "a link in the file's place"
+        );
         assert!(meta("bin").is_dir(), "a folder in the link's place");
         assert_eq!(meta("bin").permissions().mode() & 0o7777, 0o751);
-        assert_eq!(fs::read(root.join("system/bin/init")).unwrap(), b"new program");
+        assert_eq!(
+            fs::read(root.join("system/bin/init")).unwrap(),
+            b"new program"
+        );
         assert_eq!(meta("system/bin/init").permissions().mode() & 0o7777, 0o750);
         assert!(meta("system/bin/pipe").file_type().is_fifo());
         for e in &rd.entries {
             let m = meta(&e.name);
-            assert_eq!(m.mtime(), 1_500_000_000, "{} has the archive's time", e.name);
-            assert_eq!((m.uid(), m.gid()), (e.uid, e.gid), "{} has the archive's owner", e.name);
+            assert_eq!(
+                m.mtime(),
+                1_500_000_000,
+                "{} has the archive's time",
+                e.name
+            );
+            assert_eq!(
+                (m.uid(), m.gid()),
+                (e.uid, e.gid),
+                "{} has the archive's owner",
+                e.name
+            );
         }
     }
 
@@ -552,7 +615,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("lib")).unwrap();
         fs::write(dir.path().join("lib/modules.load"), b"").unwrap();
-        let rd = Ramdisk { entries: vec![mine("lib", S_IFREG | 0o644, b"a file")] };
+        let rd = Ramdisk {
+            entries: vec![mine("lib", S_IFREG | 0o644, b"a file")],
+        };
         assert!(rd.unpack(dir.path()).is_err());
         assert!(dir.path().join("lib/modules.load").exists());
     }

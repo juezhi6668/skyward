@@ -14,8 +14,7 @@ use skyward_ui::app::{
     BackupRefusal, Choice, Clip, Damage, Data, DownloadEnd, DownloadJob, EraseStop, Field,
     FileKind, FileOp, FileRow, FileTask, FsAction, FsRow, Have, Held, Install, ItemEnd, JobEnd,
     Key, Keys, MountFailure, MountRow, Part, PartKind, PartStop, Pick, Place, Screen, SkywardEnd,
-    SkywardJob, SkywardStage, Source, SystemChoice, SystemsWork, TermEnd, Touch, UsbDrive, UsbLink,
-    SCREEN_OFF,
+    SkywardJob, SkywardStage, Source, SystemChoice, TermEnd, Touch, UsbDrive, UsbLink, SCREEN_OFF,
 };
 use skyward_ui::widgets::{self, Bar, Bolt, Cap, Layer};
 use skyward_ui::{editor, fmt, pages, Canvas, Ctx, Fonts, Lang, Theme};
@@ -708,7 +707,12 @@ fn main() -> Result<()> {
                 checking: false,
             };
         }),
-        ("11-install-light-dual-boot", Screen::Install, false, &|app| app.state.dual_boot = true),
+        (
+            "11-install-light-dual-boot",
+            Screen::Install,
+            false,
+            &|app| app.state.dual_boot = true,
+        ),
         ("11-install-dark-usb", Screen::Install, true, &|app| {
             app.set_usb_drive(Some(UsbDrive::Shown));
         }),

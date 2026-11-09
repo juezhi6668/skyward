@@ -541,7 +541,7 @@ mod tests {
     fn a_filesystem_image_is_offered_the_partitions_the_phone_has() {
         let dir = tempfile::tempdir().unwrap();
         for name in ["system", "cust", "cache", "boot", "modem"] {
-            File::create(dir.path().join(name)).unwrap();
+            std::fs::File::create(dir.path().join(name)).unwrap();
         }
         let erofs = ImageKind::Filesystem(Filesystem::Erofs);
         assert_eq!(
@@ -679,7 +679,7 @@ mod tests {
     fn a_phone_with_one_set_of_partitions_is_offered_the_names_it_has() {
         let dir = tempfile::tempdir().unwrap();
         for name in ["boot", "recovery", "cust", "modem"] {
-            File::create(dir.path().join(name)).unwrap();
+            std::fs::File::create(dir.path().join(name)).unwrap();
         }
         let both = ImageKind::Boot {
             kernel: true,
@@ -712,7 +712,7 @@ mod tests {
             "vbmeta_b",
             "vbmeta_system_a",
         ] {
-            File::create(dir.path().join(name)).unwrap();
+            std::fs::File::create(dir.path().join(name)).unwrap();
         }
         let both = ImageKind::Boot {
             kernel: true,
