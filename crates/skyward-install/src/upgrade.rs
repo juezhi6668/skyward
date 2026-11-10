@@ -189,8 +189,8 @@ mod tests {
             told.push((done, total))
         })
         .unwrap();
-        let total = 2 * newer.len() as u64;
-        assert_eq!(told.last(), Some(&(total, total)), "written and read back");
+        let total = newer.len() as u64;
+        assert_eq!(told.last(), Some(&(total, total)), "written");
         assert_eq!(
             &std::fs::read(dir.path().join("recovery_a")).unwrap()[..newer.len()],
             &newer[..]

@@ -216,8 +216,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             told.last(),
-            Some(&(2 * size as u64, 2 * size as u64)),
-            "written and read back"
+            Some(&(size as u64, size as u64)),
+            "written"
         );
         let mut whole = skyward.clone();
         whole.resize(size, 0);

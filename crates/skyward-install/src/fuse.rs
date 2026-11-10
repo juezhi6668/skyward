@@ -73,9 +73,11 @@ impl<L: Link> Source for Connection<L> {
     }
 }
 
-/// The block size a file on the phone is served in, as the stock recovery
-/// serves one.
-const FILE_BLOCK: u32 = 64 * 1024;
+/// The block size a file on the phone is served in. The stock recovery uses
+/// 64 KiB; a whole system image read through FUSE in 64 KiB pieces is a
+/// hundred and fifty thousand round trips, so this serves the largest the
+/// kernel's FUSE takes at once -- a megabyte -- and cuts them sixteen fold.
+const FILE_BLOCK: u32 = 1 << 20;
 
 /// A package that is a file on the phone: in internal storage, or on a USB
 /// drive.
@@ -835,11 +837,11 @@ mod tests {
             "a whole system update"
         );
         assert_eq!(
-            file_block(16 << 30),
+            file_block(256 << 30),
             FILE_BLOCK,
             "the most the usual blocks hold"
         );
-        assert_eq!(file_block((16 << 30) + 1), 2 * FILE_BLOCK);
+        assert_eq!(file_block((256 << 30) + 1), 2 * FILE_BLOCK);
         let size = 100 << 30;
         let offer = Offer {
             size,

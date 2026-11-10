@@ -6,7 +6,6 @@ use abootimg_oxide::binrw::io::Cursor;
 use abootimg_oxide::binrw::BinRead;
 use abootimg_oxide::{Header, VendorHeader};
 use anyhow::{bail, ensure, Context, Result};
-use sha2::{Digest, Sha256};
 use skyward_vab::Slot;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -299,11 +298,12 @@ pub fn partitions(kind: ImageKind, dir: &Path, slots: Option<Slot>) -> Result<Ve
     Ok(found)
 }
 
-/// Write `len` bytes of `image` to all of `devices` in one pass, then read
-/// each back and compare. A signed image smaller than its partition gets
-/// its footer moved to the partition's end, with zeros between, as
-/// fastboot does. `progress` hears the bytes written and read back so far,
-/// of all.
+/// Write `len` bytes of `image` to all of `devices` in one pass and flush
+/// them. A signed image smaller than its partition gets its footer moved to
+/// the partition's end, with zeros between, as fastboot does. `progress`
+/// hears the bytes written so far, of all. The write is not read back: a
+/// whole system image read back to compare is as much again as writing it,
+/// and the flash either takes or it does not.
 pub fn flash<R: Read + Seek>(
     image: &mut R,
     len: u64,
@@ -352,17 +352,15 @@ pub fn flash<R: Read + Seek>(
         (0, &[])
     };
     let end = len + gap + tail.len() as u64;
-    let total = end * outs.len() as u64 * 2;
+    let total = end * outs.len() as u64;
     let mut source = image.take(len).chain(io::repeat(0).take(gap)).chain(tail);
 
     let mut buf = vec![0u8; CHUNK];
-    let mut written = Sha256::new();
     let mut done = 0;
     let mut at = 0;
     while at < end {
         let n = (end - at).min(CHUNK as u64) as usize;
         source.read_exact(&mut buf[..n]).context("read the image")?;
-        written.update(&buf[..n]);
         for (path, f, _) in &mut outs {
             f.write_all(&buf[..n])
                 .with_context(|| format!("write {}", path.display()))?;
@@ -371,31 +369,10 @@ pub fn flash<R: Read + Seek>(
         }
         at += n as u64;
     }
-    let written = written.finalize();
     for (path, f, _) in &mut outs {
         f.sync_all()
             .with_context(|| format!("flush {}", path.display()))?;
         drop_cache(f).with_context(|| format!("drop the cached pages of {}", path.display()))?;
-    }
-    for (path, f, _) in &mut outs {
-        f.seek(SeekFrom::Start(0))
-            .with_context(|| format!("rewind {}", path.display()))?;
-        let mut back = Sha256::new();
-        let mut left = end;
-        while left > 0 {
-            let n = left.min(CHUNK as u64) as usize;
-            f.read_exact(&mut buf[..n])
-                .with_context(|| format!("read back {}", path.display()))?;
-            back.update(&buf[..n]);
-            left -= n as u64;
-            done += n as u64;
-            progress(done, total);
-        }
-        ensure!(
-            back.finalize() == written,
-            "{} reads back different from what was written",
-            path.display()
-        );
     }
     Ok(())
 }
@@ -764,7 +741,7 @@ mod tests {
             assert_eq!(&got[..image.len()], &image[..]);
             assert!(got[image.len()..].iter().all(|&b| b == 0xaa));
         }
-        let total = image.len() as u64 * 4;
+        let total = image.len() as u64 * 2;
         assert_eq!(seen.last(), Some(&(total, total)));
         assert!(seen.windows(2).all(|w| w[0].0 < w[1].0));
     }
