@@ -274,8 +274,9 @@ pub fn installed_props(slot: Slot) -> Result<HashMap<String, String>> {
 /// reach the secure world, and a partition it holds cannot also be mounted
 /// for a read; that is why this does not walk the whole table, the way the
 /// slot phone's reader can once those partitions are already up. Where the
-/// system is mounted already it is read as it stands, and where it will not
-/// mount the About page keeps what the boot properties gave.
+/// system is mounted already it is read as it stands and left as it was
+/// found, and where it will not mount the About page keeps what the boot
+/// properties gave.
 pub fn installed_props_aonly() -> Result<HashMap<String, String>> {
     let mut props: HashMap<String, String> = skyward_sys::props(BOOT_PROPS).into_iter().collect();
     let Some(system) = skyward_block::fstab::mountable()?
@@ -285,6 +286,11 @@ pub fn installed_props_aonly() -> Result<HashMap<String, String>> {
         return Ok(props);
     };
     let at = Path::new(&system.point);
+    // The build.prop is the only reason to look, so what this put up comes
+    // back down again: a system left mounted read-only by a read is one the
+    // mount page reports as already up, and nothing on it can be written to
+    // until the partition is taken down and mounted a second time.
+    let mut ours = false;
     if !skyward_block::mount::is_mount_point(at)? {
         let Ok(device) = skyward_block::fstab::device(&system.ways[0]) else {
             return Ok(props);
@@ -294,6 +300,7 @@ pub fn installed_props_aonly() -> Result<HashMap<String, String>> {
         {
             return Ok(props);
         }
+        ours = true;
     }
     for f in ["system/build.prop", "build.prop"] {
         let path = at.join(f);
@@ -301,6 +308,9 @@ pub fn installed_props_aonly() -> Result<HashMap<String, String>> {
             continue;
         }
         let _ = rsproperties::load_properties_from_file(&path, None, "u:r:init:s0", &mut props);
+    }
+    if ours {
+        let _ = skyward_block::mount::umount(at);
     }
     Ok(props)
 }
