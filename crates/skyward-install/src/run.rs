@@ -54,6 +54,11 @@ const SBIN_SHELL: &str = "/sbin/sh";
 const SHELL: &str = "/system/bin/sh";
 const SCRIPT_PATH: &str = "/sbin:/system/bin:/system/xbin";
 
+/// Where the programs a script runs live on those recoveries, and where a
+/// `mount` that is handed only a folder looks for what it can put up.
+const SBIN: &str = "/sbin";
+const FSTAB: &str = "/etc/fstab";
+
 /// How long what an install script leaves running may keep its output open
 /// once the script has ended, before it is ended too; and after that, how
 /// long its output is waited on before it is let go.
@@ -1037,6 +1042,8 @@ fn run_script(ctx: &mut Context, size: u64) -> Result<Done> {
     let slot = skyward_vab::current_slot()?;
     extract_script()?;
     shell_at_sbin()?;
+    make_sbin_runnable();
+    let fstab = script_fstab()?;
     let kept = hold(ctx, slot)?;
     installed_boot_set()?;
     detach_once(ctx)?;
@@ -1053,6 +1060,15 @@ fn run_script(ctx: &mut Context, size: u64) -> Result<Done> {
     };
     let mounted = skyward_block::mount::mount_ids()?;
     let ran = run_binary(ctx);
+    // What this gave the script for this one package is not the recovery's
+    // to keep, any more than the mounts the script made are.
+    if let Some(at) = &fstab {
+        if let Err(e) = fs::remove_file(at) {
+            let _ = kmsg(&format!(
+                "install: the {FSTAB} written for the script was not taken away: {e}"
+            ));
+        }
+    }
     if let Err(e) = clean_up(&mounted, &mapped) {
         let _ = kmsg(&format!(
             "install: not all the script left behind was taken away: {e:#}"
@@ -1129,6 +1145,109 @@ fn shell_at_sbin() -> Result<()> {
     let dir = link.parent().expect("the link is in a folder");
     fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
     symlink(SHELL, link).with_context(|| format!("link {SBIN_SHELL} to {SHELL}"))
+}
+
+/// The run bits on what `/sbin` holds. The images this recovery is made from
+/// keep those programs readable but **not runnable** -- the recovery that
+/// usually starts first copies them onto a tmpfs of its own with the bits on,
+/// which this one does not -- so the `run_program("/sbin/busybox", "mount",
+/// "/vendor")` these patch packages open with answers `Permission denied`,
+/// a script that checks nothing carries straight on to `package_extract_dir`
+/// with the partition still not put up, and what it installs lands in the
+/// ramdisk folder that the real partition hides as soon as it is mounted. The
+/// package then reports itself installed with nothing written, which is the
+/// only part of this a person at the screen can see. Links run as whatever
+/// they reach, and the targets carry their own bits already, so this is about
+/// the files.
+fn make_sbin_runnable() {
+    let Ok(entries) = fs::read_dir(SBIN) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() || meta.permissions().mode() & 0o111 != 0 {
+            continue;
+        }
+        let mode = meta.permissions().mode() | 0o111;
+        if let Err(e) = fs::set_permissions(entry.path(), fs::Permissions::from_mode(mode)) {
+            let _ = kmsg(&format!(
+                "install: {} was not made runnable: {e}",
+                entry.path().display()
+            ));
+        }
+    }
+}
+
+/// The phone's own table put where an install script's `mount` looks for it.
+/// Nothing else in a recovery reads `/etc/fstab` -- the table is kept
+/// elsewhere and the recovery has its own words for every partition -- so a
+/// script handed only a folder is refused outright and writes into the
+/// ramdisk instead, which is the same silent loss as a `/sbin` that will not
+/// run. Every mount point the table reaches gets its one line, **writable**,
+/// because a partition a script mounts is one it means to write into, and
+/// under the filesystem the partition itself answers with rather than the
+/// first one the table offers: one line names one disk, and a wrong
+/// filesystem in it is a mount refused. Where the base keeps an `/etc/fstab`
+/// of its own, that is what the scripts get and nothing is written.
+fn script_fstab() -> Result<Option<PathBuf>> {
+    if Path::new(FSTAB).exists() {
+        return Ok(None);
+    }
+    let mut said = String::new();
+    for one in skyward_block::fstab::mountable()? {
+        let mut asked: Vec<(String, String, Option<String>)> = Vec::new();
+        for entry in &one.ways {
+            let Ok(device) = skyward_block::fstab::device(entry) else {
+                continue;
+            };
+            let held = skyward_block::probe::filesystem(Path::new(&device))
+                .ok()
+                .flatten();
+            asked.push((device, entry.filesystem.clone(), held));
+        }
+        let as_what: Vec<(&str, &str, Option<&str>)> = asked
+            .iter()
+            .map(|(device, named, held)| (device.as_str(), named.as_str(), held.as_deref()))
+            .collect();
+        if let Some((device, filesystem)) = fstab_way(&as_what) {
+            said.push_str(&fstab_line(&one.point, &device, &filesystem));
+            said.push('\n');
+        }
+    }
+    if said.is_empty() {
+        return Ok(None);
+    }
+    let at = Path::new(FSTAB);
+    fs::create_dir_all(at.parent().expect("the table is in a folder"))
+        .context("make the folder /etc/fstab is in")?;
+    fs::write(at, said).with_context(|| format!("write {FSTAB} for the install scripts"))?;
+    Ok(Some(at.to_path_buf()))
+}
+
+/// Which of the ways the table offers for one mount point the line names: the
+/// way the partition's own superblock agrees with, and where none does, what
+/// the disk answers with if it answers at all, else the table's first way --
+/// the same order the mount itself tries them in.
+fn fstab_way(ways: &[(&str, &str, Option<&str>)]) -> Option<(String, String)> {
+    for (device, named, held) in ways {
+        if *held == Some(*named) {
+            return Some((device.to_string(), named.to_string()));
+        }
+    }
+    let (device, named, held) = *ways.first()?;
+    Some((device.to_string(), held.unwrap_or(named).to_string()))
+}
+
+/// One line of `/etc/fstab`: the device, the folder, the filesystem, how it
+/// goes up and the two numbers `mount` reads but no recovery uses. A
+/// partition holding erofs has no writer at all, so it is said read-only
+/// rather than promised a write it cannot give.
+fn fstab_line(point: &str, device: &str, filesystem: &str) -> String {
+    let how = match filesystem {
+        "erofs" => "ro",
+        _ => "rw",
+    };
+    format!("{device} {point} {filesystem} {how} 0 0")
 }
 
 /// A line one of the install script's outputs gave.
@@ -1338,4 +1457,55 @@ fn pipe(flags: libc::c_int) -> Result<(OwnedFd, OwnedFd)> {
         return Err(io::Error::last_os_error()).context("make a pipe");
     }
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_way_the_disk_agrees_with_is_the_one_named() {
+        // A cache the table offers as ext4 and then as f2fs, and holds as
+        // f2fs: the line names the second, because the first would be
+        // refused as the wrong filesystem.
+        assert_eq!(
+            fstab_way(&[
+                ("/dev/block/by-name/cache", "ext4", Some("f2fs")),
+                ("/dev/block/by-name/cache", "f2fs", Some("f2fs")),
+            ]),
+            Some(("/dev/block/by-name/cache".to_string(), "f2fs".to_string()))
+        );
+    }
+
+    #[test]
+    fn the_first_way_answers_for_a_disk_that_says_nothing() {
+        // Fresh, or holding something the superblock reading does not know:
+        // the table's own first way, in its order.
+        assert_eq!(
+            fstab_way(&[
+                ("/dev/block/by-name/cache", "ext4", None),
+                ("/dev/block/by-name/cache", "f2fs", None),
+            ]),
+            Some(("/dev/block/by-name/cache".to_string(), "ext4".to_string()))
+        );
+        // A disk that answers with something the table never offered is
+        // still the disk's answer, not the table's guess.
+        assert_eq!(
+            fstab_way(&[("/dev/block/by-name/vendor", "ext4", Some("erofs"))]),
+            Some(("/dev/block/by-name/vendor".to_string(), "erofs".to_string()))
+        );
+        assert_eq!(fstab_way(&[]), None);
+    }
+
+    #[test]
+    fn only_what_can_be_written_is_offered_writable() {
+        assert_eq!(
+            fstab_line("/vendor", "/dev/block/by-name/cust", "ext4"),
+            "/dev/block/by-name/cust /vendor ext4 rw 0 0"
+        );
+        assert_eq!(
+            fstab_line("/vendor", "/dev/block/by-name/cust", "erofs"),
+            "/dev/block/by-name/cust /vendor erofs ro 0 0"
+        );
+    }
 }
